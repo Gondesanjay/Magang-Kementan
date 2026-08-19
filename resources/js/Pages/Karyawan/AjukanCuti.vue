@@ -2,14 +2,16 @@
 import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, useForm } from "@inertiajs/vue3";
 import { computed } from "vue";
+import Swal from "sweetalert2";
 
 const props = defineProps({
     sisa_cuti: Number,
 });
 
-// Setup Form Pengajuan Cuti
+// Setup Form Pengajuan Cuti (Menambahkan field anak_ke)
 const form = useForm({
     jenis_cuti: "Cuti Tahunan",
+    anak_ke: "", 
     tanggal_mulai: "",
     tanggal_selesai: "",
     keterangan: "",
@@ -17,24 +19,84 @@ const form = useForm({
     no_telp: "",
 });
 
-// Kalkulasi estimasi hari secara real-time di sisi frontend
-const estimasiHari = computed(() => {
-    if (!form.tanggal_mulai || !form.tanggal_selesai) return 0;
-    const start = new Date(form.tanggal_mulai);
-    const end = new Date(form.tanggal_selesai);
-    const diffTime = Math.abs(end - start);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-    return diffDays > 0 ? diffDays : 0;
+// LOGIKA BARU: Mendapatkan tanggal hari ini (Format YYYY-MM-DD)
+const todayStr = computed(() => {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
 });
 
+// LOGIKA BARU: Cek apakah tanggal mulai yang diketik manual ada di masa lalu
+const isPastDate = computed(() => {
+    if (!form.tanggal_mulai) return false;
+    return form.tanggal_mulai < todayStr.value;
+});
+
+// Kalkulasi estimasi hari secara real-time TANPA hari Sabtu dan Minggu
+const estimasiHari = computed(() => {
+    if (!form.tanggal_mulai || !form.tanggal_selesai) return 0;
+    
+    let start = new Date(form.tanggal_mulai);
+    let end = new Date(form.tanggal_selesai);
+    
+    // Pastikan start tidak lebih besar dari end
+    if (start > end) return 0;
+
+    let count = 0;
+    let current = new Date(start);
+
+    // Looping setiap hari dari start sampai end
+    while (current <= end) {
+        const dayOfWeek = current.getDay();
+        // 0 = Minggu, 6 = Sabtu. Jika bukan 0 atau 6, tambah hitungan.
+        if (dayOfWeek !== 0 && dayOfWeek !== 6) {
+            count++;
+        }
+        current.setDate(current.getDate() + 1);
+    }
+    
+    return count;
+});
+
+// Hanya Cuti Tahunan yang memotong Saldo Cuti
 const sisaSetelahPengajuan = computed(() => {
-    return props.sisa_cuti - estimasiHari.value;
+    if (form.jenis_cuti === "Cuti Tahunan") {
+        return props.sisa_cuti - estimasiHari.value;
+    }
+    return props.sisa_cuti; // Jenis cuti lain tidak memotong saldo
 });
 
 const submit = () => {
+    if (!form.jenis_cuti) {
+        Swal.fire({
+            icon: 'error',
+            title: 'Jenis cuti belum dipilih',
+            text: 'Silakan pilih jenis cuti terlebih dahulu.',
+            confirmButtonColor: '#ef4444',
+        });
+        return;
+    }
+
+    // Kosongkan form.anak_ke jika jenis cuti bukan Melahirkan
+    if (form.jenis_cuti !== "Cuti Melahirkan") {
+        form.anak_ke = "";
+    }
+
     form.post(route("karyawan.ajukan.store"), {
         preserveScroll: true,
-        onSuccess: () => form.reset(),
+        onSuccess: () => {
+            form.reset();
+            form.jenis_cuti = "Cuti Tahunan";
+            Swal.fire({
+                icon: 'success',
+                title: 'Pengajuan Berhasil!',
+                text: 'Permohonan cuti Anda berhasil dikirim dan sedang menunggu persetujuan Atasan.',
+                confirmButtonColor: '#10b981',
+                confirmButtonText: 'OK',
+            });
+        },
     });
 };
 </script>
@@ -44,7 +106,6 @@ const submit = () => {
 
     <MainLayout>
         <div class="max-w-6xl mx-auto space-y-6 pb-12">
-            <!-- Header Halaman -->
             <div>
                 <h1
                     class="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight"
@@ -57,14 +118,11 @@ const submit = () => {
                 </p>
             </div>
 
-            <!-- LAYOUT UTAMA: GRID 2 KOLOM -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
-                <!-- KOLOM KIRI: FORMULIR UTAMA -->
                 <div
                     class="lg:col-span-2 bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200 h-full flex flex-col justify-between"
                 >
                     <div>
-                        <!-- Pesan Error Saldo -->
                         <div
                             v-if="
                                 form.errors.tanggal_mulai &&
@@ -91,7 +149,6 @@ const submit = () => {
                         </div>
 
                         <form @submit.prevent="submit" class="space-y-6">
-                            <!-- Jenis Cuti -->
                             <div>
                                 <label
                                     class="block text-sm font-semibold text-slate-700 mb-2"
@@ -101,13 +158,30 @@ const submit = () => {
                                     v-model="form.jenis_cuti"
                                     class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 py-2.5 px-3 bg-white"
                                 >
-                                    <option value="Cuti Tahunan">
-                                        Cuti Tahunan
-                                    </option>
+                                    <option value="Cuti Tahunan">Cuti Tahunan</option>
+                                    <option value="Cuti Melahirkan">Cuti Melahirkan</option>
+                                    <option value="Cuti Besar">Cuti Besar</option>
+                                    <option value="Cuti Alasan Penting">Cuti Alasan Penting</option>
                                 </select>
+                                <span v-if="form.errors.jenis_cuti" class="text-xs text-red-500 mt-1 block">
+                                    {{ form.errors.jenis_cuti }}
+                                </span>
                             </div>
 
-                            <!-- Tanggal Mulai & Selesai -->
+                            <div v-if="form.jenis_cuti === 'Cuti Melahirkan'" class="animate-in fade-in duration-300">
+                                <label class="block text-sm font-semibold text-slate-700 mb-2">
+                                    Anak ke-berapa <span class="text-red-500">*</span>
+                                </label>
+                                <input
+                                    v-model="form.anak_ke"
+                                    type="number"
+                                    min="1"
+                                    required
+                                    placeholder="Contoh: 1, 2, atau 3"
+                                    class="w-full md:w-1/2 text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 py-2.5 px-3"
+                                />
+                            </div>
+
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label
@@ -117,6 +191,7 @@ const submit = () => {
                                     <input
                                         v-model="form.tanggal_mulai"
                                         type="date"
+                                        :min="todayStr"
                                         required
                                         class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 py-2.5 px-3"
                                     />
@@ -140,6 +215,7 @@ const submit = () => {
                                     <input
                                         v-model="form.tanggal_selesai"
                                         type="date"
+                                        :min="form.tanggal_mulai || todayStr"
                                         required
                                         class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 py-2.5 px-3"
                                     />
@@ -152,36 +228,24 @@ const submit = () => {
                                 </div>
                             </div>
 
-                            <!-- Info Estimasi Hari -->
-                            <div
-                                class="flex items-center justify-between bg-slate-50 border border-slate-200 p-4 rounded-xl"
-                            >
-                                <div
-                                    class="flex items-center gap-2 text-slate-600"
-                                >
-                                    <svg
-                                        class="w-5 h-5 text-green-600"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        viewBox="0 0 24 24"
-                                    >
-                                        <path
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            stroke-width="2"
-                                            d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                                        ></path>
-                                    </svg>
-                                    <span class="text-sm font-medium"
-                                        >Estimasi Jumlah Hari Kerja</span
-                                    >
+                            <div class="space-y-2">
+                                <div class="flex items-center justify-between bg-slate-50 border border-slate-200 p-4 rounded-xl">
+                                    <div class="flex items-center gap-2 text-slate-600">
+                                        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+                                        <span class="text-sm font-medium">Estimasi Jumlah Hari Kerja</span>
+                                    </div>
+                                    <span class="text-base font-bold text-green-700">{{ estimasiHari }} Hari</span>
                                 </div>
-                                <span class="text-base font-bold text-green-700"
-                                    >{{ estimasiHari }} Hari</span
-                                >
+                                
+                                <p v-if="estimasiHari === 0 && form.tanggal_mulai && form.tanggal_selesai && !isPastDate" class="text-xs font-bold text-red-500 animate-pulse">
+                                    *Tanggal yang dipilih tidak valid karena hanya mencakup hari libur (Sabtu/Minggu).
+                                </p>
+
+                                <p v-if="isPastDate" class="text-xs font-bold text-red-500 animate-pulse">
+                                    *Peringatan: Anda tidak dapat mengajukan cuti untuk tanggal yang sudah lewat.
+                                </p>
                             </div>
 
-                            <!-- Alasan / Keterangan -->
                             <div>
                                 <label
                                     class="block text-sm font-semibold text-slate-700 mb-2"
@@ -201,7 +265,6 @@ const submit = () => {
                                 >
                             </div>
 
-                            <!-- Alamat & Telepon -->
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label
@@ -243,7 +306,6 @@ const submit = () => {
                         </form>
                     </div>
 
-                    <!-- Tombol Aksi -->
                     <div
                         class="flex items-center justify-end gap-3 pt-6 mt-6 border-t border-slate-100"
                     >
@@ -256,7 +318,7 @@ const submit = () => {
                         </button>
                         <button
                             @click="submit"
-                            :disabled="form.processing || sisa_cuti <= 0"
+                            :disabled="form.processing || estimasiHari === 0 || isPastDate || (form.jenis_cuti === 'Cuti Tahunan' && sisa_cuti <= 0)"
                             class="px-6 py-2.5 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-green-600/20 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             Ajukan Cuti
@@ -264,9 +326,7 @@ const submit = () => {
                     </div>
                 </div>
 
-                <!-- KOLOM KANAN: SIDEBAR WIDGETS -->
                 <div class="lg:col-span-1 flex flex-col gap-6">
-                    <!-- Widget 1: Ringkasan Saldo -->
                     <div
                         class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200"
                     >
@@ -306,8 +366,8 @@ const submit = () => {
                                 <span class="text-slate-600"
                                     >Estimasi Pengajuan</span
                                 >
-                                <span class="font-bold text-red-500"
-                                    >{{ estimasiHari }} Hari</span
+                                <span class="font-bold" :class="form.jenis_cuti === 'Cuti Tahunan' ? 'text-red-500' : 'text-slate-500'"
+                                    >{{ form.jenis_cuti === 'Cuti Tahunan' ? estimasiHari : 0 }} Hari</span
                                 >
                             </div>
                             <div
@@ -326,10 +386,12 @@ const submit = () => {
                                     {{ sisaSetelahPengajuan }} Hari
                                 </span>
                             </div>
+                            <div v-if="form.jenis_cuti !== 'Cuti Tahunan'" class="text-[10px] text-center text-slate-400 font-semibold italic mt-2">
+                                *Jenis cuti ini tidak memotong saldo cuti tahunan.
+                            </div>
                         </div>
                     </div>
 
-                    <!-- Widget 2: Ketentuan Pengajuan -->
                     <div
                         class="bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-800"
                     >
@@ -372,7 +434,6 @@ const submit = () => {
                         </ul>
                     </div>
 
-                    <!-- Widget 3: Alur Persetujuan -->
                     <div
                         class="bg-blue-50 p-5 rounded-2xl shadow-sm border border-blue-100 flex-1 flex flex-col justify-center"
                     >
@@ -391,11 +452,10 @@ const submit = () => {
                                 ></path>
                             </svg>
                             <h3 class="text-sm font-bold text-blue-900">
-                                Alur Persetujuan
+                                Alur Persetujuan Staf
                             </h3>
                         </div>
 
-                        <!-- Timeline Vertical -->
                         <div class="ml-2 border-l-2 border-blue-200 space-y-6">
                             <div class="relative pl-4">
                                 <div
@@ -409,7 +469,7 @@ const submit = () => {
                                 <p
                                     class="text-[11px] font-medium text-blue-700 mt-1"
                                 >
-                                    Atasan Langsung (L1)
+                                    Ketua Tim Kerja / Atasan Langsung (L1)
                                 </p>
                             </div>
                             <div class="relative pl-4">
@@ -424,7 +484,7 @@ const submit = () => {
                                 <p
                                     class="text-[11px] font-medium text-blue-700 mt-1"
                                 >
-                                    Kasubag TU (L2)
+                                    Kasubag TU (L3)
                                 </p>
                             </div>
                             <div class="relative pl-4">
@@ -439,7 +499,7 @@ const submit = () => {
                                 <p
                                     class="text-[11px] font-medium text-blue-700 mt-1"
                                 >
-                                    Kepala Biro Perencanaan (L3)
+                                    Kepala Biro Perencanaan (L4)
                                 </p>
                             </div>
                         </div>

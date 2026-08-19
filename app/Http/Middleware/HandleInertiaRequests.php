@@ -4,7 +4,6 @@ namespace App\Http\Middleware;
 
 use Illuminate\Http\Request;
 use Inertia\Middleware;
-// PASTIKAN MENGGUNAKAN 'Notifikasi' BUKAN 'Notification'
 use App\Models\Notifikasi;
 
 class HandleInertiaRequests extends Middleware
@@ -53,6 +52,11 @@ class HandleInertiaRequests extends Middleware
                     'jabatan'     => $user->jabatan,
                     'departemen'  => $user->departemen,
                 ] : null,
+            ],
+            // TAMBAHAN: Flash message untuk mendukung pop-up session (sukses/error)
+            'flash' => [
+                'success' => fn() => $request->session()->get('success'),
+                'error'   => fn() => $request->session()->get('error'),
             ],
             // Bagikan props notifikasi ke seluruh frontend Vue
             'notifikasis' => $notifikasis,

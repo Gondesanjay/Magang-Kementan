@@ -2,18 +2,23 @@
 import { computed, ref, watch } from "vue";
 import { Link, usePage, router } from "@inertiajs/vue3";
 
+
 const page = usePage();
 const user = computed(() => page.props.auth.user);
+
 
 const isActive = (routeName) => {
     return route().current(routeName) || route().current(routeName + ".*");
 };
 
+
 const isProfileOpen = ref(false);
 const isSidebarOpen = ref(true);
 const isNotifOpen = ref(false);
 
+
 const notifications = ref(page.props.notifikasis || []);
+
 
 watch(
     () => page.props.notifikasis,
@@ -23,50 +28,48 @@ watch(
     { deep: true },
 );
 
+
 // Menghitung jumlah notifikasi yang belum dibaca
 const unreadCount = computed(
     () => notifications.value.filter((n) => !n.is_read).length,
 );
 
-// Fungsi Tandai Semua Dibaca
+
+// Fungsi Tandai Semua Dibaca (Langsung menghapus semua dari tampilan)
 const markAllAsRead = () => {
     router.post(
         route("notifications.readAll"),
         {},
-        { 
+        {
             preserveScroll: true,
             onSuccess: () => {
-                // PERBAIKAN: Jangan dikosongkan ([]), tapi ubah status is_read menjadi true.
-                // Ini akan membuat notifikasi tetap ada di list, tapi warnanya menjadi pudar 
-                // dan indikator lonceng merahnya akan hilang.
-                notifications.value = notifications.value.map((n) => ({
-                    ...n,
-                    is_read: true,
-                }));
-            }
-        }
+                // Mengosongkan array agar notifikasi langsung hilang semua
+                notifications.value = [];
+            },
+        },
     );
 };
 
-// Fungsi Hapus Notifikasi per Item
+
+// Fungsi Hapus Notifikasi per Item (Bisa diklik di seluruh bagian)
 const hapusNotifikasi = (id) => {
-    router.delete(
-        route("notifikasi.destroy", id),
-        { 
-            preserveScroll: true,
-            onSuccess: () => {
-                // Filter array lokal agar item yang diklik langsung menghilang dari list
-                notifications.value = notifications.value.filter((n) => n.id !== id);
-            }
-        }
-    );
+    router.delete(route("notifikasi.destroy", id), {
+        preserveScroll: true,
+        onSuccess: () => {
+            notifications.value = notifications.value.filter(
+                (n) => n.id !== id,
+            );
+        },
+    });
 };
 </script>
 
+
 <template>
     <!-- BACKGROUND UTAMA GRADASI SOFT -->
-    <div class="min-h-screen flex font-sans bg-gradient-to-br from-[#e0f2f1] via-[#f0f9ff] to-[#e0f2fe]">
-        
+    <div
+        class="min-h-screen flex font-sans bg-gradient-to-br from-[#e0f2f1] via-[#f0f9ff] to-[#e0f2fe]"
+    >
         <!-- SIDEBAR PREMIUM GRADASI GELAP -->
         <aside
             :class="[
@@ -90,21 +93,29 @@ const hapusNotifikasi = (id) => {
                     />
                 </div>
                 <div
-                    v-show="isSidebarOpen"
-                    class="transition-opacity duration-200 whitespace-nowrap"
-                >
-                    <span
-                        class="block text-base font-bold text-white tracking-wide leading-tight"
-                        >Agri<span class="text-green-500">Leave</span></span
-                    >
-                    <span
-                        class="block text-[9px] text-slate-400 uppercase tracking-wider"
-                        >Kementerian Pertanian</span
-                    >
-                </div>
+    v-show="isSidebarOpen"
+    class="transition-opacity duration-200 whitespace-nowrap"
+>
+    <span
+        class="block text-base font-bold text-white tracking-wide leading-tight"
+        >Agri<span class="text-green-500">Leave</span></span
+    >
+    <!-- Tambahan teks Biro Perencanaan -->
+    <span
+        class="block text-[10px] font-semibold text-green-400 tracking-wide mt-0.5"
+        >Biro Perencanaan</span
+    >
+    <span
+        class="block text-[9px] text-slate-400 uppercase tracking-wider mt-0.5"
+        >Kementerian Pertanian</span
+    >
+</div>
             </div>
 
-            <nav class="flex-1 overflow-y-auto py-6 px-3 space-y-1 custom-scrollbar">
+
+            <nav
+                class="flex-1 overflow-y-auto py-6 px-3 space-y-1 custom-scrollbar"
+            >
                 <p
                     v-show="isSidebarOpen"
                     class="px-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-2"
@@ -140,6 +151,7 @@ const hapusNotifikasi = (id) => {
                         >Dashboard</span
                     >
                 </Link>
+
 
                 <div v-if="[1, 2, 3, 4].includes(user.role_id)">
                     <p
@@ -234,6 +246,7 @@ const hapusNotifikasi = (id) => {
                     </Link>
                 </div>
 
+
                 <div v-if="[2, 3, 4].includes(user.role_id)">
                     <p
                         v-show="isSidebarOpen"
@@ -299,6 +312,7 @@ const hapusNotifikasi = (id) => {
                     </Link>
                 </div>
 
+
                 <div v-if="user.role_id === 5">
                     <p
                         v-show="isSidebarOpen"
@@ -334,10 +348,41 @@ const hapusNotifikasi = (id) => {
                             >Rekap Laporan</span
                         >
                     </Link>
+                    <Link
+                        :href="route('admin.libur')"
+                        :title="!isSidebarOpen ? 'Hari Libur' : ''"
+                        :class="[
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
+                            isActive('admin.libur')
+                                ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
+                                : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
+                            !isSidebarOpen ? 'justify-center' : '',
+                        ]"
+                    >
+                        <svg
+                            class="w-5 h-5 shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                            ></path>
+                        </svg>
+                        <span v-show="isSidebarOpen" class="truncate"
+                            >Kelola Hari Libur</span
+                        >
+                    </Link>
                 </div>
             </nav>
 
-            <div class="p-3 bg-[#020617]/50 border-t border-slate-800/50 shrink-0">
+
+            <div
+                class="p-3 bg-[#020617]/50 border-t border-slate-800/50 shrink-0"
+            >
                 <Link
                     :href="route('logout')"
                     method="post"
@@ -365,6 +410,7 @@ const hapusNotifikasi = (id) => {
                 </Link>
             </div>
         </aside>
+
 
         <!-- KONTEN UTAMA -->
         <div
@@ -404,6 +450,7 @@ const hapusNotifikasi = (id) => {
                     </h2>
                 </div>
 
+
                 <div class="flex items-center gap-6">
                     <span
                         class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-full hidden sm:inline-block shadow-sm"
@@ -411,8 +458,9 @@ const hapusNotifikasi = (id) => {
                         {{ user.departemen }}
                     </span>
 
+
                     <div class="relative">
-                        <!-- PEMBARUAN: Tombol Notifikasi menggunakan Gambar Lonceng 3D -->
+                        <!-- Tombol Notifikasi -->
                         <button
                             @click="
                                 isNotifOpen = !isNotifOpen;
@@ -420,7 +468,11 @@ const hapusNotifikasi = (id) => {
                             "
                             class="relative focus:outline-none p-1.5 rounded-xl hover:bg-white/50 cursor-pointer transition-all hover:scale-110"
                         >
-                            <img src="/images/lonceng.png" alt="Notifikasi" class="w-7 h-7 drop-shadow-md" />
+                            <img
+                                src="/images/lonceng.png"
+                                alt="Notifikasi"
+                                class="w-7 h-7 drop-shadow-md"
+                            />
                             <span
                                 v-if="unreadCount > 0"
                                 class="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white shadow-sm"
@@ -429,11 +481,13 @@ const hapusNotifikasi = (id) => {
                             </span>
                         </button>
 
+
                         <div
                             v-if="isNotifOpen"
                             @click="isNotifOpen = false"
                             class="fixed inset-0 z-40"
                         ></div>
+
 
                         <!-- DROPDOWN NOTIFIKASI -->
                         <transition
@@ -446,88 +500,289 @@ const hapusNotifikasi = (id) => {
                         >
                             <div
                                 v-if="isNotifOpen"
-                                class="absolute right-0 top-full mt-3 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/50 overflow-hidden z-50 text-left"
+                                class="absolute right-0 top-full mt-3 w-[340px] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/50 overflow-hidden z-50 text-left"
                             >
                                 <!-- Header Dropdown -->
-                                <div class="px-4 py-3.5 bg-slate-50/80 border-b border-slate-100/50 flex justify-between items-center">
+                                <div
+                                    class="px-4 py-3.5 bg-slate-50/80 border-b border-slate-100/50 flex justify-between items-center"
+                                >
                                     <div class="flex items-center gap-2">
-                                        <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                                        <h3 class="font-bold text-sm text-slate-800 tracking-tight">Notifikasi Pengajuan</h3>
+                                        <div
+                                            class="w-2 h-2 rounded-full bg-green-500 animate-pulse"
+                                        ></div>
+                                        <h3
+                                            class="font-bold text-sm text-slate-800 tracking-tight"
+                                        >
+                                            Notifikasi Pengajuan
+                                        </h3>
                                     </div>
-                                    <button @click="markAllAsRead" class="text-[10px] bg-green-100 text-green-700 font-extrabold px-2 py-0.5 rounded-full tracking-wide hover:bg-green-200 transition cursor-pointer">
-                                        TANDAI SEMUA DIBACA
+                                    <button
+                                        @click="markAllAsRead"
+                                        class="text-[10px] text-green-600 font-extrabold px-2 py-0.5 tracking-wide hover:underline transition cursor-pointer"
+                                    >
+                                        Tandai semua dibaca
                                     </button>
                                 </div>
 
+
                                 <!-- Daftar Item Notifikasi -->
-                                <div class="max-h-72 overflow-y-auto divide-y divide-slate-50">
-                                    <template v-if="notifications && notifications.length > 0">
+                                <div
+                                    class="max-h-72 overflow-y-auto divide-y divide-slate-50"
+                                >
+                                    <template
+                                        v-if="
+                                            notifications &&
+                                            notifications.length > 0
+                                        "
+                                    >
+                                        <!-- AREA KLIK SELURUH KOTAK -->
                                         <div
                                             v-for="notif in notifications"
                                             :key="notif.id"
-                                            class="p-3.5 hover:bg-slate-50 transition-all duration-150 flex items-start gap-3 group"
-                                            :class="{'bg-white': !notif.is_read, 'bg-slate-50/30 opacity-80': notif.is_read}"
+                                            @click="hapusNotifikasi(notif.id)"
+                                            class="p-4 hover:bg-slate-50 transition-all duration-150 flex items-start gap-3.5 group cursor-pointer"
+                                            :class="{
+                                                'bg-white': !notif.is_read,
+                                                'bg-slate-50/30 opacity-80':
+                                                    notif.is_read,
+                                            }"
                                         >
-                                            <button 
-                                                @click.prevent="hapusNotifikasi(notif.id)" 
-                                                class="shrink-0 mt-0.5 transition-transform hover:scale-110 focus:outline-none cursor-pointer"
-                                                title="Klik untuk menghapus notifikasi"
+                                            <!-- Ikon Kiri -->
+                                            <div
+                                                class="shrink-0 transition-transform group-hover:scale-110 mt-1"
                                             >
-                                                <div v-if="notif.pesan.toLowerCase().includes('tolak') || notif.pesan.toLowerCase().includes('batal') || notif.judul.toLowerCase().includes('tolak')" 
-                                                     class="bg-red-50 text-red-500 p-2 rounded-full flex items-center justify-center border border-red-100 shadow-sm">
-                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"></path></svg>
+                                                <div
+                                                    v-if="
+                                                        notif.pesan
+                                                            .toLowerCase()
+                                                            .includes(
+                                                                'tolak',
+                                                            ) ||
+                                                        notif.pesan
+                                                            .toLowerCase()
+                                                            .includes(
+                                                                'batal',
+                                                            ) ||
+                                                        notif.judul
+                                                            .toLowerCase()
+                                                            .includes('tolak')
+                                                    "
+                                                    class="bg-red-50 text-red-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2.5"
+                                                            d="M6 18L18 6M6 6l12 12"
+                                                        ></path>
+                                                    </svg>
                                                 </div>
-                                                <div v-else 
-                                                     class="bg-green-50 text-green-500 p-2 rounded-full flex items-center justify-center border border-green-100 shadow-sm">
-                                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"></path></svg>
+                                                <div
+                                                    v-else
+                                                    class="bg-green-50 text-green-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2.5"
+                                                            d="M5 13l4 4L19 7"
+                                                        ></path>
+                                                    </svg>
                                                 </div>
-                                            </button>
-                                            
+                                            </div>
+
+
+                                            <!-- Konten Kanan -->
                                             <div class="flex-1 min-w-0 pr-2">
-                                                <p class="text-xs font-bold text-slate-800 leading-snug group-hover:text-green-700 transition-colors cursor-default">
+                                                <p
+                                                    class="text-[13px] font-semibold text-slate-800 leading-snug group-hover:text-green-700 transition-colors"
+                                                >
                                                     {{ notif.judul }}
                                                 </p>
-                                                <p class="text-[11px] text-slate-500 mt-1 leading-relaxed cursor-default">
-                                                    {{ notif.pesan }}
-                                                </p>
-                                                <p class="text-[10px] text-slate-400 font-medium mt-1.5 flex items-center gap-1 cursor-default">
-                                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+
+
+                                                <!-- Desain Border/Pill Persis Gambar -->
+                                                <div
+                                                    class="mt-2 flex flex-wrap items-center gap-2.5"
+                                                >
+                                                    <!-- Badge Merah -->
+                                                    <span
+                                                        v-if="
+                                                            notif.pesan
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'tolak',
+                                                                ) ||
+                                                            notif.pesan
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'batal',
+                                                                ) ||
+                                                            notif.judul
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'tolak',
+                                                                )
+                                                        "
+                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-full leading-none"
+                                                    >
+                                                        {{ notif.pesan }}
+                                                    </span>
+
+
+                                                    <!-- Badge Hijau -->
+                                                    <span
+                                                        v-else-if="
+                                                            notif.pesan
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'setuju',
+                                                                ) ||
+                                                            notif.pesan
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'berhasil',
+                                                                ) ||
+                                                            notif.judul
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'setuju',
+                                                                )
+                                                        "
+                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-green-700 bg-green-50 border border-green-200 rounded-full leading-none"
+                                                    >
+                                                        {{ notif.pesan }}
+                                                    </span>
+
+
+                                                    <!-- Badge Kuning/Abu Default -->
+                                                    <span
+                                                        v-else-if="
+                                                            notif.pesan
+                                                                .toLowerCase()
+                                                                .includes(
+                                                                    'tangguh',
+                                                                )
+                                                        "
+                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-full leading-none"
+                                                    >
+                                                        {{ notif.pesan }}
+                                                    </span>
+                                                    <span
+                                                        v-else
+                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-full leading-none"
+                                                    >
+                                                        {{ notif.pesan }}
+                                                    </span>
+                                                </div>
+
+
+                                                <!-- Format Tanggal dan Jam -->
+                                                <p
+                                                    class="text-[11px] text-slate-400 font-medium whitespace-nowrap flex items-center gap-1 mt-1.5"
+                                                >
+                                                    <svg
+                                                        class="w-3 h-3"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                                        ></path>
                                                     </svg>
-                                                    {{ new Date(notif.created_at).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) }}
+                                                    {{
+                                                        new Date(
+                                                            notif.created_at,
+                                                        ).toLocaleDateString(
+                                                            "id-ID",
+                                                            {
+                                                                day: "numeric",
+                                                                month: "short",
+                                                                year: "numeric",
+                                                            },
+                                                        )
+                                                    }},
+                                                    {{
+                                                        new Date(
+                                                            notif.created_at,
+                                                        )
+                                                            .toLocaleTimeString(
+                                                                "id-ID",
+                                                                {
+                                                                    hour: "2-digit",
+                                                                    minute: "2-digit",
+                                                                },
+                                                            )
+                                                            .replace(".", ":")
+                                                    }}
                                                 </p>
                                             </div>
-                                            <span v-if="!notif.is_read" class="w-2 h-2 bg-green-500 rounded-full mt-1.5 shrink-0 shadow-sm"></span>
+                                            <span
+                                                v-if="!notif.is_read"
+                                                class="w-2.5 h-2.5 bg-green-500 rounded-full mt-1 shrink-0 shadow-sm"
+                                            ></span>
                                         </div>
                                     </template>
-                                    
-                                    <!-- PEMBARUAN: Kondisi Kosong juga menggunakan Ikon 3D -->
-                                    <div v-else class="px-6 py-8 text-center bg-white/50">
-                                        <div class="w-14 h-14 mx-auto mb-3 flex items-center justify-center">
-                                            <img src="/images/lonceng.png" alt="Kosong" class="w-full h-full object-contain opacity-70 grayscale-[30%]" />
+
+
+                                    <!-- Kondisi Kosong -->
+                                    <div
+                                        v-else
+                                        class="px-6 py-8 text-center bg-white/50"
+                                    >
+                                        <div
+                                            class="w-14 h-14 mx-auto mb-3 flex items-center justify-center"
+                                        >
+                                            <img
+                                                src="/images/lonceng.png"
+                                                alt="Kosong"
+                                                class="w-full h-full object-contain opacity-70 grayscale-[30%]"
+                                            />
                                         </div>
-                                        <p class="text-xs font-semibold text-slate-500">Belum ada notifikasi</p>
+                                        <p
+                                            class="text-xs font-semibold text-slate-500"
+                                        >
+                                            Belum ada notifikasi
+                                        </p>
                                     </div>
                                 </div>
 
+
                                 <!-- Footer Dropdown -->
-                                <div class="p-2.5 bg-slate-50/80 border-t border-slate-100/50 text-center">
+                                <div
+                                    class="p-3 bg-white border-t border-slate-100 text-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)] relative z-10"
+                                >
                                     <Link
                                         :href="route('karyawan.riwayat')"
                                         @click="isNotifOpen = false"
-                                        class="text-[11px] font-bold text-green-600 hover:text-green-700 transition-colors inline-flex items-center gap-1 py-1"
+                                        class="text-sm font-semibold text-blue-600 hover:text-blue-700 transition-colors py-1 inline-block"
                                     >
-                                        Lihat Riwayat Pengajuan
-                                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
-                                        </svg>
+                                        Lihat semua pengajuan
                                     </Link>
                                 </div>
                             </div>
                         </transition>
                     </div>
 
+
                     <div class="h-6 w-px bg-slate-200"></div>
+
 
                     <div class="relative">
                         <button
@@ -583,11 +838,13 @@ const hapusNotifikasi = (id) => {
                             </svg>
                         </button>
 
+
                         <div
                             v-if="isProfileOpen"
                             @click="isProfileOpen = false"
                             class="fixed inset-0 z-40"
                         ></div>
+
 
                         <transition
                             enter-active-class="transition ease-out duration-100"
@@ -679,12 +936,14 @@ const hapusNotifikasi = (id) => {
                 </div>
             </header>
 
+
             <!-- AREA KONTEN (TRANSFOMASI TRANSPARAN) -->
             <main class="flex-1 p-6 md:p-8 overflow-y-auto relative z-10">
                 <transition name="fade" mode="out-in">
                     <slot />
                 </transition>
             </main>
+
 
             <!-- FOOTER BAWAH KACA -->
             <footer
@@ -696,6 +955,7 @@ const hapusNotifikasi = (id) => {
         </div>
     </div>
 </template>
+
 
 <style>
 /* Animasi Transisi Halaman */
@@ -710,6 +970,7 @@ const hapusNotifikasi = (id) => {
     opacity: 0;
     transform: translateY(15px);
 }
+
 
 /* Kustomisasi Scrollbar Khusus Sidebar */
 .custom-scrollbar::-webkit-scrollbar {
@@ -726,3 +987,6 @@ const hapusNotifikasi = (id) => {
     background: #475569;
 }
 </style>
+
+
+

@@ -13,14 +13,12 @@ const formatDate = (dateString) => {
     return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
 };
 
+// Fungsi status dengan format yang diminta
 const formatStatus = (status) => {
-    switch (status) {
-        case 'disetujui': return 'Disetujui';
-        case 'menunggu_l1': return 'Menunggu L1';
-        case 'menunggu_l2': return 'Menunggu L2';
-        case 'menunggu_l3': return 'Menunggu L3';
-        default: return status;
-    }
+    if (status === 'menunggu_l1' || status === 'menunggu_l2' || status === 'menunggu_l3') return 'Menunggu Atasan Langsung';
+    if (status === 'disetujui') return 'Disetujui';
+    if (status === 'ditolak') return 'Ditolak';
+    return status.replace('_', ' ').toUpperCase();
 };
 
 // --- STATE UNTUK MODAL PENANGGUHAN CUTI ---

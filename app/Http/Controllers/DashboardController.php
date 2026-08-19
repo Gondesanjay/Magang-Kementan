@@ -18,7 +18,9 @@ class DashboardController extends Controller
         $tahun = date('Y');
         $stats = [];
         $recentCuti = [];
-        $anggotaTim = []; // Inisialisasi variabel anggota tim
+        $anggotaTim = [];
+        $allCutiDisetujui = [];
+        $timCutiHariIni = []; // <--- VARIABEL BARU
 
         // 1. Tarik Data Hari Libur Secara Global
         $hariLiburs = HariLibur::where('tanggal', '>=', Carbon::today()->toDateString())
@@ -49,16 +51,11 @@ class DashboardController extends Controller
                 ->take(5)
                 ->get();
 
-            // Grafik Karyawan (Penggunaan Pribadi)
-            $cutiSetahun = PengajuanCuti::where('pegawai_id', $user->id)
+            // Data UTUH untuk Grafik, Modal, dan Kalender
+            $allCutiDisetujui = PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
-
-            foreach ($cutiSetahun as $cuti) {
-                $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
-                $chartDataBackend[$monthIndex] += $cuti->jumlah_hari;
-            }
         } elseif (in_array($user->role_id, [2, 3, 4])) {
             // ==========================================
             // --- DASHBOARD ATASAN (L1, L2, L3) ---
@@ -72,11 +69,9 @@ class DashboardController extends Controller
                 });
             }
 
-            // MENCARI ANGGOTA TIM: Ambil departemen yang sama, TAPI HANYA KARYAWAN BIASA (role_id = 1)
             $anggotaTimQuery = Pegawai::where('departemen', $user->departemen)
                 ->where('role_id', 1);
 
-            // Simpan datanya ke variabel untuk dikirim ke modal Vue
             $anggotaTim = $anggotaTimQuery->get();
 
             $stats = [
@@ -87,70 +82,82 @@ class DashboardController extends Controller
                     ->whereMonth('tanggal_mulai', date('m'))
                     ->whereYear('tanggal_mulai', $tahun)
                     ->count(),
-                // Angka di kartu (Total Anggota Tim) dihitung dari kueri yang sudah difilter Karyawan saja
                 'total_anggota_tim' => $anggotaTimQuery->count(),
             ];
 
-            // Tabel Atasan
+            // Tabel Atasan: Smart Sorting (Maks 5)
             $recentCuti = PengajuanCuti::with('pegawai')
                 ->whereHas('pegawai', function ($q) use ($user) {
                     $q->where('departemen', $user->departemen);
                 })
-                ->whereIn('status', [$targetStatus, 'disetujui'])
                 ->orderByRaw("CASE WHEN status = '{$targetStatus}' THEN 1 ELSE 2 END")
                 ->orderBy('created_at', 'desc')
-                ->take(10)
+                ->take(5)
                 ->get();
 
-            // Grafik Atasan
-            $cutiTimSetahun = PengajuanCuti::whereHas('pegawai', function ($q) use ($user) {
+            // Data UTUH untuk Grafik, Modal, dan Kalender (Tidak dibatasi 5)
+            $allCutiDisetujui = PengajuanCuti::with('pegawai')->whereHas('pegawai', function ($q) use ($user) {
                 $q->where('departemen', $user->departemen);
             })
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
-            foreach ($cutiTimSetahun as $cuti) {
-                $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
-                $chartDataBackend[$monthIndex] += $cuti->jumlah_hari;
-            }
+            // <--- QUERY TIM CUTI HARI INI (BARU) --->
+            $timCutiHariIni = PengajuanCuti::with('pegawai')
+                ->whereHas('pegawai', function ($q) use ($user) {
+                    $q->where('departemen', $user->departemen);
+                })
+                ->where('status', 'disetujui')
+                ->whereDate('tanggal_mulai', '<=', Carbon::today())
+                ->whereDate('tanggal_selesai', '>=', Carbon::today())
+                ->get();
         } elseif ($user->role_id === 5) {
             // ==========================================
             // --- DASHBOARD ADMIN HR ---
             // ==========================================
-
-            // Admin HR melihat seluruh pegawai (hanya karyawan biasa / role_id 1)
             $anggotaTim = Pegawai::where('role_id', 1)->limit(50)->get();
 
             $stats = [
-                'total_pegawai' => Pegawai::where('role_id', 1)->count(), // Hanya hitung karyawan biasa
+                'total_pegawai' => Pegawai::where('role_id', 1)->count(),
                 'total_pengajuan' => PengajuanCuti::whereYear('created_at', $tahun)->count(),
                 'pengajuan_menunggu' => PengajuanCuti::where('status', 'like', 'menunggu%')->count(),
                 'pengajuan_disetujui' => PengajuanCuti::where('status', 'disetujui')->count(),
             ];
 
+            // Tabel Admin HR
             $recentCuti = PengajuanCuti::with('pegawai')
                 ->orderBy('created_at', 'desc')
                 ->take(10)
                 ->get();
 
-            // Grafik Admin HR
-            $cutiPerusahaan = PengajuanCuti::where('status', 'disetujui')
+            // Data UTUH untuk Grafik, Modal, dan Kalender
+            $allCutiDisetujui = PengajuanCuti::with('pegawai')->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
-            foreach ($cutiPerusahaan as $cuti) {
-                $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
-                $chartDataBackend[$monthIndex] += $cuti->jumlah_hari;
-            }
+            // <--- QUERY TIM CUTI HARI INI ADMIN HR (BARU) --->
+            $timCutiHariIni = PengajuanCuti::with('pegawai')
+                ->where('status', 'disetujui')
+                ->whereDate('tanggal_mulai', '<=', Carbon::today())
+                ->whereDate('tanggal_selesai', '>=', Carbon::today())
+                ->get();
+        }
+
+        // Loop untuk memetakan data grafik menggunakan data utuh
+        foreach ($allCutiDisetujui as $cuti) {
+            $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
+            $chartDataBackend[$monthIndex] += $cuti->jumlah_hari;
         }
 
         return Inertia::render('Dashboard', [
             'stats' => $stats,
             'recentCuti' => $recentCuti,
+            'cutiDisetujuiData' => $allCutiDisetujui,
             'chartDataBackend' => $chartDataBackend,
             'hariLiburs' => $hariLiburs,
-            'anggotaTim' => $anggotaTim, // Data ini dikirim ke Vue
+            'anggotaTim' => $anggotaTim,
+            'timCutiHariIni' => $timCutiHariIni 
         ]);
     }
 }

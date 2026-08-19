@@ -13,16 +13,18 @@ const formatDate = (dateString) => {
     return new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
 };
 
-// Fungsi memformat badge status
+// Fungsi memformat badge status (Gabungan Logika Baru & Class Styling)
 const formatStatus = (status) => {
-    switch (status) {
-        case 'menunggu_l1': return { text: 'Menunggu L1', class: 'bg-yellow-100 text-yellow-800' };
-        case 'menunggu_l2': return { text: 'Menunggu L2', class: 'bg-blue-100 text-blue-800' };
-        case 'menunggu_l3': return { text: 'Menunggu L3', class: 'bg-purple-100 text-purple-800' };
-        case 'disetujui': return { text: 'Disetujui', class: 'bg-green-100 text-green-800' };
-        case 'ditolak': return { text: 'Ditolak', class: 'bg-red-100 text-red-800' };
-        default: return { text: status, class: 'bg-gray-100 text-gray-800' };
+    if (status === 'menunggu_l1' || status === 'menunggu_l2' || status === 'menunggu_l3') {
+        return { text: 'Menunggu Atasan Langsung', class: 'bg-yellow-100 text-yellow-800' };
     }
+    if (status === 'disetujui') {
+        return { text: 'Disetujui', class: 'bg-green-100 text-green-800' };
+    }
+    if (status === 'ditolak') {
+        return { text: 'Ditolak', class: 'bg-red-100 text-red-800' };
+    }
+    return { text: status.replace('_', ' ').toUpperCase(), class: 'bg-gray-100 text-gray-800' };
 };
 </script>
 

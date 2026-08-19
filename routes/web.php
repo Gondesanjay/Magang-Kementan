@@ -45,14 +45,22 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     // --- RUTE NOTIFIKASI ---
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllAsRead'])->name('notifications.readAll');
     Route::delete('/notifikasi/{id}', [NotificationController::class, 'destroy'])->name('notifikasi.destroy');
-    
+
+    // ==========================================
     // Rute Modul Karyawan
+    // ==========================================
     Route::get('/karyawan/ajukan-cuti', [CutiController::class, 'create'])->name('karyawan.ajukan');
     Route::post('/karyawan/ajukan-cuti', [CutiController::class, 'store'])->name('karyawan.ajukan.store');
     Route::get('/karyawan/riwayat-cuti', [CutiController::class, 'history'])->name('karyawan.riwayat');
 
-    // Rute Baru: Karyawan membatalkan pengajuan cutinya sendiri
+    // Karyawan membatalkan pengajuan cutinya sendiri (Antrean)
     Route::post('/karyawan/riwayat-cuti/{id}/batal', [CutiController::class, 'cancel'])->name('karyawan.cuti.batal');
+
+    // Karyawan membatalkan pengajuan cuti mandiri (Sudah Disetujui)
+    Route::post('/karyawan/cuti/{id}/batalkan-mandiri', [CutiController::class, 'batalkanMandiri'])->name('karyawan.cuti.batalkan-mandiri');
+
+    // Karyawan merevisi cuti yang ditangguhkan
+    Route::post('/karyawan/cuti/{id}/revisi', [CutiController::class, 'revisi'])->name('karyawan.cuti.revisi');
 
     Route::get('/karyawan/kalender-tim', [CutiController::class, 'teamCalendar'])->name('karyawan.kalender');
     Route::get('/karyawan/riwayat-cuti/{id}/pdf', [CutiController::class, 'downloadPdf'])->name('karyawan.cuti.pdf');
@@ -62,15 +70,17 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     // ==========================================
     Route::get('/atasan/antrean-approval', [ApprovalController::class, 'index'])->name('atasan.approval');
     Route::post('/atasan/antrean-approval/{id}', [ApprovalController::class, 'process'])->name('atasan.approval.process');
-    
+
     // ---> RUTE QUICK APPROVE (SUDAH DIPINDAHKAN KE DALAM SINI) <---
     Route::post('/atasan/approval/{id}/approve', [ApprovalController::class, 'approve'])->name('atasan.approval.approve');
     Route::post('/atasan/approval/{id}/reject', [ApprovalController::class, 'reject'])->name('atasan.approval.reject');
-    
+
     Route::get('/atasan/pembatalan-cuti', [PembatalanController::class, 'index'])->name('atasan.pembatalan');
     Route::post('/atasan/pembatalan-cuti/{id}', [PembatalanController::class, 'process'])->name('atasan.pembatalan.process');
 
+    // ==========================================
     // Rute Modul Admin HR
+    // ==========================================
     Route::get('/admin/pegawai', [AdminController::class, 'kelolaPegawai'])->name('admin.pegawai');
     Route::get('/admin/saldo-cuti', [AdminController::class, 'kelolaSaldo'])->name('admin.saldo');
     Route::post('/admin/saldo-cuti/{id}', [AdminController::class, 'updateSaldo'])->name('admin.saldo.update');
@@ -79,6 +89,7 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     Route::post('/admin/pengajuan-cuti/{id}/tangguhkan', [AdminController::class, 'suspendCuti'])->name('admin.cuti.tangguhkan');
     Route::get('/admin/hari-libur', [AdminController::class, 'kelolaLibur'])->name('admin.libur');
     Route::post('/admin/hari-libur', [AdminController::class, 'storeLibur'])->name('admin.libur.store');
+    Route::post('/admin/hari-libur/import', [AdminController::class, 'importLiburCsv'])->name('admin.libur.import');
     Route::delete('/admin/hari-libur/{id}', [AdminController::class, 'destroyLibur'])->name('admin.libur.destroy');
 
     // Rute Profile Bawaan Breeze

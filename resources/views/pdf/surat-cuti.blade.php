@@ -3,261 +3,177 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Formulir Cuti - {{ $pegawai->nama }}</title>
+    <title>Surat Persetujuan Cuti - {{ $pegawai->nama }}</title>
     <style>
         body {
             font-family: 'Times New Roman', Times, serif;
-            font-size: 11pt;
-            line-height: 1.3;
-        }
-
-        .header {
-            text-align: right;
-            margin-bottom: 20px;
+            /* Font standar dokumen resmi */
+            font-size: 12pt;
+            line-height: 1.5;
+            padding: 2cm 1.5cm;
+            color: #000;
         }
 
         .title {
             text-align: center;
             font-weight: bold;
+            font-size: 14pt;
+            margin-bottom: 25px;
             text-decoration: underline;
-            margin-bottom: 15px;
         }
 
-        table {
+        .content {
+            margin-top: 20px;
+            text-align: justify;
+        }
+
+        .table-info {
             width: 100%;
+            margin-top: 15px;
+            margin-bottom: 20px;
             border-collapse: collapse;
-            margin-bottom: 10px;
         }
 
-        th,
-        td {
-            border: 1px solid black;
-            padding: 4px 6px;
+        .table-info td {
+            padding: 4px 0;
             vertical-align: top;
         }
 
-        .text-center {
+        /* Kolom Label */
+        .table-info td:first-child {
+            width: 25%;
+        }
+
+        /* Kolom Titik Dua */
+        .table-info td:nth-child(2) {
+            width: 3%;
             text-align: center;
         }
 
-        .text-right {
-            text-align: right;
+        .status-box {
+            font-weight: bold;
+            margin-top: 15px;
+            margin-bottom: 15px;
         }
 
-        .font-bold {
+        /* Area Tanda Tangan */
+        .signature-table {
+            width: 100%;
+            margin-top: 60px;
+            text-align: center;
+            border-collapse: collapse;
+        }
+
+        .signature-table td {
+            width: 50%;
+            padding: 5px;
+            vertical-align: bottom;
+        }
+
+        .signature-date {
+            text-align: center;
+            margin-bottom: 10px;
+        }
+
+        .signature-name {
+            text-decoration: underline;
             font-weight: bold;
+            margin-top: 80px;
+            /* Ruang untuk tanda tangan */
         }
     </style>
 </head>
 
 <body>
 
-    <div class="header">
-        Jakarta, {{ \Carbon\Carbon::parse($pengajuan->created_at)->translatedFormat('d F Y') }}<br>
-        <br>
-        KEPADA<br>
-        Yth. Kepala Biro Organisasi dan SDM Aparatur<br>
-        Sekretariat Jenderal Kementerian Pertanian<br>
-        di Tempat
+    <!-- JUDUL SURAT -->
+    <div class="title">LEMBAR PERSETUJUAN CUTI</div>
+
+    <div class="content">
+        <p>Berdasarkan permohonan cuti yang telah diajukan melalui sistem kepegawaian, dengan ini disampaikan bahwa:</p>
+
+        <!-- DATA PEGAWAI & CUTI -->
+        <table class="table-info">
+            <tr>
+                <td>Nama</td>
+                <td>:</td>
+                <td>{{ $pegawai->nama }}</td>
+            </tr>
+            <tr>
+                <td>NIP</td>
+                <td>:</td>
+                <td>{{ $pegawai->nip ?? '-' }}</td>
+            </tr>
+            <tr>
+                <td>Jabatan</td>
+                <td>:</td>
+                <td>{{ $pegawai->jabatan ?? '-' }}</td>
+            </tr>
+            <tr>
+                <td>Unit Kerja</td>
+                <td>:</td>
+                <td>{{ $pegawai->departemen ?? '-' }}</td>
+            </tr>
+            <tr>
+                <td>Jenis Cuti</td>
+                <td>:</td>
+                <!-- Jika jenis_cuti kosong, default ke Cuti Tahunan -->
+                <td>{{ $pengajuan->jenis_cuti ?? 'Cuti Tahunan' }}</td>
+            </tr>
+            <tr>
+                <td>Jumlah Hari</td>
+                <td>:</td>
+                <td>{{ $pengajuan->jumlah_hari }} Hari</td>
+            </tr>
+            <tr>
+                <td>Periode Cuti</td>
+                <td>:</td>
+                <td>
+                    {{ \Carbon\Carbon::parse($pengajuan->tanggal_mulai)->translatedFormat('d F Y') }}
+                    s.d.
+                    {{ \Carbon\Carbon::parse($pengajuan->tanggal_selesai)->translatedFormat('d F Y') }}
+                </td>
+            </tr>
+        </table>
+
+        <!-- STATUS PERSETUJUAN -->
+        <div class="status-box">
+            Status Permohonan : DISETUJUI
+        </div>
+
+        <p>Pegawai yang bersangkutan diberikan izin untuk melaksanakan cuti pada periode tersebut sesuai ketentuan peraturan perundang-undangan.</p>
     </div>
 
-    <div class="title">FORMULIR PERMINTAAN DAN PEMBERIAN CUTI</div>
+    <!-- AREA TANDA TANGAN -->
+    <table class="signature-table">
+        <tr>
+            <!-- Kolom Kiri: Atasan Langsung (L3 - Kasubag TU) -->
+            <td>
+                <br>
+                Atasan Langsung,
 
-    <!-- I. DATA PEGAWAI -->
-    <table>
-        <tr>
-            <td colspan="4" class="font-bold">I. DATA PEGAWAI</td>
-        </tr>
-        <tr>
-            <td width="15%">NAMA</td>
-            <td width="35%">{{ $pegawai->nama }}</td>
-            <td width="15%">NIP</td>
-            <td width="35%">{{ $pegawai->nip }}</td>
-        </tr>
-        <tr>
-            <td>JABATAN</td>
-            <td>{{ $pegawai->jabatan ?? '-' }}</td>
-            <td>MASA KERJA</td>
-            <td>{{ $masaKerja }}</td>
-        </tr>
-        <tr>
-            <td>UNIT KERJA</td>
-            <td colspan="3">{{ $pegawai->departemen }}</td>
-        </tr>
-    </table>
-
-    <!-- II. JENIS CUTI -->
-    <table>
-        <tr>
-            <td colspan="4" class="font-bold">II. JENIS CUTI YANG DIAMBIL**</td>
-        </tr>
-        <tr>
-            <td width="45%">1. Cuti Tahunan</td>
-            <td width="5%" class="text-center">V</td>
-            <td width="45%">2. Cuti Besar</td>
-            <td width="5%" class="text-center"></td>
-        </tr>
-        <tr>
-            <td>3. Cuti Sakit</td>
-            <td class="text-center"></td>
-            <td>4. Cuti Melahirkan</td>
-            <td class="text-center"></td>
-        </tr>
-        <tr>
-            <td>5. Cuti Karena Alasan Penting</td>
-            <td class="text-center"></td>
-            <td>6. Cuti di Luar Tanggungan Negara</td>
-            <td class="text-center"></td>
-        </tr>
-    </table>
-
-    <!-- III. ALASAN CUTI -->
-    <table>
-        <tr>
-            <td class="font-bold">III. ALASAN CUTI</td>
-        </tr>
-        <tr>
-            <td>{{ $pengajuan->keterangan }}</td>
-        </tr>
-    </table>
-
-    <!-- IV. LAMANYA CUTI -->
-    <table>
-        <tr>
-            <td colspan="6" class="font-bold">IV. LAMANYA CUTI</td>
-        </tr>
-        <tr>
-            <td width="10%">Selama</td>
-            <td width="20%" class="text-center">{{ $pengajuan->jumlah_hari }} Hari</td>
-            <td width="15%">Mulai Tanggal</td>
-            <td width="20%" class="text-center">{{ \Carbon\Carbon::parse($pengajuan->tanggal_mulai)->translatedFormat('d M Y') }}</td>
-            <td width="5%" class="text-center">s/d</td>
-            <td width="30%" class="text-center">{{ \Carbon\Carbon::parse($pengajuan->tanggal_selesai)->translatedFormat('d M Y') }}</td>
-        </tr>
-    </table>
-
-    <!-- V. CATATAN CUTI -->
-    <table>
-        <tr>
-            <td colspan="5" class="font-bold">V. CATATAN CUTI***</td>
-        </tr>
-        <tr>
-            <td colspan="3" width="50%">1. CUTI TAHUNAN</td>
-            <td width="45%">2. CUTI BESAR</td>
-            <td width="5%"></td>
-        </tr>
-        <tr>
-            <td width="15%" class="text-center">Tahunan</td>
-            <td width="10%" class="text-center">Sisa</td>
-            <td width="25%" class="text-center">Keterangan</td>
-            <td>3. CUTI SAKIT</td>
-            <td></td>
-        </tr>
-        <tr>
-            <td class="text-center">N-2</td>
-            <td></td>
-            <td></td>
-            <td>4. CUTI MELAHIRKAN</td>
-            <td></td>
-        </tr>
-        <tr>
-            <td class="text-center">N-1</td>
-            <td></td>
-            <td></td>
-            <td>5. CUTI KARENA ALASAN PENTING</td>
-            <td></td>
-        </tr>
-        <tr>
-            <td class="text-center">N</td>
-            <td class="text-center">{{ $sisaCuti }}</td>
-            <td class="text-center">Hari</td>
-            <td>6. CUTI DI LUAR TANGGUNGAN NEGARA</td>
-            <td></td>
-        </tr>
-    </table>
-
-    <!-- VI. ALAMAT -->
-    <table>
-        <tr>
-            <td colspan="3" class="font-bold">VI. ALAMAT SELAMA MENJALANKAN CUTI</td>
-        </tr>
-        <tr>
-            <!-- Kolom kosong di sebelah kiri -->
-            <td width="35%" style="height: 15px;"></td>
-            <!-- Kolom TELP di tengah -->
-            <td width="25%" style="height: 15px;">TELP : {{ $pengajuan->no_telp }}</td>
-            <!-- Kolom kosong di sebelah kanan -->
-            <td width="40%" style="height: 15px;"></td>
-        </tr>
-        <tr>
-            <!-- Kolom Alamat (gabungan 2 kolom kiri) -->
-            <td colspan="2" style="height: 75px; vertical-align: top;">
-                {{ $pengajuan->alamat_cuti }}
+                <div class="signature-name">
+                    {{ $pengajuan->atasanL3 ? $pengajuan->atasanL3->nama : '(_______________________)' }}
+                </div>
+                NIP. {{ $pengajuan->atasanL3 ? $pengajuan->atasanL3->nip : '_______________________' }}
             </td>
-            <!-- Kolom Tanda Tangan -->
-            <td class="text-center" style="vertical-align: top;">
-                Hormat saya,<br><br><br><br>
-                ({{ $pegawai->nama }})<br>
-                NIP. {{ $pegawai->nip }}
+
+            <!-- Kolom Kanan: Pejabat Berwenang (L4 - Kepala Biro) -->
+            <td>
+                <div class="signature-date">
+                    Jakarta, {{ \Carbon\Carbon::now()->translatedFormat('d F Y') }}
+                </div>
+                Mengetahui,<br>
+                Pejabat Yang Berwenang Memberikan Cuti
+
+                <div class="signature-name">
+                    {{ $pengajuan->atasanL4 ? $pengajuan->atasanL4->nama : '(_______________________)' }}
+                </div>
+                NIP. {{ $pengajuan->atasanL4 ? $pengajuan->atasanL4->nip : '_______________________' }}
             </td>
         </tr>
     </table>
 
-    <!-- VII. PERTIMBANGAN ATASAN -->
-    <table>
-        <tr>
-            <td colspan="4" class="font-bold">VII. PERTIMBANGAN ATASAN LANGSUNG**</td>
-        </tr>
-        <tr>
-            <td width="15%" class="text-center">DI SETUJUI</td>
-            <td width="20%" class="text-center">PERUBAHAN****</td>
-            <td width="25%" class="text-center">DI TANGGUHKAN****</td>
-            <td width="40%" class="text-center">TIDAK DI SETUJUI****</td>
-        </tr>
-        <tr>
-            <td class="text-center font-bold">V</td>
-            <td></td>
-            <td></td>
-            <td></td>
-        </tr>
-        <tr>
-            <td colspan="3"></td>
-            <td class="text-center" style="padding-top: 15px; padding-bottom: 15px;">
-                {{ $pengajuan->atasanL1->jabatan ?? 'Atasan Langsung' }}<br>
-                {{ $pengajuan->atasanL1->departemen ?? '' }}<br><br><br><br>
-                ({{ $pengajuan->atasanL1->nama ?? '.........................................' }})<br>
-                NIP. {{ $pengajuan->atasanL1->nip ?? '.....................................' }}
-            </td>
-        </tr>
-    </table>
-
-    <!-- VIII. KEPUTUSAN PEJABAT -->
-    <table>
-        <tr>
-            <td colspan="4" class="font-bold">VIII. KEPUTUSAN PEJABAT YANG BERWENANG MEMBERIKAN CUTI**</td>
-        </tr>
-        <tr>
-            <td width="15%" class="text-center">DI SETUJUI</td>
-            <td width="20%" class="text-center">PERUBAHAN****</td>
-            <td width="25%" class="text-center">DI TANGGUHKAN****</td>
-            <td width="40%" class="text-center">TIDAK DI SETUJUI****</td>
-        </tr>
-        <tr>
-            <td class="text-center font-bold">V</td>
-            <td></td>
-            <td></td>
-            <td></td>
-        </tr>
-        <tr>
-            <td colspan="3"></td>
-            <td class="text-center" style="padding-top: 15px; padding-bottom: 15px;">
-                {{ $pengajuan->atasanL3->jabatan ?? 'Pejabat Berwenang' }}<br>
-                {{ $pengajuan->atasanL3->departemen ?? '' }}<br><br><br><br>
-                ({{ $pengajuan->atasanL3->nama ?? '.........................................' }})<br>
-                NIP. {{ $pengajuan->atasanL3->nip ?? '.....................................' }}
-            </td>
-        </tr>
-    </table>
 </body>
 
 </html>

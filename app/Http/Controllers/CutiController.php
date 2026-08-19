@@ -5,13 +5,35 @@ namespace App\Http\Controllers;
 use Barryvdh\DomPDF\Facade\Pdf;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
-use App\Models\Notifikasi; // <-- Tambahan Import Model Notifikasi
+use App\Models\Notifikasi;
+use App\Models\Pegawai; // <-- Wajib ditambahkan untuk mencari atasan
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Carbon\Carbon;
 
 class CutiController extends Controller
 {
+    private function normalizeJenisCuti($value)
+    {
+        if ($value === null) {
+            return 'Cuti Tahunan';
+        }
+
+        $normalized = trim((string) $value);
+
+        $map = [
+            'cuti tahunan' => 'Cuti Tahunan',
+            'cuti melahirkan' => 'Cuti Melahirkan',
+            'cuti besar' => 'Cuti Besar',
+            'cuti alasan penting' => 'Cuti Alasan Penting',
+            'cuti_alasan_penting' => 'Cuti Alasan Penting',
+        ];
+
+        $lower = strtolower($normalized);
+
+        return $map[$lower] ?? $normalized;
+    }
+
     // 1. Menampilkan Halaman Form Pengajuan
     public function create()
     {
@@ -28,6 +50,7 @@ class CutiController extends Controller
     public function store(Request $request)
     {
         $request->validate([
+            'jenis_cuti' => ['required', 'string', 'in:Cuti Tahunan,Cuti Melahirkan,Cuti Besar,Cuti Alasan Penting'],
             'tanggal_mulai' => ['required', 'date', 'after_or_equal:today'],
             'tanggal_selesai' => ['required', 'date', 'after_or_equal:tanggal_mulai'],
             'keterangan' => ['required', 'string'],
@@ -35,10 +58,12 @@ class CutiController extends Controller
             'no_telp' => ['required', 'string', 'max:20'],
         ]);
 
+        $jenisCuti = $this->normalizeJenisCuti($request->jenis_cuti);
         $jumlah_hari = Carbon::parse($request->tanggal_mulai)->diffInDays(Carbon::parse($request->tanggal_selesai)) + 1;
 
         $pengajuan = PengajuanCuti::create([
             'pegawai_id' => auth()->id(),
+            'jenis_cuti' => $jenisCuti,
             'tanggal_mulai' => $request->tanggal_mulai,
             'tanggal_selesai' => $request->tanggal_selesai,
             'jumlah_hari' => $jumlah_hari,
@@ -49,16 +74,34 @@ class CutiController extends Controller
             'level_saat_ini' => 1,
         ]);
 
-        // <-- OTOMATIS TAMBAHKAN NOTIFIKASI BARU SAAT PENGAJUAN SUKSES -->
-        Notifikasi::create([
-            'pegawai_id' => auth()->id(),
-            'judul' => 'Pengajuan Cuti Berhasil',
-            'pesan' => 'Permohonan cuti Anda berhasil diajukan dan sedang menunggu persetujuan Atasan L1.',
-            'tautan' => route('karyawan.riwayat'),
-            'is_read' => false,
-        ]);
+        // =========================================================
+        // PROSES TRIGGER NOTIFIKASI KE ATASAN L1
+        // =========================================================
+        $userLogin = auth()->user();
 
-        return redirect()->route('karyawan.riwayat')->with('success', 'Pengajuan cuti berhasil dikirim.');
+        // Cari Atasan L1 (role_id = 2) yang memiliki departemen yang SAMA dengan pegawai
+        $atasanL1 = Pegawai::where('role_id', 2)
+            ->where('departemen', $userLogin->departemen)
+            ->first();
+
+        // Jika tidak ketemu berdasarkan departemen, ambil atasan L1 mana saja sebagai cadangan
+        if (!$atasanL1) {
+            $atasanL1 = Pegawai::where('role_id', 2)->first();
+        }
+
+        // Kirim notifikasi jika Atasan L1 ditemukan
+        if ($atasanL1) {
+            Notifikasi::create([
+                'pegawai_id' => $atasanL1->id,
+                'judul'      => 'Pengajuan Cuti Baru',
+                // Pesan sudah disesuaikan dengan permintaanmu
+                'pesan'      => 'Ada pengajuan cuti baru dari ' . $userLogin->nama . ' yang butuh persetujuan Anda.',
+                'tautan'     => route('atasan.approval'),
+                'is_read'    => false,
+            ]);
+        }
+
+        return redirect()->route('karyawan.riwayat')->with('success', 'Cuti berhasil diajukan!');
     }
 
     // 3. Menampilkan Halaman Riwayat Pengajuan (Dengan Filter & Search Global)
@@ -140,7 +183,7 @@ class CutiController extends Controller
         return $pdf->download($namaFile);
     }
 
-    // 6. Karyawan Membatalkan Pengajuan Cuti Sendiri
+    // 6. Karyawan Membatalkan Pengajuan Cuti Sendiri (Yang Masih Antrean)
     public function cancel($id)
     {
         $pengajuan = PengajuanCuti::findOrFail($id);
@@ -160,15 +203,104 @@ class CutiController extends Controller
             'status' => 'dibatalkan_reguler'
         ]);
 
-        // <-- TAMBAHKAN NOTIFIKASI PEMBATALAN -->
-        Notifikasi::create([
-            'pegawai_id' => auth()->id(),
-            'judul' => 'Pengajuan Cuti Dibatalkan',
-            'pesan' => 'Anda telah membatalkan permohonan cuti secara mandiri.',
-            'tautan' => route('karyawan.riwayat'),
-            'is_read' => false,
+        return back()->with('success', 'Pengajuan cuti berhasil dibatalkan.');
+    }
+
+    // 7. Karyawan Membatalkan Cuti Mandiri (Yang Sudah Disetujui)
+    public function batalkanMandiri(Request $request, $id)
+    {
+        // 1. Validasi alasan pembatalan wajib diisi
+        $request->validate([
+            'alasan_pembatalan' => 'required|string|max:255',
+        ], [
+            'alasan_pembatalan.required' => 'Alasan pembatalan wajib diisi.',
         ]);
 
-        return back()->with('success', 'Pengajuan cuti berhasil dibatalkan.');
+        $cuti = PengajuanCuti::findOrFail($id);
+
+        // 2. Keamanan: Pastikan yang membatalkan adalah pemilik cuti & statusnya 'disetujui'
+        if ($cuti->pegawai_id !== auth()->id() || $cuti->status !== 'disetujui') {
+            return redirect()->back()->with('error', 'Aksi tidak diizinkan atau cuti tidak dapat dibatalkan.');
+        }
+
+        // 3. Kembalikan saldo cuti secara otomatis
+        $tahunCuti = date('Y', strtotime($cuti->tanggal_mulai));
+        $saldo = SaldoCuti::where('pegawai_id', $cuti->pegawai_id)
+            ->where('tahun', $tahunCuti)
+            ->first();
+
+        if ($saldo) {
+            $saldo->sisa += $cuti->jumlah_hari;
+            $saldo->save();
+        }
+
+        // 4. Ubah status menjadi dibatalkan dan simpan alasannya
+        $cuti->status = 'dibatalkan_reguler';
+        // Tambahkan alasan ke keterangan yang sudah ada
+        $cuti->keterangan = $cuti->keterangan . ' | Batal Mandiri: ' . $request->alasan_pembatalan;
+        $cuti->save();
+
+        return redirect()->back()->with('success', 'Cuti berhasil dibatalkan dan saldo telah dikembalikan.');
+    }
+
+    // 8. Karyawan Merevisi Cuti (Khusus Status Ditangguhkan)
+    public function revisi(Request $request, $id)
+    {
+        $request->validate([
+            'tanggal_mulai' => ['required', 'date', 'after_or_equal:today'],
+            'tanggal_selesai' => ['required', 'date', 'after_or_equal:tanggal_mulai'],
+        ]);
+
+        $cuti = PengajuanCuti::findOrFail($id);
+
+        if ($cuti->pegawai_id !== auth()->id() || $cuti->status !== 'dibatalkan_ditangguhkan') {
+            return redirect()->back()->with('error', 'Cuti ini tidak dapat direvisi.');
+        }
+
+        // --- LOGIKA BARU: MENGHITUNG HARI KERJA (SKIP SABTU & MINGGU) ---
+        $startDate = Carbon::parse($request->tanggal_mulai);
+        $endDate = Carbon::parse($request->tanggal_selesai);
+        $jumlah_hari = 0;
+
+        $currentDate = $startDate->copy();
+        while ($currentDate->lte($endDate)) {
+            // Jika bukan hari Sabtu (6) dan bukan hari Minggu (0)
+            if (!$currentDate->isWeekend()) {
+                $jumlah_hari++;
+            }
+            $currentDate->addDay();
+        }
+
+        // Cegah pengajuan jika jumlah harinya 0 (berarti dia cuma ngajuin di pas hari libur)
+        if ($jumlah_hari === 0) {
+            return redirect()->back()->with('error', 'Tanggal yang dipilih jatuh pada hari libur sepenuhnya.');
+        }
+
+        // Update data cuti
+        $cuti->update([
+            'tanggal_mulai' => $request->tanggal_mulai,
+            'tanggal_selesai' => $request->tanggal_selesai,
+            'jumlah_hari' => $jumlah_hari,
+            'status' => 'menunggu_l1',
+            'level_saat_ini' => 1,
+            'keterangan' => $cuti->keterangan . ' | [DIREVISI]',
+        ]);
+
+        // Kirim Notifikasi Ulang ke Atasan L1
+        $userLogin = auth()->user();
+        $atasanL1 = Pegawai::where('role_id', 2)->where('departemen', $userLogin->departemen)->first()
+            ?? Pegawai::where('role_id', 2)->first();
+
+        if ($atasanL1) {
+            Notifikasi::create([
+                'pegawai_id' => $atasanL1->id,
+                'judul'      => 'Revisi Pengajuan Cuti',
+                'pesan'      => 'Ada revisi tanggal cuti dari ' . $userLogin->nama . ' yang butuh persetujuan Anda.',
+                'tautan'     => route('atasan.approval'),
+                'is_read'    => false,
+            ]);
+        }
+
+        return redirect()->back()->with('success', 'Tanggal cuti berhasil direvisi dan diajukan ulang.');
     }
 }

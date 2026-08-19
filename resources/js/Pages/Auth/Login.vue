@@ -31,6 +31,11 @@ const submit = () => {
 
 // State untuk menampilkan Modal Panduan Informasi
 const showInfoModal = ref(false);
+
+// Fungsi untuk memunculkan pop-up saat tulisan Lupa Password diklik
+const handleForgotPassword = () => {
+    alert("Hubungi Kepegawaian");
+};
 </script>
 
 <template>
@@ -168,15 +173,16 @@ const showInfoModal = ref(false);
                         </button>
                     </div>
 
-                    <!-- Lupa Password -->
+                    <!-- Lupa Password (Modifikasi sesuai request) -->
                     <div class="text-center pt-2">
-                        <Link
+                        <button
                             v-if="canResetPassword"
-                            :href="route('password.request')"
-                            class="text-[13px] font-bold text-slate-700 hover:text-[#1c75f2] transition-colors hover:underline"
+                            type="button"
+                            @click.prevent="handleForgotPassword"
+                            class="text-[13px] font-bold text-slate-700 hover:text-[#1c75f2] transition-colors hover:underline bg-transparent border-none cursor-pointer p-0"
                         >
                             Lupa password?
-                        </Link>
+                        </button>
                     </div>
                 </form>
             </div>

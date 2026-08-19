@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Pegawai;
 use App\Models\SaldoCuti;
 use App\Models\HariLibur;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 
@@ -147,7 +148,11 @@ class AdminController extends Controller
     // 7. Menampilkan Halaman Kelola Hari Libur
     public function kelolaLibur()
     {
-        $libur = HariLibur::orderBy('tanggal', 'desc')->get();
+        // HANYA MENAMPILKAN LIBUR MULAI HARI INI KE DEPAN, MAKSIMAL 7 BARIS
+        $libur = HariLibur::where('tanggal', '>=', Carbon::today()->toDateString())
+            ->orderBy('tanggal', 'asc')
+            ->paginate(7);
+
         return Inertia::render('Admin/KelolaLibur', [
             'libur' => $libur
         ]);
@@ -173,7 +178,96 @@ class AdminController extends Controller
         return back();
     }
 
-    // 9. Menghapus Data Hari Libur
+    // 9. Mengimpor Data Hari Libur dari File CSV
+    public function importLiburCsv(Request $request)
+    {
+        $request->validate([
+            'file' => ['required', 'file', 'mimes:csv,txt'],
+        ]);
+
+        $file = $request->file('file');
+        $path = $file->getRealPath();
+        $handle = fopen($path, 'r');
+
+        if ($handle === false) {
+            return back()->with('error', 'File CSV tidak dapat dibuka.');
+        }
+
+        $delimiter = ',';
+        $firstLine = fgets($handle);
+
+        if ($firstLine !== false) {
+            $delimiter = substr_count($firstLine, ';') > substr_count($firstLine, ',') ? ';' : ',';
+        }
+
+        rewind($handle);
+
+        $inserted = 0;
+        $skipped = 0;
+        $headerSkipped = false;
+
+        while (($row = fgetcsv($handle, 1000, $delimiter)) !== false) {
+            $row = array_map(function ($value) {
+                return trim((string) $value);
+            }, $row);
+
+            if (empty(array_filter($row, fn($value) => $value !== ''))) {
+                continue;
+            }
+
+            $firstCell = strtolower($row[0] ?? '');
+            if (!$headerSkipped && in_array($firstCell, ['tanggal', 'date', 'tgl'])) {
+                $headerSkipped = true;
+                continue;
+            }
+
+            if (count($row) < 2) {
+                $skipped++;
+                continue;
+            }
+
+            $tanggal = $row[0];
+            $keterangan = $row[1];
+            $isCutiBersama = $row[2] ?? 'false';
+
+            if (empty($tanggal) || empty($keterangan)) {
+                $skipped++;
+                continue;
+            }
+
+            try {
+                $parsedDate = Carbon::parse($tanggal)->format('Y-m-d');
+            } catch (\Exception $e) {
+                $skipped++;
+                continue;
+            }
+
+            if (HariLibur::whereDate('tanggal', $parsedDate)->exists()) {
+                $skipped++;
+                continue;
+            }
+
+            $jenis = strtolower((string) $isCutiBersama);
+            $isCutiBersamaFlag = in_array($jenis, ['1', 'true', 'yes', 'ya', 'cuti bersama', 'cuti_bersama'], true);
+
+            HariLibur::create([
+                'tanggal' => $parsedDate,
+                'keterangan' => $keterangan,
+                'is_cuti_bersama' => $isCutiBersamaFlag ? 1 : 0,
+            ]);
+
+            $inserted++;
+        }
+
+        fclose($handle);
+
+        return back()->with(
+            'success',
+            "Berhasil mengimpor {$inserted} hari libur dari CSV. {$skipped} baris dilewati."
+        );
+    }
+
+    // 10. Menghapus Data Hari Libur
     public function destroyLibur($id)
     {
         HariLibur::findOrFail($id)->delete();
