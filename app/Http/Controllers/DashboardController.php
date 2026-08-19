@@ -149,7 +149,7 @@ class DashboardController extends Controller
             'chartDataBackend' => $chartDataBackend,
             'hariLiburs' => $hariLiburs,
             'anggotaTim' => $anggotaTim,
-            'timCutiHariIni' => $timCutiHariIni 
+            'timCutiHariIni' => $timCutiHariIni
         ]);
     }
 }
