@@ -46,38 +46,51 @@ class DashboardController extends Controller
             ];
 
             // Tabel Karyawan
-            $recentCuti = PengajuanCuti::where('pegawai_id', $user->id)
+            $recentCuti = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                ->where('pegawai_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->take(5)
                 ->get();
 
             // Data UTUH untuk Grafik, Modal, dan Kalender
-            $allCutiDisetujui = PengajuanCuti::where('pegawai_id', $user->id)
+            $allCutiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                ->where('pegawai_id', $user->id)
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
-        } elseif (in_array($user->role_id, [2, 3, 4])) {
+        } elseif (in_array($user->role_id, [2, 3, 4, 5, 6])) {
             // ==========================================
-            // --- DASHBOARD ATASAN (L1, L2, L3) ---
+            // --- DASHBOARD ATASAN & ADMIN (L1, L2, L3, L4, HR) ---
             // ==========================================
-            $targetStatus = 'menunggu_l' . ($user->role_id - 1);
+            $targetStatus = [
+                2 => 'menunggu_l1',
+                3 => 'menunggu_l2',
+                4 => 'menunggu_l3',
+                6 => 'menunggu_l4',
+            ][$user->role_id] ?? null;
 
-            $antreanQuery = PengajuanCuti::where('status', $targetStatus);
+            $antreanQuery = $targetStatus
+                ? PengajuanCuti::where('status', $targetStatus)
+                : PengajuanCuti::where('status', 'like', 'menunggu%');
             if ($user->role_id === 2) {
                 $antreanQuery->whereHas('pegawai', function ($q) use ($user) {
                     $q->where('departemen', $user->departemen);
                 });
             }
 
-            $anggotaTimQuery = Pegawai::where('departemen', $user->departemen)
-                ->where('role_id', 1);
+            $anggotaTimQuery = Pegawai::where('role_id', 1);
+            if ($user->role_id !== 5) {
+                $anggotaTimQuery->where('departemen', $user->departemen);
+            }
 
             $anggotaTim = $anggotaTimQuery->get();
 
             $stats = [
                 'total_antrean' => $antreanQuery->count(),
-                'cuti_tim_bulan_ini' => PengajuanCuti::whereHas('pegawai', function ($q) use ($user) {
-                    $q->where('departemen', $user->departemen);
+                'cuti_tim_bulan_ini' => PengajuanCuti::when($user->role_id !== 5, function ($query) use ($user) {
+                    $query->whereHas('pegawai', function ($q) use ($user) {
+                        $q->where('departemen', $user->departemen);
+                    });
                 })->where('status', 'disetujui')
                     ->whereMonth('tanggal_mulai', date('m'))
                     ->whereYear('tanggal_mulai', $tahun)
@@ -86,58 +99,37 @@ class DashboardController extends Controller
             ];
 
             // Tabel Atasan: Smart Sorting (Maks 5)
-            $recentCuti = PengajuanCuti::with('pegawai')
-                ->whereHas('pegawai', function ($q) use ($user) {
-                    $q->where('departemen', $user->departemen);
+            $recentCuti = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                ->when($user->role_id !== 5, function ($query) use ($user) {
+                    $query->whereHas('pegawai', function ($q) use ($user) {
+                        $q->where('departemen', $user->departemen);
+                    });
                 })
-                ->orderByRaw("CASE WHEN status = '{$targetStatus}' THEN 1 ELSE 2 END")
+                ->when($targetStatus, function ($query) use ($targetStatus) {
+                    $query->orderByRaw("CASE WHEN status = '{$targetStatus}' THEN 1 ELSE 2 END");
+                })
                 ->orderBy('created_at', 'desc')
                 ->take(5)
                 ->get();
 
             // Data UTUH untuk Grafik, Modal, dan Kalender (Tidak dibatasi 5)
-            $allCutiDisetujui = PengajuanCuti::with('pegawai')->whereHas('pegawai', function ($q) use ($user) {
-                $q->where('departemen', $user->departemen);
-            })
+            $allCutiDisetujui = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                ->when($user->role_id !== 5, function ($query) use ($user) {
+                    $query->whereHas('pegawai', function ($q) use ($user) {
+                        $q->where('departemen', $user->departemen);
+                    });
+                })
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
             // <--- QUERY TIM CUTI HARI INI (BARU) --->
-            $timCutiHariIni = PengajuanCuti::with('pegawai')
-                ->whereHas('pegawai', function ($q) use ($user) {
-                    $q->where('departemen', $user->departemen);
+            $timCutiHariIni = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                ->when($user->role_id !== 5, function ($query) use ($user) {
+                    $query->whereHas('pegawai', function ($q) use ($user) {
+                        $q->where('departemen', $user->departemen);
+                    });
                 })
-                ->where('status', 'disetujui')
-                ->whereDate('tanggal_mulai', '<=', Carbon::today())
-                ->whereDate('tanggal_selesai', '>=', Carbon::today())
-                ->get();
-        } elseif ($user->role_id === 5) {
-            // ==========================================
-            // --- DASHBOARD ADMIN HR ---
-            // ==========================================
-            $anggotaTim = Pegawai::where('role_id', 1)->limit(50)->get();
-
-            $stats = [
-                'total_pegawai' => Pegawai::where('role_id', 1)->count(),
-                'total_pengajuan' => PengajuanCuti::whereYear('created_at', $tahun)->count(),
-                'pengajuan_menunggu' => PengajuanCuti::where('status', 'like', 'menunggu%')->count(),
-                'pengajuan_disetujui' => PengajuanCuti::where('status', 'disetujui')->count(),
-            ];
-
-            // Tabel Admin HR
-            $recentCuti = PengajuanCuti::with('pegawai')
-                ->orderBy('created_at', 'desc')
-                ->take(10)
-                ->get();
-
-            // Data UTUH untuk Grafik, Modal, dan Kalender
-            $allCutiDisetujui = PengajuanCuti::with('pegawai')->where('status', 'disetujui')
-                ->whereYear('tanggal_mulai', $tahun)
-                ->get();
-
-            // <--- QUERY TIM CUTI HARI INI ADMIN HR (BARU) --->
-            $timCutiHariIni = PengajuanCuti::with('pegawai')
                 ->where('status', 'disetujui')
                 ->whereDate('tanggal_mulai', '<=', Carbon::today())
                 ->whereDate('tanggal_selesai', '>=', Carbon::today())

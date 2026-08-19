@@ -15,6 +15,10 @@ class Pegawai extends Authenticatable
         'password',
     ];
 
+    protected $casts = [
+        'role_id' => 'integer',
+    ];
+
     // Tambahkan relasi ini untuk modul Admin HR
     public function saldoCuti()
     {

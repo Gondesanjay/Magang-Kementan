@@ -28,7 +28,7 @@ const page = usePage();
 const user = computed(() => page.props.auth.user);
 
 // STATE UNTUK TAB AKTIF (Default ke 'pribadi')
-// Hanya relevan untuk role_id 2, 3, 4, 5 (Atasan/Admin) yang punya
+// Hanya relevan untuk role_id 2, 3, 4, 6 (Atasan) yang punya
 // dua ringkasan (Pribadi & Tim). Role 1 (Pegawai) selalu melihat ringkasan pribadi.
 const activeTab = ref("pribadi");
 
@@ -45,12 +45,15 @@ const formatDate = (dateString) => {
 const formatStatus = (status) => {
     switch (status) {
         case "menunggu_l1":
+            return { text: "Menunggu Ketua Tim Kerja", class: "bg-amber-100 text-amber-700" };
         case "menunggu_l2":
+            return { text: "Menunggu Ketua Kelompok Substansi", class: "bg-amber-100 text-amber-700" };
         case "menunggu_l3":
-            return {
-                text: "Menunggu Atasan Langsung",
-                class: "bg-amber-100/70 text-amber-700 border border-amber-200/50 backdrop-blur-sm",
-            };
+            return { text: "Menunggu Kasubag TU", class: "bg-amber-100 text-amber-700" };
+        case "menunggu_l4": // <--- Jangan lupa tambahkan ini
+            return { text: "Menunggu Kepala Biro Perencanaan", class: "bg-amber-100 text-amber-700" };
+        case "disetujui":
+            return { text: "Disetujui", class: "bg-green-100 text-green-700" };
         case "disetujui":
             return {
                 text: "Disetujui",
@@ -343,7 +346,13 @@ const getNamaAtasanPemroses = (item) => {
         item.atasanL2?.nama ||
         item.atasan_l1?.nama ||
         item.atasanL1?.nama ||
-        "Bapak Atasan L" + (item.level_saat_ini || "1")
+        {
+            1: "Bapak Ketua Tim Kerja",
+            2: "Bapak Ketua Kelompok Substansi",
+            3: "Bapak Kasubag TU",
+            4: "Bapak Kasubag TU",
+            6: "Bapak Kepala Biro Perencanaan",
+        }[item.level_saat_ini] || "Atasan"
     );
 };
 
@@ -358,8 +367,52 @@ const getCatatanAtasan = (item) => {
             .replace(/\]/g, "")
             .trim();
     }
-    return "Diproses tanpa catatan tambahan.";
+    const responses = {
+        disetujui: "Disetujui dan diteruskan sesuai alur birokrasi.",
+        ditolak: "Pengajuan ditolak oleh atasan.",
+    };
+
+    return responses[item?.status] || "Diproses tanpa catatan tambahan.";
 };
+
+const getApprovalLogs = (item) => {
+    const logs = item?.approval_logs || item?.approvalLogs || [];
+    if (logs.length) return logs;
+
+    const legacyLogs = [];
+    if (item?.atasanL1?.nama || item?.atasan_l1?.nama) {
+        legacyLogs.push({
+            id: `legacy-l1-${item.id}`,
+            level_approval: 1,
+            approver: item.atasanL1 || item.atasan_l1,
+            keputusan: 'setuju',
+        });
+    }
+    if (item?.atasanL3?.nama || item?.atasan_l3?.nama) {
+        legacyLogs.push({
+            id: `legacy-l3-${item.id}`,
+            level_approval: 3,
+            approver: item.atasanL3 || item.atasan_l3,
+            keputusan: 'setuju',
+        });
+    }
+    if (item?.atasanL4?.nama || item?.atasan_l4?.nama) {
+        legacyLogs.push({
+            id: `legacy-l4-${item.id}`,
+            level_approval: 4,
+            approver: item.atasanL4 || item.atasan_l4,
+            keputusan: 'setuju',
+        });
+    }
+    return legacyLogs;
+};
+
+const getApprovalLevelLabel = (level) => ({
+    1: "L1 - Ketua Tim Kerja",
+    2: "L2 - Ketua Kelompok Substansi",
+    3: "L3 - Kasubag TU",
+    4: "L4 - Kepala Biro Perencanaan",
+}[level] || `Level ${level}`);
 </script>
 
 <template>
@@ -419,7 +472,7 @@ const getCatatanAtasan = (item) => {
                         hari ini.
                     </p>
                 </div>
-                <div v-if="[1, 2, 3, 4].includes(user.role_id)">
+                <div v-if="[1, 2, 3, 4, 6].includes(user.role_id)">
                     <Link
                         :href="route('karyawan.ajukan')"
                         class="inline-flex items-center justify-center gap-2 px-6 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl text-sm font-bold shadow-[0_8px_20px_rgba(34,197,94,0.3)] hover:scale-[1.02] hover:shadow-[0_10px_25px_rgba(34,197,94,0.4)] transition-all duration-300"
@@ -448,7 +501,7 @@ const getCatatanAtasan = (item) => {
             >
                 <!-- TAB SWITCHER DI DALAM KONTAINER -->
                 <div
-                    v-if="[2, 3, 4, 5].includes(user.role_id)"
+                    v-if="[2, 3, 4, 5, 6].includes(user.role_id)"
                     class="flex items-center justify-between"
                 >
                     <div>
@@ -654,7 +707,7 @@ const getCatatanAtasan = (item) => {
                 <div
                     v-show="
                         activeTab === 'tim' &&
-                        [2, 3, 4, 5].includes(user.role_id)
+                        [2, 3, 4, 5, 6].includes(user.role_id)
                     "
                     class="grid grid-cols-1 md:grid-cols-3 gap-5"
                 >
@@ -760,11 +813,7 @@ const getCatatanAtasan = (item) => {
                             <p
                                 class="text-[10px] font-extrabold text-blue-600/80 uppercase tracking-widest"
                             >
-                                {{
-                                    user.role_id === 5
-                                        ? "Total Pegawai"
-                                        : "Total Anggota Tim"
-                                }}
+                                Total Anggota Tim
                             </p>
                             <div
                                 class="text-blue-500 bg-blue-100/50 p-2.5 rounded-xl shadow-sm border border-blue-100"
@@ -1103,9 +1152,9 @@ const getCatatanAtasan = (item) => {
                 </div>
             </div>
 
-            <!-- 3. WIDGET KETERSEDIAAN TIM MINGGU INI KHUSUS ATASAN & ADMIN (ROLE 2,3,4,5) -->
+            <!-- 3. WIDGET KETERSEDIAAN TIM MINGGU INI KHUSUS ATASAN (ROLE 2,3,4,6) -->
             <div
-                v-if="[2, 3, 4, 5].includes(user.role_id)"
+                v-if="[2, 3, 4, 5, 6].includes(user.role_id)"
                 class="relative z-10 bg-white/60 backdrop-blur-2xl border border-white rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] mt-6 p-7"
             >
                 <div
@@ -1405,8 +1454,8 @@ const getCatatanAtasan = (item) => {
                     <div
                         v-if="
                             detailModal.data.status &&
-                            !detailModal.data.status.includes('menunggu') &&
-                            !detailModal.data.status.includes('reguler')
+                            (!detailModal.data.status.includes('menunggu') ||
+                                getApprovalLogs(detailModal.data).length > 0)
                         "
                         class="p-4 rounded-2xl border"
                         :class="
@@ -1446,14 +1495,14 @@ const getCatatanAtasan = (item) => {
                             </p>
                         </div>
 
-                        <p class="text-sm text-slate-700 mb-1">
+                        <p v-if="!getApprovalLogs(detailModal.data).length" class="text-sm text-slate-700 mb-1">
                             Diproses oleh:
                             <span class="font-bold">{{
                                 getNamaAtasanPemroses(detailModal.data)
                             }}</span>
                         </p>
 
-                        <p
+                        <p v-if="!getApprovalLogs(detailModal.data).length"
                             class="text-sm font-medium italic"
                             :class="
                                 detailModal.data.status === 'disetujui'
@@ -1463,6 +1512,17 @@ const getCatatanAtasan = (item) => {
                         >
                             "{{ getCatatanAtasan(detailModal.data) }}"
                         </p>
+                        <div v-else class="space-y-3">
+                            <div v-for="log in getApprovalLogs(detailModal.data)" :key="log.id" class="rounded-xl border border-white/80 bg-white/70 p-3">
+                                <p class="text-sm text-slate-700">
+                                    {{ getApprovalLevelLabel(log.level_approval) }}:
+                                    <span class="font-bold">{{ log.approver?.nama || "Atasan" }}</span>
+                                </p>
+                                <p class="mt-1 text-xs font-medium" :class="log.keputusan === 'setuju' ? 'text-emerald-600' : 'text-orange-600'">
+                                    {{ log.catatan || (log.keputusan === 'setuju' ? 'Disetujui.' : 'Ditolak oleh atasan.') }}
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -1485,7 +1545,9 @@ const getCatatanAtasan = (item) => {
                             (user.role_id === 3 &&
                                 detailModal.data.status === 'menunggu_l2') ||
                             (user.role_id === 4 &&
-                                detailModal.data.status === 'menunggu_l3')
+                                detailModal.data.status === 'menunggu_l3') ||
+                            (user.role_id === 6 &&
+                                detailModal.data.status === 'menunggu_l4')
                         "
                         class="flex items-center gap-3"
                     >

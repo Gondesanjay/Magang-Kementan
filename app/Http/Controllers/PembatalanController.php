@@ -14,6 +14,8 @@ class PembatalanController extends Controller
     {
         $user = auth()->user();
 
+        abort_unless($user->role_id === 6, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
+
         $daftarCuti = PengajuanCuti::with('pegawai')
             ->whereHas('pegawai', function ($query) use ($user) {
                 $query->where('departemen', $user->departemen);
@@ -28,9 +30,11 @@ class PembatalanController extends Controller
         ]);
     }
 
-    // Memproses Eksekusi Pembatalan & Penangguhan oleh L3
+    // Memproses Eksekusi Pembatalan & Penangguhan oleh L4
     public function process(Request $request, $id)
     {
+        abort_unless(auth()->user()->role_id === 6, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
+
         $request->validate([
             'alasan' => ['required', 'string', 'max:255']
         ]);

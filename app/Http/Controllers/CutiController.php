@@ -6,7 +6,7 @@ use Barryvdh\DomPDF\Facade\Pdf;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use App\Models\Notifikasi;
-use App\Models\Pegawai; // <-- Wajib ditambahkan untuk mencari atasan
+use App\Models\Pegawai;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Carbon\Carbon;
@@ -58,11 +58,38 @@ class CutiController extends Controller
             'no_telp' => ['required', 'string', 'max:20'],
         ]);
 
+        $user = auth()->user();
+
+        // Normalisasi jenis cuti
         $jenisCuti = $this->normalizeJenisCuti($request->jenis_cuti);
+
+        // Hitung jumlah hari (sementara tetap menggunakan selisih hari kalender sesuai aslinya)
         $jumlah_hari = Carbon::parse($request->tanggal_mulai)->diffInDays(Carbon::parse($request->tanggal_selesai)) + 1;
 
+        // =========================================================
+        // MENENTUKAN STATUS AWAL & TARGET NOTIFIKASI (HIERARKI)
+        // =========================================================
+        $statusAwal = 'menunggu_l1'; // Default untuk staf
+        $levelSaatIni = 1;
+        $targetRoleNotifikasi = 2; // Default notif ke atasan L1
+
+        if ($user->role_id === 2) { // Jika L1 yang mengajukan
+            $statusAwal = 'menunggu_l2';
+            $levelSaatIni = 2;
+            $targetRoleNotifikasi = 3; // Kirim notif ke L2
+        } elseif ($user->role_id === 3) { // Jika L2 yang mengajukan
+            $statusAwal = 'menunggu_l3';
+            $levelSaatIni = 3;
+            $targetRoleNotifikasi = 4; // Kirim notif ke L3
+        } elseif ($user->role_id === 4) { // Jika L3 yang mengajukan
+            $statusAwal = 'menunggu_l4';
+            $levelSaatIni = 4;
+            $targetRoleNotifikasi = 6; // Kabiro/L4
+        }
+
+        // Simpan ke database
         $pengajuan = PengajuanCuti::create([
-            'pegawai_id' => auth()->id(),
+            'pegawai_id' => $user->id,
             'jenis_cuti' => $jenisCuti,
             'tanggal_mulai' => $request->tanggal_mulai,
             'tanggal_selesai' => $request->tanggal_selesai,
@@ -70,44 +97,42 @@ class CutiController extends Controller
             'keterangan' => $request->keterangan,
             'alamat_cuti' => $request->alamat_cuti,
             'no_telp' => $request->no_telp,
-            'status' => 'menunggu_l1',
-            'level_saat_ini' => 1,
+            'status' => $statusAwal, // Menggunakan status dinamis
+            'level_saat_ini' => $levelSaatIni,
         ]);
 
         // =========================================================
-        // PROSES TRIGGER NOTIFIKASI KE ATASAN L1
+        // PROSES TRIGGER NOTIFIKASI KE ATASAN YANG TEPAT
         // =========================================================
-        $userLogin = auth()->user();
-
-        // Cari Atasan L1 (role_id = 2) yang memiliki departemen yang SAMA dengan pegawai
-        $atasanL1 = Pegawai::where('role_id', 2)
-            ->where('departemen', $userLogin->departemen)
+        // Cari Atasan target yang memiliki departemen yang SAMA dengan pegawai
+        $atasanTarget = Pegawai::where('role_id', $targetRoleNotifikasi)
+            ->where('departemen', $user->departemen)
             ->first();
 
-        // Jika tidak ketemu berdasarkan departemen, ambil atasan L1 mana saja sebagai cadangan
-        if (!$atasanL1) {
-            $atasanL1 = Pegawai::where('role_id', 2)->first();
+        // Jika tidak ketemu berdasarkan departemen, ambil target role mana saja sebagai cadangan
+        if (!$atasanTarget) {
+            $atasanTarget = Pegawai::where('role_id', $targetRoleNotifikasi)->first();
         }
 
-        // Kirim notifikasi jika Atasan L1 ditemukan
-        if ($atasanL1) {
+        // Kirim notifikasi jika Atasan target ditemukan
+        if ($atasanTarget) {
             Notifikasi::create([
-                'pegawai_id' => $atasanL1->id,
+                'pegawai_id' => $atasanTarget->id,
                 'judul'      => 'Pengajuan Cuti Baru',
-                // Pesan sudah disesuaikan dengan permintaanmu
-                'pesan'      => 'Ada pengajuan cuti baru dari ' . $userLogin->nama . ' yang butuh persetujuan Anda.',
+                'pesan'      => 'Ada pengajuan cuti baru dari ' . $user->nama . ' yang butuh persetujuan Anda.',
                 'tautan'     => route('atasan.approval'),
                 'is_read'    => false,
             ]);
         }
 
-        return redirect()->route('karyawan.riwayat')->with('success', 'Cuti berhasil diajukan!');
+        return redirect()->route('karyawan.riwayat')->with('success', 'Pengajuan cuti berhasil dikirim.');
     }
 
     // 3. Menampilkan Halaman Riwayat Pengajuan (Dengan Filter & Search Global)
     public function history(Request $request)
     {
-        $query = PengajuanCuti::where('pegawai_id', auth()->id())
+        $query = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            ->where('pegawai_id', auth()->id())
             ->orderBy('created_at', 'desc');
 
         // Filter berdasarkan pencarian keterangan
@@ -156,7 +181,7 @@ class CutiController extends Controller
     // 5. Unduh PDF Bukti Cuti
     public function downloadPdf($id)
     {
-        $pengajuan = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3'])->findOrFail($id);
+        $pengajuan = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])->findOrFail($id);
 
         if ($pengajuan->pegawai_id !== auth()->id() || $pengajuan->status !== 'disetujui') {
             abort(403, 'Anda tidak memiliki akses, atau cuti belum disetujui sepenuhnya.');
@@ -194,7 +219,7 @@ class CutiController extends Controller
         }
 
         // Hanya bisa dibatalkan jika statusnya masih dalam antrean (menunggu persetujuan)
-        if (!in_array($pengajuan->status, ['menunggu_l1', 'menunggu_l2', 'menunggu_l3'])) {
+        if (!in_array($pengajuan->status, ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'])) {
             return back()->with('error', 'Cuti ini sudah tidak dapat dibatalkan.');
         }
 
@@ -223,15 +248,17 @@ class CutiController extends Controller
             return redirect()->back()->with('error', 'Aksi tidak diizinkan atau cuti tidak dapat dibatalkan.');
         }
 
-        // 3. Kembalikan saldo cuti secara otomatis
-        $tahunCuti = date('Y', strtotime($cuti->tanggal_mulai));
-        $saldo = SaldoCuti::where('pegawai_id', $cuti->pegawai_id)
-            ->where('tahun', $tahunCuti)
-            ->first();
+        // 3. Kembalikan saldo cuti secara otomatis HANYA JIKA sebelumnya Cuti Tahunan
+        if (strtolower($cuti->jenis_cuti) === 'cuti tahunan') {
+            $tahunCuti = date('Y', strtotime($cuti->tanggal_mulai));
+            $saldo = SaldoCuti::where('pegawai_id', $cuti->pegawai_id)
+                ->where('tahun', $tahunCuti)
+                ->first();
 
-        if ($saldo) {
-            $saldo->sisa += $cuti->jumlah_hari;
-            $saldo->save();
+            if ($saldo) {
+                $saldo->sisa += $cuti->jumlah_hari;
+                $saldo->save();
+            }
         }
 
         // 4. Ubah status menjadi dibatalkan dan simpan alasannya
@@ -281,7 +308,7 @@ class CutiController extends Controller
             'tanggal_mulai' => $request->tanggal_mulai,
             'tanggal_selesai' => $request->tanggal_selesai,
             'jumlah_hari' => $jumlah_hari,
-            'status' => 'menunggu_l1',
+            'status' => 'menunggu_l1', // Ini bisa disesuaikan lagi jika atasan yang merevisi
             'level_saat_ini' => 1,
             'keterangan' => $cuti->keterangan . ' | [DIREVISI]',
         ]);

@@ -27,12 +27,12 @@ class PegawaiSeeder extends Seeder
             'updated_at' => now(),
         ]);
 
-        // 2. Kepala Biro Perencanaan (Atasan L3 - Puncak Approval)
+        // 2. Kepala Biro Perencanaan (L4 - Pimpinan Final)
         $idKepalaBiro = DB::table('pegawais')->insertGetId([
             'nip' => '197001011995031001',
             'nama' => 'Bapak Kepala Biro',
             'password' => $passwordDefault,
-            'role_id' => 4, // Atasan L3
+            'role_id' => 6, // L4
             'atasan_id' => null, // Puncak hierarki di biro ini
             'jabatan' => 'Kepala Biro',
             'departemen' => 'Biro Perencanaan',
@@ -42,12 +42,12 @@ class PegawaiSeeder extends Seeder
             'updated_at' => now(),
         ]);
 
-        // 3. Kasubag TU (Atasan L2 - Lapor ke Kepala Biro)
+        // 3. Kasubag TU (L3 - Lapor ke Kepala Biro)
         $idKasubagTU = DB::table('pegawais')->insertGetId([
             'nip' => '198002022005011002',
             'nama' => 'Ibu Kasubag TU',
             'password' => $passwordDefault,
-            'role_id' => 3, // Atasan L2
+            'role_id' => 4, // L3
             'atasan_id' => $idKepalaBiro,
             'jabatan' => 'Kepala Subbagian Tata Usaha',
             'departemen' => 'Biro Perencanaan',
@@ -57,13 +57,28 @@ class PegawaiSeeder extends Seeder
             'updated_at' => now(),
         ]);
 
-        // 4. Atasan Langsung (Atasan L1 - Lapor ke Kasubag TU)
+        // 4. Ketua Kelompok Substansi (L2 - Lapor ke Kasubag TU)
+        $idKetuaKelompok = DB::table('pegawais')->insertGetId([
+            'nip' => '198204042008011006',
+            'nama' => 'Ibu Ketua Kelompok',
+            'password' => $passwordDefault,
+            'role_id' => 3, // L2
+            'atasan_id' => $idKasubagTU,
+            'jabatan' => 'Ketua Kelompok Substansi',
+            'departemen' => 'Biro Perencanaan',
+            'tanggal_masuk' => '2008-01-01',
+            'is_first_login' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        // 5. Ketua Tim Kerja (L1 - Lapor ke Ketua Kelompok)
         $idAtasanLangsung = DB::table('pegawais')->insertGetId([
             'nip' => '198503032010121003',
             'nama' => 'Bapak Ketua Tim',
             'password' => $passwordDefault,
             'role_id' => 2, // Atasan L1
-            'atasan_id' => $idKasubagTU,
+            'atasan_id' => $idKetuaKelompok,
             'jabatan' => 'Ketua Tim Kerja',
             'departemen' => 'Biro Perencanaan',
             'tanggal_masuk' => '2010-12-01',
@@ -72,7 +87,7 @@ class PegawaiSeeder extends Seeder
             'updated_at' => now(),
         ]);
 
-        // 5. Karyawan Biasa (Pemohon Cuti - Lapor ke Atasan Langsung)
+        // 6. Karyawan Biasa (Pemohon Cuti - Lapor ke Ketua Tim)
         DB::table('pegawais')->insert([
             'nip' => '199004042015041004',
             'nama' => 'Pegawai Staf Analis',
@@ -87,7 +102,7 @@ class PegawaiSeeder extends Seeder
             'updated_at' => now(),
         ]);
 
-        // 6. Karyawan Biasa Tambahan (Untuk testing Kalender Tim)
+        // 7. Karyawan Biasa Tambahan (Untuk testing Kalender Tim)
         DB::table('pegawais')->insert([
             'nip' => '199205052018041005',
             'nama' => 'Pegawai Staf Evaluasi',

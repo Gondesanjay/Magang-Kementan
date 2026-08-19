@@ -15,9 +15,13 @@ const formatDate = (dateString) => {
 
 // Fungsi memformat badge status (Gabungan Logika Baru & Class Styling)
 const formatStatus = (status) => {
-    if (status === 'menunggu_l1' || status === 'menunggu_l2' || status === 'menunggu_l3') {
-        return { text: 'Menunggu Atasan Langsung', class: 'bg-yellow-100 text-yellow-800' };
-    }
+    const labels = {
+        menunggu_l1: 'Menunggu Ketua Tim Kerja',
+        menunggu_l2: 'Menunggu Ketua Kelompok Substansi',
+        menunggu_l3: 'Menunggu Kasubag TU',
+        menunggu_l4: 'Menunggu Kepala Biro Perencanaan',
+    };
+    if (labels[status]) return { text: labels[status], class: 'bg-yellow-100 text-yellow-800' };
     if (status === 'disetujui') {
         return { text: 'Disetujui', class: 'bg-green-100 text-green-800' };
     }

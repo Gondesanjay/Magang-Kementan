@@ -3,16 +3,13 @@ import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, Link, router } from "@inertiajs/vue3";
 import { ref, watch } from "vue";
 
-
 const props = defineProps({
     riwayat: Object,
     filters: Object,
 });
 
-
 const search = ref(props.filters?.search || "");
 const status = ref(props.filters?.status || "");
-
 
 let timeout = null;
 watch([search, status], ([newSearch, newStatus]) => {
@@ -26,9 +23,8 @@ watch([search, status], ([newSearch, newStatus]) => {
     }, 300);
 });
 
-
 // ==========================================================
-// PEMBATALAN CUTI — MASIH MENUNGGU APPROVAL (menunggu_l1/l2/l3)
+// PEMBATALAN CUTI — MASIH MENUNGGU APPROVAL (menunggu_l1/l2/l3/l4)
 // Cukup konfirmasi biasa, tidak wajib alasan.
 // ==========================================================
 const cancelCuti = (id) => {
@@ -44,7 +40,6 @@ const cancelCuti = (id) => {
     }
 };
 
-
 // ==========================================================
 // PEMBATALAN MANDIRI — CUTI SUDAH "DISETUJUI"
 // Wajib isi alasan pembatalan. Saldo cuti otomatis dikembalikan
@@ -56,25 +51,21 @@ const batalModal = ref({
     alasan: "",
 });
 
-
 const openBatalModal = (id) => {
     batalModal.value.id = id;
     batalModal.value.alasan = "";
     batalModal.value.show = true;
 };
 
-
 const closeBatalModal = () => {
     batalModal.value.show = false;
 };
-
 
 const submitBatal = () => {
     if (!batalModal.value.alasan.trim()) {
         alert("Alasan pembatalan wajib diisi!");
         return;
     }
-
 
     router.post(
         route("karyawan.cuti.batalkan-mandiri", batalModal.value.id),
@@ -88,43 +79,29 @@ const submitBatal = () => {
     );
 };
 
-
 const selectedDetail = ref(null);
-
 
 const openDetailModal = (item) => {
     selectedDetail.value = item;
 };
 
-
 const closeDetailModal = () => {
     selectedDetail.value = null;
 };
 
-
-// PEMBARUAN: Nama Status Atasan
+// PEMBARUAN: Nama Status Atasan & Hierarki L4
 const formatStatus = (statusCode) => {
     switch (statusCode) {
         case "menunggu_l1":
-            return {
-                text: "Menunggu Atasan (L1)",
-                class: "bg-yellow-50 text-yellow-700 border border-yellow-200",
-            };
+            return { text: "Menunggu Ketua Tim Kerja", class: "bg-amber-100 text-amber-700 border border-amber-200" };
         case "menunggu_l2":
-            return {
-                text: "Menunggu Kasubag TU (L2)",
-                class: "bg-blue-50 text-blue-700 border border-blue-200",
-            };
+            return { text: "Menunggu Ketua Kelompok Substansi", class: "bg-amber-100 text-amber-700 border border-amber-200" };
         case "menunggu_l3":
-            return {
-                text: "Menunggu Kepala Biro (L3)",
-                class: "bg-purple-50 text-purple-700 border border-purple-200",
-            };
+            return { text: "Menunggu Kasubag TU", class: "bg-amber-100 text-amber-700 border border-amber-200" };
+        case "menunggu_l4":
+            return { text: "Menunggu Kepala Biro Perencanaan", class: "bg-amber-100 text-amber-700 border border-amber-200" };
         case "disetujui":
-            return {
-                text: "Disetujui",
-                class: "bg-emerald-50 text-emerald-700 border border-emerald-100",
-            };
+            return { text: "Disetujui", class: "bg-green-100 text-green-700 border border-green-200" };
         case "ditolak":
             return {
                 text: "Ditolak",
@@ -148,7 +125,6 @@ const formatStatus = (statusCode) => {
     }
 };
 
-
 const formatDate = (dateString) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -159,9 +135,7 @@ const formatDate = (dateString) => {
     }).format(date);
 };
 
-
-// Helper: nama atasan yang memproses pengajuan (mendukung snake_case & camelCase).
-// Jika tidak ditemukan nama eksplisit, fallback ke label "Bapak Atasan L<level_saat_ini>".
+// Helper: nama atasan yang memproses pengajuan, mengikuti detail Dashboard.
 const getNamaAtasanPemroses = (item) => {
     if (!item) return "Bapak Atasan L1";
     return (
@@ -173,19 +147,26 @@ const getNamaAtasanPemroses = (item) => {
         item.atasanL2?.nama ||
         item.atasan_l1?.nama ||
         item.atasanL1?.nama ||
-        "Bapak Atasan L" + (item.level_saat_ini || "1")
+        {
+            1: "Bapak Ketua Tim Kerja",
+            2: "Bapak Ketua Kelompok Substansi",
+            3: "Bapak Kasubag TU",
+            4: "Bapak Kasubag TU",
+            6: "Bapak Kepala Biro Perencanaan",
+        }[item.level_saat_ini] || "Atasan"
     );
 };
-
 
 // Fungsi untuk membersihkan teks catatan atasan agar tampil clean:
 // mengambil bagian setelah tanda "|", lalu membuang prefix format
 // "[Label: ...]" beserta sisa tanda kurung siku di akhir.
-const formatCatatanAtasan = (keterangan) => {
+const formatCatatanAtasan = (keterangan, status) => {
     if (!keterangan || !keterangan.includes("|")) {
-        return "Diproses tanpa catatan tambahan.";
+        return {
+            disetujui: "Disetujui dan diteruskan sesuai alur birokrasi.",
+            ditolak: "Pengajuan ditolak oleh atasan.",
+        }[status] || "Diproses tanpa catatan tambahan.";
     }
-
 
     return keterangan
         .split("|")[1]
@@ -193,12 +174,49 @@ const formatCatatanAtasan = (keterangan) => {
         .replace(/\]/g, "")
         .trim();
 };
-</script>
 
+const getApprovalLogs = (item) => {
+    const logs = item?.approval_logs || item?.approvalLogs || [];
+    if (logs.length) return logs;
+
+    const legacyLogs = [];
+    if (item?.atasanL1?.nama || item?.atasan_l1?.nama) {
+        legacyLogs.push({
+            id: `legacy-l1-${item.id}`,
+            level_approval: 1,
+            approver: item.atasanL1 || item.atasan_l1,
+            keputusan: 'setuju',
+        });
+    }
+    if (item?.atasanL3?.nama || item?.atasan_l3?.nama) {
+        legacyLogs.push({
+            id: `legacy-l3-${item.id}`,
+            level_approval: 3,
+            approver: item.atasanL3 || item.atasan_l3,
+            keputusan: 'setuju',
+        });
+    }
+    if (item?.atasanL4?.nama || item?.atasan_l4?.nama) {
+        legacyLogs.push({
+            id: `legacy-l4-${item.id}`,
+            level_approval: 4,
+            approver: item.atasanL4 || item.atasan_l4,
+            keputusan: 'setuju',
+        });
+    }
+    return legacyLogs;
+};
+
+const getApprovalLevelLabel = (level) => ({
+    1: "L1 - Ketua Tim Kerja",
+    2: "L2 - Ketua Kelompok Substansi",
+    3: "L3 - Kasubag TU",
+    4: "L4 - Kepala Biro Perencanaan",
+}[level] || `Level ${level}`);
+</script>
 
 <template>
     <Head title="Riwayat Pengajuan Cuti" />
-
 
     <MainLayout>
         <div class="max-w-7xl mx-auto space-y-6 pb-12">
@@ -212,7 +230,6 @@ const formatCatatanAtasan = (keterangan) => {
                     Daftar riwayat permohonan cuti yang pernah Anda ajukan.
                 </p>
             </div>
-
 
             <div
                 class="bg-white shadow-sm border border-slate-200 rounded-2xl overflow-hidden"
@@ -246,21 +263,23 @@ const formatCatatanAtasan = (keterangan) => {
                         />
                     </div>
 
-
-                    <div class="w-full md:w-56">
+                    <div class="w-full md:w-64">
                         <select
                             v-model="status"
                             class="w-full py-2 px-3 text-xs border border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-white text-slate-600"
                         >
                             <option value="">Semua Status</option>
                             <option value="menunggu_l1">
-                                Menunggu Atasan (L1)
+                                Menunggu Ketua Tim Kerja (L1)
                             </option>
                             <option value="menunggu_l2">
-                                Menunggu Kasubag TU (L2)
+                                Menunggu Ketua Pokja (L2)
                             </option>
                             <option value="menunggu_l3">
-                                Menunggu Kepala Biro (L3)
+                                Menunggu Kasubag TU (L3)
+                            </option>
+                            <option value="menunggu_l4">
+                                Menunggu Kabiro (L4)
                             </option>
                             <option value="disetujui">Disetujui</option>
                             <option value="ditolak">Ditolak</option>
@@ -274,7 +293,6 @@ const formatCatatanAtasan = (keterangan) => {
                     </div>
                 </div>
 
-
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-100">
                         <thead class="bg-slate-50/50">
@@ -287,7 +305,6 @@ const formatCatatanAtasan = (keterangan) => {
                                     Tanggal Cuti
                                 </th>
 
-
                                 <!-- 2. TAMBAHAN: JENIS CUTI -->
                                 <th
                                     scope="col"
@@ -296,7 +313,6 @@ const formatCatatanAtasan = (keterangan) => {
                                     Jenis Cuti
                                 </th>
 
-
                                 <!-- 3. DURASI (Pengganti Jumlah Hari) -->
                                 <th
                                     scope="col"
@@ -304,7 +320,6 @@ const formatCatatanAtasan = (keterangan) => {
                                 >
                                     Durasi
                                 </th>
-
 
                                 <th
                                     scope="col"
@@ -342,7 +357,6 @@ const formatCatatanAtasan = (keterangan) => {
                                     {{ formatDate(item.tanggal_selesai) }}
                                 </td>
 
-
                                 <!-- 2. TAMBAHAN: JENIS CUTI -->
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span
@@ -352,14 +366,12 @@ const formatCatatanAtasan = (keterangan) => {
                                     </span>
                                 </td>
 
-
                                 <!-- 3. DURASI -->
                                 <td
                                     class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-semibold"
                                 >
                                     {{ item.jumlah_hari }} Hari
                                 </td>
-
 
                                 <td
                                     class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate"
@@ -413,7 +425,6 @@ const formatCatatanAtasan = (keterangan) => {
                                     </button>
                                 </td>
 
-
                                 <!-- ================= KOLOM 2: TOMBOL CETAK PDF (Aktif jika disetujui, Redup jika tidak) ================= -->
                                 <td
                                     class="px-1.5 py-4 whitespace-nowrap text-center"
@@ -464,7 +475,6 @@ const formatCatatanAtasan = (keterangan) => {
                                     </span>
                                 </td>
 
-
                                 <!-- ================= KOLOM 3: TOMBOL BATALKAN (Aktif jika menunggu/disetujui, Redup jika tidak) ================= -->
                                 <td
                                     class="px-1.5 py-4 whitespace-nowrap text-center"
@@ -475,6 +485,7 @@ const formatCatatanAtasan = (keterangan) => {
                                                 'menunggu_l1',
                                                 'menunggu_l2',
                                                 'menunggu_l3',
+                                                'menunggu_l4',
                                                 'disetujui',
                                             ].includes(item.status)
                                         "
@@ -533,7 +544,6 @@ const formatCatatanAtasan = (keterangan) => {
                     </table>
                 </div>
 
-
                 <div
                     class="px-6 py-4 bg-slate-50/50 border-t border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4"
                 >
@@ -567,7 +577,6 @@ const formatCatatanAtasan = (keterangan) => {
             </div>
         </div>
     </MainLayout>
-
 
     <!-- MODAL DETAIL (versi gabungan: badge status di header, grid Jenis Cuti,
          serta Catatan/Respon Atasan lengkap dengan nama pemroses & teks bersih) -->
@@ -636,7 +645,6 @@ const formatCatatanAtasan = (keterangan) => {
                     </div>
                 </div>
 
-
                 <div class="p-6 space-y-5">
                     <!-- GRID 4 KOTAK: Tanggal Mulai, Tanggal Selesai, Jenis Cuti, Durasi -->
                     <div class="grid grid-cols-2 gap-4">
@@ -692,7 +700,6 @@ const formatCatatanAtasan = (keterangan) => {
                         </div>
                     </div>
 
-
                     <!-- KETERANGAN / ALASAN PEGAWAI -->
                     <div>
                         <p
@@ -713,13 +720,12 @@ const formatCatatanAtasan = (keterangan) => {
                         </div>
                     </div>
 
-
                     <!-- CATATAN / RESPON ATASAN -->
                     <div
                         v-if="
                             selectedDetail.status &&
-                            !selectedDetail.status.includes('menunggu') &&
-                            !selectedDetail.status.includes('reguler')
+                            (!selectedDetail.status.includes('menunggu') ||
+                                getApprovalLogs(selectedDetail).length > 0)
                         "
                         class="p-4 rounded-2xl border"
                         :class="
@@ -759,18 +765,16 @@ const formatCatatanAtasan = (keterangan) => {
                             </p>
                         </div>
 
-
-                        <!-- Nama Atasan Sesuai Level yang Memproses (L1-L4) -->
-                        <p class="text-sm text-slate-700 mb-1">
+                        <!-- Daftar seluruh atasan yang sudah memproses -->
+                        <p v-if="!getApprovalLogs(selectedDetail).length" class="text-sm text-slate-700 mb-1">
                             Diproses oleh:
                             <span class="font-bold">{{
                                 getNamaAtasanPemroses(selectedDetail)
                             }}</span>
                         </p>
 
-
                         <!-- Catatan Atasan, Sudah Dibersihkan dari Prefix "[Label: ...]" -->
-                        <p
+                        <p v-if="!getApprovalLogs(selectedDetail).length"
                             class="text-sm font-medium italic"
                             :class="
                                 selectedDetail.status === 'disetujui'
@@ -779,9 +783,23 @@ const formatCatatanAtasan = (keterangan) => {
                             "
                         >
                             "{{
-                                formatCatatanAtasan(selectedDetail.keterangan)
+                                formatCatatanAtasan(
+                                    selectedDetail.keterangan,
+                                    selectedDetail.status,
+                                )
                             }}"
                         </p>
+                        <div v-else class="space-y-3">
+                            <div v-for="log in getApprovalLogs(selectedDetail)" :key="log.id" class="rounded-xl border border-white/80 bg-white/70 p-3">
+                                <p class="text-sm text-slate-700">
+                                    {{ getApprovalLevelLabel(log.level_approval) }}:
+                                    <span class="font-bold">{{ log.approver?.nama || "Atasan" }}</span>
+                                </p>
+                                <p class="mt-1 text-xs font-medium" :class="log.keputusan === 'setuju' ? 'text-emerald-600' : 'text-orange-600'">
+                                    {{ log.catatan || (log.keputusan === 'setuju' ? 'Disetujui.' : 'Ditolak oleh atasan.') }}
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div
@@ -798,7 +816,6 @@ const formatCatatanAtasan = (keterangan) => {
             </div>
         </div>
     </Teleport>
-
 
     <!-- MODAL PEMBATALAN MANDIRI (khusus status "Disetujui") -->
     <Teleport to="body">
@@ -817,7 +834,6 @@ const formatCatatanAtasan = (keterangan) => {
                     tidak dapat diubah.
                 </p>
 
-
                 <label
                     class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide"
                 >
@@ -829,7 +845,6 @@ const formatCatatanAtasan = (keterangan) => {
                     class="w-full text-sm font-medium border-slate-200 rounded-xl focus:ring-red-500 focus:border-red-500 mb-5 p-3 shadow-sm"
                     placeholder="Contoh: Agenda liburan keluarga batal karena urusan mendadak."
                 ></textarea>
-
 
                 <div class="flex justify-end gap-3">
                     <button
@@ -849,6 +864,3 @@ const formatCatatanAtasan = (keterangan) => {
         </div>
     </Teleport>
 </template>
-
-
-

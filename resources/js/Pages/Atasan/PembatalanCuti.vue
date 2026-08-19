@@ -15,7 +15,13 @@ const formatDate = (dateString) => {
 
 // Fungsi status dengan format yang diminta
 const formatStatus = (status) => {
-    if (status === 'menunggu_l1' || status === 'menunggu_l2' || status === 'menunggu_l3') return 'Menunggu Atasan Langsung';
+    const labels = {
+        menunggu_l1: 'Menunggu Ketua Tim Kerja',
+        menunggu_l2: 'Menunggu Ketua Kelompok Substansi',
+        menunggu_l3: 'Menunggu Kasubag TU',
+        menunggu_l4: 'Menunggu Kepala Biro Perencanaan',
+    };
+    if (labels[status]) return labels[status];
     if (status === 'disetujui') return 'Disetujui';
     if (status === 'ditolak') return 'Ditolak';
     return status.replace('_', ' ').toUpperCase();

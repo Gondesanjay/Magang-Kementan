@@ -110,6 +110,8 @@ class AdminController extends Controller
     // 6. Fungsi Menangguhkan Cuti (Oleh Admin/L3)
     public function suspendCuti(Request $request, $id)
     {
+        abort_unless(auth()->user()->role_id === 6, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
+
         $request->validate([
             'alasan' => ['required', 'string', 'max:255']
         ]);

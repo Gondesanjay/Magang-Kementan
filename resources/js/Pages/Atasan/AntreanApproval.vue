@@ -6,6 +6,13 @@ defineProps({
     antrean: Array
 });
 
+const statusLabels = {
+    menunggu_l1: 'Menunggu Ketua Tim Kerja (L1)',
+    menunggu_l2: 'Menunggu Ketua Kelompok Substansi (L2)',
+    menunggu_l3: 'Menunggu Kasubag TU (L3)',
+    menunggu_l4: 'Menunggu Kepala Biro Perencanaan (L4)',
+};
+
 // Fungsi memformat tanggal (YYYY-MM-DD ke DD-MM-YYYY)
 const formatDate = (dateString) => {
     if (!dateString) return '-';
@@ -38,6 +45,7 @@ const processApproval = (id, action) => {
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nama Karyawan</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal Cuti</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Durasi</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tahap</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Keterangan</th>
                             <th scope="col" class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Aksi</th>
                         </tr>
@@ -52,6 +60,7 @@ const processApproval = (id, action) => {
                                 {{ formatDate(item.tanggal_mulai) }} s/d {{ formatDate(item.tanggal_selesai) }}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ item.jumlah_hari }} Hari</td>
+                            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-amber-700">{{ statusLabels[item.status] || item.status }}</td>
                             <td class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate" :title="item.keterangan">{{ item.keterangan }}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium space-x-2">
                                 <button @click="processApproval(item.id, 'approve')" class="inline-flex items-center px-3 py-1 bg-green-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-green-700 transition ease-in-out duration-150">
@@ -63,7 +72,7 @@ const processApproval = (id, action) => {
                             </td>
                         </tr>
                         <tr v-if="antrean.length === 0">
-                            <td colspan="5" class="px-6 py-8 text-center text-gray-500">
+                            <td colspan="6" class="px-6 py-8 text-center text-gray-500">
                                 Saat ini tidak ada antrean pengajuan cuti yang memerlukan persetujuan Anda.
                             </td>
                         </tr>
