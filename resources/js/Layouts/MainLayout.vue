@@ -2,18 +2,23 @@
 import { computed, ref, watch } from "vue";
 import { Link, usePage, router } from "@inertiajs/vue3";
 
+
 const page = usePage();
 const user = computed(() => page.props.auth.user);
+
 
 const isActive = (routeName) => {
     return route().current(routeName) || route().current(routeName + ".*");
 };
 
+
 const isProfileOpen = ref(false);
 const isSidebarOpen = ref(true);
 const isNotifOpen = ref(false);
 
+
 const notifications = ref(page.props.notifikasis || []);
+
 
 watch(
     () => page.props.notifikasis,
@@ -23,10 +28,12 @@ watch(
     { deep: true },
 );
 
+
 // Menghitung jumlah notifikasi yang belum dibaca
 const unreadCount = computed(
     () => notifications.value.filter((n) => !n.is_read).length,
 );
+
 
 // Fungsi Tandai Semua Dibaca (Langsung menghapus semua dari tampilan)
 const markAllAsRead = () => {
@@ -43,6 +50,7 @@ const markAllAsRead = () => {
     );
 };
 
+
 // Fungsi Hapus Notifikasi per Item (Bisa diklik di seluruh bagian)
 const hapusNotifikasi = (id) => {
     router.delete(route("notifikasi.destroy", id), {
@@ -55,6 +63,7 @@ const hapusNotifikasi = (id) => {
     });
 };
 </script>
+
 
 <template>
     <!-- BACKGROUND UTAMA GRADASI SOFT -->
@@ -103,6 +112,7 @@ const hapusNotifikasi = (id) => {
                 </div>
             </div>
 
+
             <nav
                 class="flex-1 overflow-y-auto py-6 px-3 space-y-1 custom-scrollbar"
             >
@@ -141,6 +151,7 @@ const hapusNotifikasi = (id) => {
                         >Dashboard</span
                     >
                 </Link>
+
 
                 <!-- PERUBAHAN: Menambahkan Role 6 (L4) agar bisa mengajukan cuti juga -->
                 <div v-if="[1, 2, 3, 4, 6].includes(user.role_id)">
@@ -236,8 +247,9 @@ const hapusNotifikasi = (id) => {
                     </Link>
                 </div>
 
-                <!-- PERUBAHAN: Menambahkan Role 6 (L4) agar bisa melihat menu Approval -->
-                <div v-if="[2, 3, 4, 6].includes(user.role_id)">
+
+                <!-- PERUBAHAN: Menambahkan Role 6 (L4) dan Role 5 (Admin HR) agar bisa melihat menu Approval -->
+                <div v-if="[2, 3, 4, 5, 6].includes(user.role_id)">
                     <p
                         v-show="isSidebarOpen"
                         class="px-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6"
@@ -302,6 +314,7 @@ const hapusNotifikasi = (id) => {
                         >
                     </Link>
                 </div>
+
 
                 <!-- PERUBAHAN: Menu HR Admin DIKEMBALIKAN untuk Role 5 -->
                 <div v-if="user.role_id === 5">
@@ -370,6 +383,7 @@ const hapusNotifikasi = (id) => {
                 </div>
             </nav>
 
+
             <div
                 class="p-3 bg-[#020617]/50 border-t border-slate-800/50 shrink-0"
             >
@@ -400,6 +414,7 @@ const hapusNotifikasi = (id) => {
                 </Link>
             </div>
         </aside>
+
 
         <!-- KONTEN UTAMA -->
         <div
@@ -439,12 +454,14 @@ const hapusNotifikasi = (id) => {
                     </h2>
                 </div>
 
+
                 <div class="flex items-center gap-6">
                     <span
                         class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-full hidden sm:inline-block shadow-sm"
                     >
                         {{ user.departemen }}
                     </span>
+
 
                     <div class="relative">
                         <!-- Tombol Notifikasi -->
@@ -468,11 +485,13 @@ const hapusNotifikasi = (id) => {
                             </span>
                         </button>
 
+
                         <div
                             v-if="isNotifOpen"
                             @click="isNotifOpen = false"
                             class="fixed inset-0 z-40"
                         ></div>
+
 
                         <!-- DROPDOWN NOTIFIKASI -->
                         <transition
@@ -508,6 +527,7 @@ const hapusNotifikasi = (id) => {
                                         Tandai semua dibaca
                                     </button>
                                 </div>
+
 
                                 <!-- Daftar Item Notifikasi -->
                                 <div
@@ -587,6 +607,7 @@ const hapusNotifikasi = (id) => {
                                                 </div>
                                             </div>
 
+
                                             <!-- Konten Kanan -->
                                             <div class="flex-1 min-w-0 pr-2">
                                                 <p
@@ -594,6 +615,7 @@ const hapusNotifikasi = (id) => {
                                                 >
                                                     {{ notif.judul }}
                                                 </p>
+
 
                                                 <!-- Desain Border/Pill Persis Gambar -->
                                                 <div
@@ -623,6 +645,7 @@ const hapusNotifikasi = (id) => {
                                                         {{ notif.pesan }}
                                                     </span>
 
+
                                                     <!-- Badge Hijau -->
                                                     <span
                                                         v-else-if="
@@ -647,6 +670,7 @@ const hapusNotifikasi = (id) => {
                                                         {{ notif.pesan }}
                                                     </span>
 
+
                                                     <!-- Badge Kuning/Abu Default -->
                                                     <span
                                                         v-else-if="
@@ -667,6 +691,7 @@ const hapusNotifikasi = (id) => {
                                                         {{ notif.pesan }}
                                                     </span>
                                                 </div>
+
 
                                                 <!-- Format Tanggal dan Jam -->
                                                 <p
@@ -719,6 +744,7 @@ const hapusNotifikasi = (id) => {
                                         </div>
                                     </template>
 
+
                                     <!-- Kondisi Kosong -->
                                     <div
                                         v-else
@@ -741,6 +767,7 @@ const hapusNotifikasi = (id) => {
                                     </div>
                                 </div>
 
+
                                 <!-- Footer Dropdown -->
                                 <div
                                     class="p-3 bg-white border-t border-slate-100 text-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)] relative z-10"
@@ -757,7 +784,9 @@ const hapusNotifikasi = (id) => {
                         </transition>
                     </div>
 
+
                     <div class="h-6 w-px bg-slate-200"></div>
+
 
                     <div class="relative">
                         <button
@@ -813,11 +842,13 @@ const hapusNotifikasi = (id) => {
                             </svg>
                         </button>
 
+
                         <div
                             v-if="isProfileOpen"
                             @click="isProfileOpen = false"
                             class="fixed inset-0 z-40"
                         ></div>
+
 
                         <transition
                             enter-active-class="transition ease-out duration-100"
@@ -909,12 +940,14 @@ const hapusNotifikasi = (id) => {
                 </div>
             </header>
 
+
             <!-- AREA KONTEN (TRANSFOMASI TRANSPARAN) -->
             <main class="flex-1 p-6 md:p-8 overflow-y-auto relative z-10">
                 <transition name="fade" mode="out-in">
                     <slot />
                 </transition>
             </main>
+
 
             <!-- FOOTER BAWAH KACA -->
             <footer
@@ -926,6 +959,7 @@ const hapusNotifikasi = (id) => {
         </div>
     </div>
 </template>
+
 
 <style>
 /* Animasi Transisi Halaman */
@@ -940,6 +974,7 @@ const hapusNotifikasi = (id) => {
     opacity: 0;
     transform: translateY(15px);
 }
+
 
 /* Kustomisasi Scrollbar Khusus Sidebar */
 .custom-scrollbar::-webkit-scrollbar {
@@ -956,3 +991,6 @@ const hapusNotifikasi = (id) => {
     background: #475569;
 }
 </style>
+
+
+

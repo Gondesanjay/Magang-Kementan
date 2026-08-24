@@ -1,15 +1,18 @@
 <script setup>
 import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, Link, router } from "@inertiajs/vue3";
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
+
 
 const props = defineProps({
     riwayat: Object,
     filters: Object,
 });
 
+
 const search = ref(props.filters?.search || "");
 const status = ref(props.filters?.status || "");
+
 
 let timeout = null;
 watch([search, status], ([newSearch, newStatus]) => {
@@ -22,6 +25,7 @@ watch([search, status], ([newSearch, newStatus]) => {
         );
     }, 300);
 });
+
 
 // ==========================================================
 // PEMBATALAN CUTI — MASIH MENUNGGU APPROVAL (menunggu_l1/l2/l3/l4)
@@ -40,6 +44,7 @@ const cancelCuti = (id) => {
     }
 };
 
+
 // ==========================================================
 // PEMBATALAN MANDIRI — CUTI SUDAH "DISETUJUI"
 // Wajib isi alasan pembatalan. Saldo cuti otomatis dikembalikan
@@ -51,21 +56,25 @@ const batalModal = ref({
     alasan: "",
 });
 
+
 const openBatalModal = (id) => {
     batalModal.value.id = id;
     batalModal.value.alasan = "";
     batalModal.value.show = true;
 };
 
+
 const closeBatalModal = () => {
     batalModal.value.show = false;
 };
+
 
 const submitBatal = () => {
     if (!batalModal.value.alasan.trim()) {
         alert("Alasan pembatalan wajib diisi!");
         return;
     }
+
 
     router.post(
         route("karyawan.cuti.batalkan-mandiri", batalModal.value.id),
@@ -79,29 +88,142 @@ const submitBatal = () => {
     );
 };
 
+
 const selectedDetail = ref(null);
+const modeRevisi = ref(false);
+const formRevisi = ref({
+    tanggal_mulai: "",
+    tanggal_selesai: "",
+});
+
+
+const isStatusBisaDirevisi = (item) =>
+    item?.status === "ditangguhkan" ||
+    item?.status === "dibatalkan_ditangguhkan";
+
+
+const canRevisiCurrentItem = computed(() =>
+    isStatusBisaDirevisi(selectedDetail.value),
+);
+
 
 const openDetailModal = (item) => {
     selectedDetail.value = item;
+    modeRevisi.value = false;
+    formRevisi.value.tanggal_mulai = "";
+    formRevisi.value.tanggal_selesai = "";
 };
+
+
+const openRevisiModal = (item) => {
+    selectedDetail.value = item;
+    modeRevisi.value = true;
+    formRevisi.value.tanggal_mulai = "";
+    formRevisi.value.tanggal_selesai = "";
+};
+
 
 const closeDetailModal = () => {
     selectedDetail.value = null;
+    modeRevisi.value = false;
+    formRevisi.value.tanggal_mulai = "";
+    formRevisi.value.tanggal_selesai = "";
 };
+
+
+const cancelRevisiMode = () => {
+    modeRevisi.value = false;
+    formRevisi.value.tanggal_mulai = "";
+    formRevisi.value.tanggal_selesai = "";
+};
+
+
+const minDate = computed(() => new Date().toISOString().split("T")[0]);
+
+
+const jumlahHariKerja = computed(() => {
+    if (!formRevisi.value.tanggal_mulai || !formRevisi.value.tanggal_selesai)
+        return 0;
+
+
+    const start = new Date(formRevisi.value.tanggal_mulai);
+    const end = new Date(formRevisi.value.tanggal_selesai);
+    if (start > end) return 0;
+
+
+    let count = 0;
+    const current = new Date(start);
+    while (current <= end) {
+        if (current.getDay() !== 0 && current.getDay() !== 6) count++;
+        current.setDate(current.getDate() + 1);
+    }
+    return count;
+});
+
+
+const isInvalidWeekendOnly = computed(() => {
+    if (!formRevisi.value.tanggal_mulai || !formRevisi.value.tanggal_selesai)
+        return false;
+
+
+    const start = new Date(formRevisi.value.tanggal_mulai);
+    const end = new Date(formRevisi.value.tanggal_selesai);
+    if (start > end) return false;
+
+
+    const current = new Date(start);
+    while (current <= end) {
+        if (current.getDay() !== 0 && current.getDay() !== 6) return false;
+        current.setDate(current.getDate() + 1);
+    }
+    return true;
+});
+
+
+const submitRevisi = () => {
+    if (isInvalidWeekendOnly.value || jumlahHariKerja.value === 0) return;
+    if (!selectedDetail.value?.id) return;
+
+
+    router.post(
+        route("karyawan.cuti.revisi", selectedDetail.value.id),
+        formRevisi.value,
+        {
+            preserveScroll: true,
+            onSuccess: () => closeDetailModal(),
+        },
+    );
+};
+
 
 // PEMBARUAN: Nama Status Atasan & Hierarki L4
 const formatStatus = (statusCode) => {
     switch (statusCode) {
         case "menunggu_l1":
-            return { text: "Menunggu Ketua Tim Kerja", class: "bg-amber-100 text-amber-700 border border-amber-200" };
+            return {
+                text: "Menunggu Ketua Tim Kerja",
+                class: "bg-amber-100 text-amber-700 border border-amber-200",
+            };
         case "menunggu_l2":
-            return { text: "Menunggu Ketua Kelompok Substansi", class: "bg-amber-100 text-amber-700 border border-amber-200" };
+            return {
+                text: "Menunggu Ketua Kelompok Substansi",
+                class: "bg-amber-100 text-amber-700 border border-amber-200",
+            };
         case "menunggu_l3":
-            return { text: "Menunggu Kasubag TU", class: "bg-amber-100 text-amber-700 border border-amber-200" };
+            return {
+                text: "Menunggu Kasubag TU",
+                class: "bg-amber-100 text-amber-700 border border-amber-200",
+            };
         case "menunggu_l4":
-            return { text: "Menunggu Kepala Biro Perencanaan", class: "bg-amber-100 text-amber-700 border border-amber-200" };
+            return {
+                text: "Menunggu Kepala Biro Perencanaan",
+                class: "bg-amber-100 text-amber-700 border border-amber-200",
+            };
         case "disetujui":
-            return { text: "Disetujui", class: "bg-green-100 text-green-700 border border-green-200" };
+            return {
+                text: "Disetujui",
+                class: "bg-green-100 text-green-700 border border-green-200",
+            };
         case "ditolak":
             return {
                 text: "Ditolak",
@@ -125,6 +247,7 @@ const formatStatus = (statusCode) => {
     }
 };
 
+
 const formatDate = (dateString) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -134,6 +257,7 @@ const formatDate = (dateString) => {
         year: "numeric",
     }).format(date);
 };
+
 
 // Helper: nama atasan yang memproses pengajuan, mengikuti detail Dashboard.
 const getNamaAtasanPemroses = (item) => {
@@ -153,20 +277,25 @@ const getNamaAtasanPemroses = (item) => {
             3: "Bapak Kasubag TU",
             4: "Bapak Kasubag TU",
             6: "Bapak Kepala Biro Perencanaan",
-        }[item.level_saat_ini] || "Atasan"
+        }[item.level_saat_ini] ||
+        "Atasan"
     );
 };
+
 
 // Fungsi untuk membersihkan teks catatan atasan agar tampil clean:
 // mengambil bagian setelah tanda "|", lalu membuang prefix format
 // "[Label: ...]" beserta sisa tanda kurung siku di akhir.
 const formatCatatanAtasan = (keterangan, status) => {
     if (!keterangan || !keterangan.includes("|")) {
-        return {
-            disetujui: "Disetujui dan diteruskan sesuai alur birokrasi.",
-            ditolak: "Pengajuan ditolak oleh atasan.",
-        }[status] || "Diproses tanpa catatan tambahan.";
+        return (
+            {
+                disetujui: "Disetujui dan diteruskan sesuai alur birokrasi.",
+                ditolak: "Pengajuan ditolak oleh atasan.",
+            }[status] || "Diproses tanpa catatan tambahan."
+        );
     }
+
 
     return keterangan
         .split("|")[1]
@@ -175,9 +304,11 @@ const formatCatatanAtasan = (keterangan, status) => {
         .trim();
 };
 
+
 const getApprovalLogs = (item) => {
     const logs = item?.approval_logs || item?.approvalLogs || [];
     if (logs.length) return logs;
+
 
     const legacyLogs = [];
     if (item?.atasanL1?.nama || item?.atasan_l1?.nama) {
@@ -185,7 +316,7 @@ const getApprovalLogs = (item) => {
             id: `legacy-l1-${item.id}`,
             level_approval: 1,
             approver: item.atasanL1 || item.atasan_l1,
-            keputusan: 'setuju',
+            keputusan: "setuju",
         });
     }
     if (item?.atasanL3?.nama || item?.atasan_l3?.nama) {
@@ -193,7 +324,7 @@ const getApprovalLogs = (item) => {
             id: `legacy-l3-${item.id}`,
             level_approval: 3,
             approver: item.atasanL3 || item.atasan_l3,
-            keputusan: 'setuju',
+            keputusan: "setuju",
         });
     }
     if (item?.atasanL4?.nama || item?.atasan_l4?.nama) {
@@ -201,22 +332,26 @@ const getApprovalLogs = (item) => {
             id: `legacy-l4-${item.id}`,
             level_approval: 4,
             approver: item.atasanL4 || item.atasan_l4,
-            keputusan: 'setuju',
+            keputusan: "setuju",
         });
     }
     return legacyLogs;
 };
 
-const getApprovalLevelLabel = (level) => ({
-    1: "L1 - Ketua Tim Kerja",
-    2: "L2 - Ketua Kelompok Substansi",
-    3: "L3 - Kasubag TU",
-    4: "L4 - Kepala Biro Perencanaan",
-}[level] || `Level ${level}`);
+
+const getApprovalLevelLabel = (level) =>
+    ({
+        1: "L1 - Ketua Tim Kerja",
+        2: "L2 - Ketua Kelompok Substansi",
+        3: "L3 - Kasubag TU",
+        4: "L4 - Kepala Biro Perencanaan",
+    })[level] || `Level ${level}`;
 </script>
+
 
 <template>
     <Head title="Riwayat Pengajuan Cuti" />
+
 
     <MainLayout>
         <div class="max-w-7xl mx-auto space-y-6 pb-12">
@@ -230,6 +365,7 @@ const getApprovalLevelLabel = (level) => ({
                     Daftar riwayat permohonan cuti yang pernah Anda ajukan.
                 </p>
             </div>
+
 
             <div
                 class="bg-white shadow-sm border border-slate-200 rounded-2xl overflow-hidden"
@@ -263,6 +399,7 @@ const getApprovalLevelLabel = (level) => ({
                         />
                     </div>
 
+
                     <div class="w-full md:w-64">
                         <select
                             v-model="status"
@@ -293,11 +430,21 @@ const getApprovalLevelLabel = (level) => ({
                     </div>
                 </div>
 
+
                 <div class="overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-100">
                         <thead class="bg-slate-50/50">
                             <tr>
-                                <!-- 1. TANGGAL CUTI (Gabungan Mulai & Selesai) -->
+                                <!-- 1. JENIS CUTI (Dipindah ke Paling Kiri) -->
+                                <th
+                                    scope="col"
+                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                >
+                                    Jenis Cuti
+                                </th>
+
+
+                                <!-- 2. TANGGAL CUTI (Gabungan Mulai & Selesai) -->
                                 <th
                                     scope="col"
                                     class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
@@ -305,13 +452,6 @@ const getApprovalLevelLabel = (level) => ({
                                     Tanggal Cuti
                                 </th>
 
-                                <!-- 2. TAMBAHAN: JENIS CUTI -->
-                                <th
-                                    scope="col"
-                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
-                                >
-                                    Jenis Cuti
-                                </th>
 
                                 <!-- 3. DURASI (Pengganti Jumlah Hari) -->
                                 <th
@@ -321,19 +461,26 @@ const getApprovalLevelLabel = (level) => ({
                                     Durasi
                                 </th>
 
-                                <th
-                                    scope="col"
-                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
-                                >
-                                    Keterangan
-                                </th>
+
+                                <!-- 4. STATUS (Dipindah Sebelum Keterangan) -->
                                 <th
                                     scope="col"
                                     class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
                                     Status
                                 </th>
-                                <!-- JUDUL UTAMA AKSI MEMBAWAHI 3 KOLOM -->
+
+
+                                <!-- 5. KETERANGAN -->
+                                <th
+                                    scope="col"
+                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                >
+                                    Keterangan
+                                </th>
+
+
+                                <!-- 6. JUDUL UTAMA AKSI MEMBAWAHI 3 KOLOM -->
                                 <th
                                     scope="col"
                                     colspan="3"
@@ -349,15 +496,7 @@ const getApprovalLevelLabel = (level) => ({
                                 :key="item.id"
                                 class="hover:bg-slate-50/70 transition-colors"
                             >
-                                <!-- 1. TANGGAL CUTI (Gabungan) -->
-                                <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-medium"
-                                >
-                                    {{ formatDate(item.tanggal_mulai) }} -
-                                    {{ formatDate(item.tanggal_selesai) }}
-                                </td>
-
-                                <!-- 2. TAMBAHAN: JENIS CUTI -->
+                                <!-- 1. JENIS CUTI -->
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <span
                                         class="px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg text-xs font-bold"
@@ -366,6 +505,16 @@ const getApprovalLevelLabel = (level) => ({
                                     </span>
                                 </td>
 
+
+                                <!-- 2. TANGGAL CUTI (Gabungan) -->
+                                <td
+                                    class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-medium"
+                                >
+                                    {{ formatDate(item.tanggal_mulai) }} -
+                                    {{ formatDate(item.tanggal_selesai) }}
+                                </td>
+
+
                                 <!-- 3. DURASI -->
                                 <td
                                     class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-semibold"
@@ -373,6 +522,19 @@ const getApprovalLevelLabel = (level) => ({
                                     {{ item.jumlah_hari }} Hari
                                 </td>
 
+
+                                <!-- 4. STATUS -->
+                                <td class="px-6 py-4 whitespace-nowrap">
+                                    <span
+                                        class="px-3 py-1 inline-flex text-[11px] font-bold rounded-full"
+                                        :class="formatStatus(item.status).class"
+                                    >
+                                        {{ formatStatus(item.status).text }}
+                                    </span>
+                                </td>
+
+
+                                <!-- 5. KETERANGAN -->
                                 <td
                                     class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate"
                                     :title="item.keterangan"
@@ -385,155 +547,159 @@ const getApprovalLevelLabel = (level) => ({
                                             : "-"
                                     }}
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap">
-                                    <span
-                                        class="px-3 py-1 inline-flex text-[11px] font-bold rounded-full"
-                                        :class="formatStatus(item.status).class"
-                                    >
-                                        {{ formatStatus(item.status).text }}
-                                    </span>
-                                </td>
-                                <!-- ================= KOLOM 1: TOMBOL DETAIL (Selalu Aktif) ================= -->
-                                <td
-                                    class="px-1.5 py-4 whitespace-nowrap text-center"
-                                >
-                                    <button
-                                        type="button"
-                                        @click.prevent="openDetailModal(item)"
-                                        class="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-xl transition shadow-sm border border-slate-200 cursor-pointer inline-flex items-center justify-center"
-                                        title="Lihat Detail & Catatan"
-                                    >
-                                        <svg
-                                            class="w-4 h-4"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                                            ></path>
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                                            ></path>
-                                        </svg>
-                                    </button>
-                                </td>
 
-                                <!-- ================= KOLOM 2: TOMBOL CETAK PDF (Aktif jika disetujui, Redup jika tidak) ================= -->
-                                <td
-                                    class="px-1.5 py-4 whitespace-nowrap text-center"
-                                >
-                                    <a
-                                        v-if="item.status === 'disetujui'"
-                                        :href="
-                                            route('karyawan.cuti.pdf', item.id)
-                                        "
-                                        target="_blank"
-                                        class="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-semibold transition shadow-sm"
-                                        title="Cetak PDF"
-                                    >
-                                        <svg
-                                            class="w-3.5 h-3.5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                                            ></path>
-                                        </svg>
-                                        Cetak PDF
-                                    </a>
-                                    <!-- Tombol Redup (Disabled State) -->
-                                    <span
-                                        v-else
-                                        class="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none"
-                                    >
-                                        <svg
-                                            class="w-3.5 h-3.5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                                            ></path>
-                                        </svg>
-                                        Cetak PDF
-                                    </span>
-                                </td>
 
-                                <!-- ================= KOLOM 3: TOMBOL BATALKAN (Aktif jika menunggu/disetujui, Redup jika tidak) ================= -->
+                                <!-- ================= KOLOM AKSI (DIGABUNG MENJADI SATU, DIRAPIKAN DENGAN GRID) ================= -->
                                 <td
-                                    class="px-1.5 py-4 whitespace-nowrap text-center"
+                                    colspan="3"
+                                    class="px-4 py-4 whitespace-nowrap"
                                 >
-                                    <button
-                                        v-if="
-                                            [
-                                                'menunggu_l1',
-                                                'menunggu_l2',
-                                                'menunggu_l3',
-                                                'menunggu_l4',
-                                                'disetujui',
-                                            ].includes(item.status)
-                                        "
-                                        type="button"
-                                        @click="openBatalModal(item.id)"
-                                        class="inline-flex items-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer"
-                                        title="Batalkan Pengajuan"
+                                    <div
+                                        class="grid grid-cols-[36px_112px_112px] gap-2.5 items-center justify-center mx-auto w-fit"
                                     >
-                                        <svg
-                                            class="w-3.5 h-3.5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
+                                        <!-- A. Tombol Detail (Ikon Mata) -->
+                                        <button
+                                            type="button"
+                                            @click.prevent="
+                                                openDetailModal(item)
+                                            "
+                                            class="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-xl transition shadow-sm border border-slate-200 cursor-pointer inline-flex items-center justify-center"
+                                            title="Lihat Detail & Catatan"
                                         >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M6 18L18 6M6 6l12 12"
-                                            ></path>
-                                        </svg>
-                                        Batalkan
-                                    </button>
-                                    <!-- Tombol Redup (Disabled State) -->
-                                    <span
-                                        v-else
-                                        class="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none"
-                                    >
-                                        <svg
-                                            class="w-3.5 h-3.5"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            viewBox="0 0 24 24"
+                                            <svg
+                                                class="w-4 h-4"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2"
+                                                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                                ></path>
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2"
+                                                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                                ></path>
+                                            </svg>
+                                        </button>
+
+
+                                        <!-- B. Tombol Cetak PDF (Hanya jika disetujui) -->
+                                        <a
+                                            v-if="item.status === 'disetujui'"
+                                            :href="
+                                                route(
+                                                    'karyawan.cuti.pdf',
+                                                    item.id,
+                                                )
+                                            "
+                                            target="_blank"
+                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-semibold transition shadow-sm w-full"
+                                            title="Cetak PDF"
                                         >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M6 18L18 6M6 6l12 12"
-                                            ></path>
-                                        </svg>
-                                        Batalkan
-                                    </span>
+                                            <svg
+                                                class="w-3.5 h-3.5 shrink-0"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2"
+                                                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                                ></path>
+                                            </svg>
+                                            Cetak PDF
+                                        </a>
+                                        <span
+                                            v-else
+                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none w-full"
+                                        >
+                                            Cetak PDF
+                                        </span>
+
+
+                                        <!-- C. KONTROL TOMBOL: REVISI MENGGANTIKAN BATALKAN JIKA DITANGGUHKAN -->
+
+
+                                        <!-- Jika Status Ditangguhkan -> Tampilkan Tombol Revisi -->
+                                        <button
+                                            v-if="
+                                                item.status ===
+                                                    'ditangguhkan' ||
+                                                item.status ===
+                                                    'dibatalkan_ditangguhkan'
+                                            "
+                                            type="button"
+                                            @click="openRevisiModal(item)"
+                                            class="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer w-full"
+                                            title="Revisi Pengajuan Cuti"
+                                        >
+                                            <svg
+                                                class="w-3.5 h-3.5 shrink-0"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2"
+                                                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                                ></path>
+                                            </svg>
+                                            Revisi
+                                        </button>
+
+
+                                        <!-- Jika Status Lainnya -> Tampilkan Tombol Batalkan (Atau Disabled jika tidak memenuhi syarat) -->
+                                        <button
+                                            v-else-if="
+                                                [
+                                                    'menunggu_l1',
+                                                    'menunggu_l2',
+                                                    'menunggu_l3',
+                                                    'menunggu_l4',
+                                                    'disetujui',
+                                                ].includes(item.status)
+                                            "
+                                            type="button"
+                                            @click="openBatalModal(item.id)"
+                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer w-full"
+                                            title="Batalkan Pengajuan"
+                                        >
+                                            <svg
+                                                class="w-3.5 h-3.5 shrink-0"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2"
+                                                    d="M6 18L18 6M6 6l12 12"
+                                                ></path>
+                                            </svg>
+                                            Batalkan
+                                        </button>
+                                        <span
+                                            v-else
+                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none w-full"
+                                        >
+                                            Batalkan
+                                        </span>
+                                    </div>
                                 </td>
                             </tr>
                             <tr v-if="riwayat.data.length === 0">
                                 <td
-                                    colspan="8"
+                                    colspan="6"
                                     class="px-6 py-12 text-center text-slate-500 text-sm font-medium"
                                 >
                                     Tidak ada riwayat cuti yang cocok dengan
@@ -543,6 +709,7 @@ const getApprovalLevelLabel = (level) => ({
                         </tbody>
                     </table>
                 </div>
+
 
                 <div
                     class="px-6 py-4 bg-slate-50/50 border-t border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4"
@@ -577,6 +744,7 @@ const getApprovalLevelLabel = (level) => ({
             </div>
         </div>
     </MainLayout>
+
 
     <!-- MODAL DETAIL (versi gabungan: badge status di header, grid Jenis Cuti,
          serta Catatan/Respon Atasan lengkap dengan nama pemroses & teks bersih) -->
@@ -645,6 +813,7 @@ const getApprovalLevelLabel = (level) => ({
                     </div>
                 </div>
 
+
                 <div class="p-6 space-y-5">
                     <!-- GRID 4 KOTAK: Tanggal Mulai, Tanggal Selesai, Jenis Cuti, Durasi -->
                     <div class="grid grid-cols-2 gap-4">
@@ -700,6 +869,7 @@ const getApprovalLevelLabel = (level) => ({
                         </div>
                     </div>
 
+
                     <!-- KETERANGAN / ALASAN PEGAWAI -->
                     <div>
                         <p
@@ -719,6 +889,7 @@ const getApprovalLevelLabel = (level) => ({
                             }}
                         </div>
                     </div>
+
 
                     <!-- CATATAN / RESPON ATASAN -->
                     <div
@@ -765,16 +936,22 @@ const getApprovalLevelLabel = (level) => ({
                             </p>
                         </div>
 
+
                         <!-- Daftar seluruh atasan yang sudah memproses -->
-                        <p v-if="!getApprovalLogs(selectedDetail).length" class="text-sm text-slate-700 mb-1">
+                        <p
+                            v-if="!getApprovalLogs(selectedDetail).length"
+                            class="text-sm text-slate-700 mb-1"
+                        >
                             Diproses oleh:
                             <span class="font-bold">{{
                                 getNamaAtasanPemroses(selectedDetail)
                             }}</span>
                         </p>
 
+
                         <!-- Catatan Atasan, Sudah Dibersihkan dari Prefix "[Label: ...]" -->
-                        <p v-if="!getApprovalLogs(selectedDetail).length"
+                        <p
+                            v-if="!getApprovalLogs(selectedDetail).length"
                             class="text-sm font-medium italic"
                             :class="
                                 selectedDetail.status === 'disetujui'
@@ -790,15 +967,119 @@ const getApprovalLevelLabel = (level) => ({
                             }}"
                         </p>
                         <div v-else class="space-y-3">
-                            <div v-for="log in getApprovalLogs(selectedDetail)" :key="log.id" class="rounded-xl border border-white/80 bg-white/70 p-3">
+                            <div
+                                v-for="log in getApprovalLogs(selectedDetail)"
+                                :key="log.id"
+                                class="rounded-xl border border-white/80 bg-white/70 p-3"
+                            >
                                 <p class="text-sm text-slate-700">
-                                    {{ getApprovalLevelLabel(log.level_approval) }}:
-                                    <span class="font-bold">{{ log.approver?.nama || "Atasan" }}</span>
+                                    {{
+                                        getApprovalLevelLabel(
+                                            log.level_approval,
+                                        )
+                                    }}:
+                                    <span class="font-bold">{{
+                                        log.approver?.nama || "Atasan"
+                                    }}</span>
                                 </p>
-                                <p class="mt-1 text-xs font-medium" :class="log.keputusan === 'setuju' ? 'text-emerald-600' : 'text-orange-600'">
-                                    {{ log.catatan || (log.keputusan === 'setuju' ? 'Disetujui.' : 'Ditolak oleh atasan.') }}
+                                <p
+                                    class="mt-1 text-xs font-medium"
+                                    :class="
+                                        log.keputusan === 'setuju'
+                                            ? 'text-emerald-600'
+                                            : 'text-orange-600'
+                                    "
+                                >
+                                    {{
+                                        log.catatan ||
+                                        (log.keputusan === "setuju"
+                                            ? "Disetujui."
+                                            : "Ditolak oleh atasan.")
+                                    }}
                                 </p>
                             </div>
+                        </div>
+                    </div>
+
+
+                    <div
+                        v-if="modeRevisi && canRevisiCurrentItem"
+                        class="p-4 bg-amber-50 border border-amber-200 rounded-2xl space-y-3"
+                    >
+                        <h4
+                            class="text-xs font-extrabold text-amber-800 uppercase tracking-wider"
+                        >
+                            Form Pengajuan Ulang Tanggal Cuti
+                        </h4>
+
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label
+                                    class="block text-[10px] font-bold text-slate-600 mb-1"
+                                    >Tanggal Mulai Baru *</label
+                                >
+                                <input
+                                    type="date"
+                                    v-model="formRevisi.tanggal_mulai"
+                                    :min="minDate"
+                                    class="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-amber-500 focus:border-amber-500"
+                                />
+                            </div>
+                            <div>
+                                <label
+                                    class="block text-[10px] font-bold text-slate-600 mb-1"
+                                    >Tanggal Selesai Baru *</label
+                                >
+                                <input
+                                    type="date"
+                                    v-model="formRevisi.tanggal_selesai"
+                                    :min="formRevisi.tanggal_mulai || minDate"
+                                    class="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-amber-500 focus:border-amber-500"
+                                />
+                            </div>
+                        </div>
+
+
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="text-emerald-700 font-semibold"
+                                >Estimasi Hari Kerja:
+                                <strong
+                                    >{{ jumlahHariKerja }} Hari</strong
+                                ></span
+                            >
+                        </div>
+
+
+                        <p
+                            v-if="isInvalidWeekendOnly"
+                            class="text-xs text-red-600 font-semibold"
+                        >
+                            Tanggal yang dipilih hanya berisi Sabtu/Minggu.
+                        </p>
+
+
+                        <div class="flex justify-end gap-2">
+                            <button
+                                type="button"
+                                @click="cancelRevisiMode"
+                                class="px-3 py-1.5 bg-white border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                @click="submitRevisi"
+                                :disabled="
+                                    !formRevisi.tanggal_mulai ||
+                                    !formRevisi.tanggal_selesai ||
+                                    isInvalidWeekendOnly ||
+                                    jumlahHariKerja === 0
+                                "
+                                class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold"
+                            >
+                                Ajukan Ulang
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -817,50 +1098,71 @@ const getApprovalLevelLabel = (level) => ({
         </div>
     </Teleport>
 
+
     <!-- MODAL PEMBATALAN MANDIRI (khusus status "Disetujui") -->
     <Teleport to="body">
-        <div
-            v-if="batalModal.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
-        >
+        <div v-if="batalModal.show" class="relative z-[9999]">
+            <!-- OVERLAY BELAKANG: Elemen ini khusus menangkap klik dan memberi warna gelap -->
             <div
-                class="bg-white rounded-[2rem] max-w-md w-full shadow-2xl overflow-hidden p-6"
+                class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity"
+                @click="closeBatalModal"
+            ></div>
+
+
+            <!-- KOTAK MODAL DEPAN -->
+            <div
+                class="fixed inset-0 z-10 w-screen overflow-y-auto pointer-events-none"
             >
-                <h3 class="text-lg font-extrabold text-slate-800 mb-1">
-                    Batalkan Cuti
-                </h3>
-                <p class="text-xs text-slate-500 mb-4 font-medium">
-                    Saldo cuti Anda akan otomatis dikembalikan. Tindakan ini
-                    tidak dapat diubah.
-                </p>
-
-                <label
-                    class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide"
+                <div
+                    class="flex min-h-full items-center justify-center p-4 text-center sm:p-0"
                 >
-                    Alasan Pembatalan <span class="text-red-500">*</span>
-                </label>
-                <textarea
-                    v-model="batalModal.alasan"
-                    rows="3"
-                    class="w-full text-sm font-medium border-slate-200 rounded-xl focus:ring-red-500 focus:border-red-500 mb-5 p-3 shadow-sm"
-                    placeholder="Contoh: Agenda liburan keluarga batal karena urusan mendadak."
-                ></textarea>
+                    <!-- KOTAK PUTIH: pointer-events-auto agar isi modal tetap bisa diklik -->
+                    <div
+                        class="relative transform overflow-hidden rounded-[2rem] bg-white text-left shadow-2xl transition-all w-full max-w-md p-6 pointer-events-auto text-slate-800"
+                    >
+                        <h3 class="text-lg font-extrabold text-slate-800 mb-1">
+                            Batalkan Cuti
+                        </h3>
+                        <p class="text-xs text-slate-500 mb-4 font-medium">
+                            Saldo cuti Anda akan otomatis dikembalikan. Tindakan
+                            ini tidak dapat diubah.
+                        </p>
 
-                <div class="flex justify-end gap-3">
-                    <button
-                        @click="closeBatalModal"
-                        class="px-5 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-sm font-bold transition shadow-sm"
-                    >
-                        Tutup
-                    </button>
-                    <button
-                        @click="submitBatal"
-                        class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-md"
-                    >
-                        Proses Pembatalan
-                    </button>
+
+                        <label
+                            class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide"
+                        >
+                            Alasan Pembatalan
+                            <span class="text-red-500">*</span>
+                        </label>
+                        <textarea
+                            v-model="batalModal.alasan"
+                            rows="3"
+                            class="w-full text-sm font-medium border-slate-200 rounded-xl focus:ring-red-500 focus:border-red-500 mb-5 p-3 shadow-sm bg-white"
+                            placeholder="Contoh: Agenda liburan keluarga batal karena urusan mendadak."
+                        ></textarea>
+
+
+                        <div class="flex justify-end gap-3">
+                            <button
+                                @click="closeBatalModal"
+                                class="px-5 py-2.5 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 rounded-xl text-sm font-bold transition shadow-sm"
+                            >
+                                Tutup
+                            </button>
+                            <button
+                                @click="submitBatal"
+                                class="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-md"
+                            >
+                                Proses Pembatalan
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </Teleport>
 </template>
+
+
+

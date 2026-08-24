@@ -7,7 +7,6 @@
     <style>
         body {
             font-family: 'Times New Roman', Times, serif;
-            /* Font standar dokumen resmi */
             font-size: 12pt;
             line-height: 1.5;
             padding: 2cm 1.5cm;
@@ -39,12 +38,10 @@
             vertical-align: top;
         }
 
-        /* Kolom Label */
         .table-info td:first-child {
             width: 25%;
         }
 
-        /* Kolom Titik Dua */
         .table-info td:nth-child(2) {
             width: 3%;
             text-align: center;
@@ -56,7 +53,6 @@
             margin-bottom: 15px;
         }
 
-        /* Area Tanda Tangan */
         .signature-table {
             width: 100%;
             margin-top: 60px;
@@ -79,20 +75,17 @@
             text-decoration: underline;
             font-weight: bold;
             margin-top: 80px;
-            /* Ruang untuk tanda tangan */
         }
     </style>
 </head>
 
 <body>
 
-    <!-- JUDUL SURAT -->
     <div class="title">LEMBAR PERSETUJUAN CUTI</div>
 
     <div class="content">
         <p>Berdasarkan permohonan cuti yang telah diajukan melalui sistem kepegawaian, dengan ini disampaikan bahwa:</p>
 
-        <!-- DATA PEGAWAI & CUTI -->
         <table class="table-info">
             <tr>
                 <td>Nama</td>
@@ -117,7 +110,6 @@
             <tr>
                 <td>Jenis Cuti</td>
                 <td>:</td>
-                <!-- Jika jenis_cuti kosong, default ke Cuti Tahunan -->
                 <td>{{ $pengajuan->jenis_cuti ?? 'Cuti Tahunan' }}</td>
             </tr>
             <tr>
@@ -129,14 +121,13 @@
                 <td>Periode Cuti</td>
                 <td>:</td>
                 <td>
-                    {{ \Carbon\Carbon::parse($pengajuan->tanggal_mulai)->translatedFormat('d F Y') }}
+                    {{ \Carbon\Carbon::parse($pengajuan->tanggal_mulai)->locale('id')->translatedFormat('d F Y') }}
                     s.d.
-                    {{ \Carbon\Carbon::parse($pengajuan->tanggal_selesai)->translatedFormat('d F Y') }}
+                    {{ \Carbon\Carbon::parse($pengajuan->tanggal_selesai)->locale('id')->translatedFormat('d F Y') }}
                 </td>
             </tr>
         </table>
 
-        <!-- STATUS PERSETUJUAN -->
         <div class="status-box">
             Status Permohonan : DISETUJUI
         </div>
@@ -144,32 +135,41 @@
         <p>Pegawai yang bersangkutan diberikan izin untuk melaksanakan cuti pada periode tersebut sesuai ketentuan peraturan perundang-undangan.</p>
     </div>
 
-    <!-- AREA TANDA TANGAN -->
+    <!-- Tarik data L3 dan L4 langsung dari database untuk semua pengajuan -->
+    @php
+    $kasubag = \App\Models\Pegawai::where('jabatan', 'Kepala Subbagian Tata Usaha')->first();
+    $kabiro = \App\Models\Pegawai::where('jabatan', 'Kepala Biro Perencanaan')->first();
+    @endphp
+
     <table class="signature-table">
         <tr>
-            <!-- Kolom Kiri: Atasan Langsung (L3 - Kasubag TU) -->
+            <!-- Kolom Kiri: Atasan Langsung (TERKUNCI UNTUK L3) -->
             <td>
                 <br>
-                Atasan Langsung,
+                Atasan Langsung,<br>
+                Kepala Subbagian Tata Usaha
 
                 <div class="signature-name">
-                    {{ $pengajuan->atasanL3 ? $pengajuan->atasanL3->nama : '(_______________________)' }}
+                    <!-- PERBAIKAN: Ditambahkan tanda $ pada kasubag -->
+                    {{ $kasubag ? strtoupper($kasubag->nama) : 'IGNATIUS AGUS HENDARTO, S.E., M.M.' }}
                 </div>
-                NIP. {{ $pengajuan->atasanL3 ? $pengajuan->atasanL3->nip : '_______________________' }}
+                NIP. {{ $kasubag ? $kasubag->nip : '777666555' }}
             </td>
 
-            <!-- Kolom Kanan: Pejabat Berwenang (L4 - Kepala Biro) -->
+            <!-- Kolom Kanan: Pejabat Berwenang (TERKUNCI UNTUK L4) -->
             <td>
                 <div class="signature-date">
-                    Jakarta, {{ \Carbon\Carbon::now()->translatedFormat('d F Y') }}
+                    Jakarta, {{ \Carbon\Carbon::now()->locale('id')->translatedFormat('d F Y') }}
                 </div>
                 Mengetahui,<br>
-                Pejabat Yang Berwenang Memberikan Cuti
+                Pejabat Yang Berwenang Memberikan Cuti<br>
+                Kepala Biro Perencanaan
 
                 <div class="signature-name">
-                    {{ $pengajuan->atasanL4 ? $pengajuan->atasanL4->nama : '(_______________________)' }}
+                    <!-- PERBAIKAN: Ditambahkan tanda $ pada kabiro -->
+                    {{ $kabiro ? strtoupper($kabiro->nama) : 'SETA RUKMALASARI AGUSTINA, S.P., M.M.A., M.Sc.' }}
                 </div>
-                NIP. {{ $pengajuan->atasanL4 ? $pengajuan->atasanL4->nip : '_______________________' }}
+                NIP. {{ $kabiro ? $kabiro->nip : '666555444' }}
             </td>
         </tr>
     </table>

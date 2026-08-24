@@ -1,10 +1,13 @@
 <?php
 
+
 namespace App\Http\Middleware;
+
 
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 use App\Models\Notifikasi;
+
 
 class HandleInertiaRequests extends Middleware
 {
@@ -15,6 +18,7 @@ class HandleInertiaRequests extends Middleware
      */
     protected $rootView = 'app';
 
+
     /**
      * Determine the current asset version.
      */
@@ -22,6 +26,7 @@ class HandleInertiaRequests extends Middleware
     {
         return parent::version($request);
     }
+
 
     /**
      * Define the props that are shared by default.
@@ -32,6 +37,7 @@ class HandleInertiaRequests extends Middleware
     {
         $user = $request->user();
 
+
         // Ambil data notifikasi jika user sudah login menggunakan model Notifikasi
         $notifikasis = $user
             ? Notifikasi::where('pegawai_id', $user->id)
@@ -40,17 +46,21 @@ class HandleInertiaRequests extends Middleware
             ->get()
             : [];
 
+
         return [
             ...parent::share($request),
             'auth' => [
                 'user' => $user ? [
-                    'id'          => $user->id,
-                    'nip'         => $user->nip,
-                    'nama'        => $user->nama,
-                    'role_id'     => $user->role_id,
-                    'foto_profil' => $user->foto_profil,
-                    'jabatan'     => $user->jabatan,
-                    'departemen'  => $user->departemen,
+                    'id'                 => $user->id,
+                    'nip'                => $user->nip,
+                    'nama'               => $user->nama,
+                    'role_id'            => $user->role_id,
+                    'foto_profil'        => $user->foto_profil,
+                    'jabatan'            => $user->jabatan,
+                    'departemen'         => $user->departemen,
+                    'alamat_domisili'    => $user->alamat_domisili, // <-- FIX: kolom ini hilang, menyebabkan alamat tidak muncul setelah refresh
+                    'kelompok_substansi' => $user->kelompok_substansi, // <-- Ditambahkan agar konsisten dengan tampilan di Profile Edit
+                    'tim_kerja'          => $user->tim_kerja, // <-- Ditambahkan agar konsisten dengan tampilan di Profile Edit
                 ] : null,
             ],
             // TAMBAHAN: Flash message untuk mendukung pop-up session (sukses/error)

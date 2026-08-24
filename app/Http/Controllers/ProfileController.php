@@ -1,6 +1,8 @@
 <?php
 
+
 namespace App\Http\Controllers;
+
 
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -9,6 +11,7 @@ use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
+
 
 class ProfileController extends Controller
 {
@@ -19,16 +22,21 @@ class ProfileController extends Controller
         ]);
     }
 
+
     public function update(Request $request): RedirectResponse
     {
         // 1. Validasi Manual yang ketat
         $request->validate([
-            'nama' => ['required', 'string', 'max:255'],
-            'foto_profil' => ['nullable', 'image', 'mimes:jpeg,png,jpg', 'max:2048'],
+            'nama'            => ['required', 'string', 'max:255'],
+            'alamat_domisili' => ['nullable', 'string'],
+            'foto_profil'     => ['nullable', 'image', 'mimes:jpeg,png,jpg', 'max:2048'],
         ]);
+
 
         $pegawai = $request->user();
         $pegawai->nama = $request->nama;
+        $pegawai->alamat_domisili = $request->alamat_domisili;
+
 
         // 2. Jika ada file foto yang dikirim, simpan!
         if ($request->hasFile('foto_profil')) {
@@ -37,19 +45,24 @@ class ProfileController extends Controller
                 Storage::disk('public')->delete($pegawai->foto_profil);
             }
 
+
             // Simpan foto baru
             $file = $request->file('foto_profil');
             $filename = time() . '_' . $file->getClientOriginalName();
             $path = $file->storeAs('profile-photos', $filename, 'public');
 
+
             $pegawai->foto_profil = $path; // Masukkan nama file ke objek pegawai
         }
+
 
         // 3. Simpan permanen ke database
         $pegawai->save();
 
-        return Redirect::route('profile.edit');
+
+        return Redirect::route('profile.edit')->with('success', 'Profil berhasil diperbarui.');
     }
+
 
     public function destroy(Request $request): RedirectResponse
     {
@@ -57,11 +70,13 @@ class ProfileController extends Controller
             'password' => ['required', 'current_password'],
         ]);
 
+
         $user = $request->user();
         Auth::logout();
         $user->delete();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
+
 
         return Redirect::to('/');
     }

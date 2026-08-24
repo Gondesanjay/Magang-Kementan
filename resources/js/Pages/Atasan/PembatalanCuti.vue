@@ -130,7 +130,7 @@ const submitSuspend = () => {
 
     <!-- POP-UP MODAL PENANGGUHAN DENGAN TELEPORT -->
     <Teleport to="body">
-        <div v-if="suspendData.show" class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4">
+        <div v-if="suspendData.show" class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4" @click.self="closeSuspendModal">
             <div class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden transform animate-in zoom-in duration-200">
                 <div class="p-5 border-b border-slate-100 bg-orange-50 flex items-center gap-3">
                     <div class="bg-orange-100 text-orange-600 p-2 rounded-full">

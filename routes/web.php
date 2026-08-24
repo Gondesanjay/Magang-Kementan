@@ -1,5 +1,6 @@
 <?php
 
+
 use App\Http\Controllers\AdminController;
 use App\Http\Controllers\ApprovalController;
 use App\Http\Controllers\CutiController;
@@ -12,39 +13,49 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
+
 Route::get('/', function () {
     return redirect()->route('login');
 });
 
+
 // 1. Rute Khusus untuk Ganti Password Pertama Kali (Hanya butuh 'auth')
 Route::middleware('auth')->group(function () {
+
 
     Route::get('/ganti-password', function () {
         return Inertia::render('Auth/GantiPassword');
     })->name('password.change');
+
 
     Route::post('/ganti-password', function (Request $request) {
         $request->validate([
             'password' => ['required', 'confirmed', 'min:8'],
         ]);
 
+
         $request->user()->update([
             'password' => Hash::make($request->password),
             'is_first_login' => false,
         ]);
 
+
         return redirect()->route('dashboard');
     })->name('password.change.store');
 });
 
+
 // 2. Rute Utama Aplikasi (Butuh 'auth' DAN 'force.password')
 Route::middleware(['auth', 'force.password'])->group(function () {
 
+
     Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+
 
     // --- RUTE NOTIFIKASI ---
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllAsRead'])->name('notifications.readAll');
     Route::delete('/notifikasi/{id}', [NotificationController::class, 'destroy'])->name('notifikasi.destroy');
+
 
     // ==========================================
     // Rute Modul Karyawan
@@ -53,17 +64,22 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     Route::post('/karyawan/ajukan-cuti', [CutiController::class, 'store'])->name('karyawan.ajukan.store');
     Route::get('/karyawan/riwayat-cuti', [CutiController::class, 'history'])->name('karyawan.riwayat');
 
+
     // Karyawan membatalkan pengajuan cutinya sendiri (Antrean)
     Route::post('/karyawan/riwayat-cuti/{id}/batal', [CutiController::class, 'cancel'])->name('karyawan.cuti.batal');
+
 
     // Karyawan membatalkan pengajuan cuti mandiri (Sudah Disetujui)
     Route::post('/karyawan/cuti/{id}/batalkan-mandiri', [CutiController::class, 'batalkanMandiri'])->name('karyawan.cuti.batalkan-mandiri');
 
+
     // Karyawan merevisi cuti yang ditangguhkan
     Route::post('/karyawan/cuti/{id}/revisi', [CutiController::class, 'revisi'])->name('karyawan.cuti.revisi');
 
+
     Route::get('/karyawan/kalender-tim', [CutiController::class, 'teamCalendar'])->name('karyawan.kalender');
     Route::get('/karyawan/riwayat-cuti/{id}/pdf', [CutiController::class, 'downloadPdf'])->name('karyawan.cuti.pdf');
+
 
     // ==========================================
     // Rute Modul Atasan
@@ -71,12 +87,15 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     Route::get('/atasan/antrean-approval', [ApprovalController::class, 'index'])->name('atasan.approval');
     Route::post('/atasan/antrean-approval/{id}', [ApprovalController::class, 'process'])->name('atasan.approval.process');
 
-    // ---> RUTE QUICK APPROVE (SUDAH DIPINDAHKAN KE DALAM SINI) <---
+
+    // ---> RUTE QUICK APPROVE <---
     Route::post('/atasan/approval/{id}/approve', [ApprovalController::class, 'approve'])->name('atasan.approval.approve');
     Route::post('/atasan/approval/{id}/reject', [ApprovalController::class, 'reject'])->name('atasan.approval.reject');
 
+
     Route::get('/atasan/pembatalan-cuti', [PembatalanController::class, 'index'])->name('atasan.pembatalan');
     Route::post('/atasan/pembatalan-cuti/{id}', [PembatalanController::class, 'process'])->name('atasan.pembatalan.process');
+
 
     // ==========================================
     // Rute Modul Admin HR
@@ -92,10 +111,12 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     Route::post('/admin/hari-libur/import', [AdminController::class, 'importLiburCsv'])->name('admin.libur.import');
     Route::delete('/admin/hari-libur/{id}', [AdminController::class, 'destroyLibur'])->name('admin.libur.destroy');
 
+
     // Rute Profile Bawaan Breeze
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
 });
+
 
 require __DIR__ . '/auth.php';
