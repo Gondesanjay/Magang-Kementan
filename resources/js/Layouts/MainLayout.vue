@@ -62,6 +62,50 @@ const hapusNotifikasi = (id) => {
         },
     });
 };
+
+
+// Helper terpusat untuk menentukan warna badge notifikasi berdasarkan isi pesan/judul,
+// menggantikan pengulangan v-if/v-else-if yang identik di banyak tempat.
+const badgeStyle = (notif) => {
+    const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
+
+
+    if (teks.includes("tolak") || teks.includes("batal")) {
+        return "text-red-600 bg-red-50 border-red-200";
+    }
+    if (teks.includes("setuju") || teks.includes("berhasil")) {
+        return "text-green-700 bg-green-50 border-green-200";
+    }
+    if (teks.includes("tangguh")) {
+        return "text-amber-600 bg-amber-50 border-amber-200";
+    }
+    return "text-slate-600 bg-slate-50 border-slate-200";
+};
+
+
+const isIconTolak = (notif) => {
+    const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
+    return teks.includes("tolak") || teks.includes("batal");
+};
+
+
+const formatTanggal = (tanggal) => {
+    return new Date(tanggal).toLocaleDateString("id-ID", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+    });
+};
+
+
+const formatJam = (tanggal) => {
+    return new Date(tanggal)
+        .toLocaleTimeString("id-ID", {
+            hour: "2-digit",
+            minute: "2-digit",
+        })
+        .replace(".", ":");
+};
 </script>
 
 
@@ -100,7 +144,6 @@ const hapusNotifikasi = (id) => {
                         class="block text-base font-bold text-white tracking-wide leading-tight"
                         >Agri<span class="text-green-500">Leave</span></span
                     >
-                    <!-- Tambahan teks Biro Perencanaan -->
                     <span
                         class="block text-[10px] font-semibold text-green-400 tracking-wide mt-0.5"
                         >Biro Perencanaan</span
@@ -153,7 +196,7 @@ const hapusNotifikasi = (id) => {
                 </Link>
 
 
-                <!-- PERUBAHAN: Menambahkan Role 6 (L4) agar bisa mengajukan cuti juga -->
+                <!-- Role 1,2,3,4,6 -> bisa mengajukan cuti -->
                 <div v-if="[1, 2, 3, 4, 6].includes(user.role_id)">
                     <p
                         v-show="isSidebarOpen"
@@ -248,7 +291,7 @@ const hapusNotifikasi = (id) => {
                 </div>
 
 
-                <!-- PERUBAHAN: Menambahkan Role 6 (L4) dan Role 5 (Admin HR) agar bisa melihat menu Approval -->
+                <!-- Role 2,3,4,5,6 -> Approval, Role 6 saja -> Pembatalan -->
                 <div v-if="[2, 3, 4, 5, 6].includes(user.role_id)">
                     <p
                         v-show="isSidebarOpen"
@@ -316,7 +359,8 @@ const hapusNotifikasi = (id) => {
                 </div>
 
 
-                <!-- PERUBAHAN: Menu HR Admin DIKEMBALIKAN untuk Role 5 -->
+                <!-- Role 5 -> HR Admin: gabungan lengkap dari kedua versi
+                     (Kelola Pegawai + Monitoring Cuti + Rekap Laporan + Kelola Hari Libur) -->
                 <div v-if="user.role_id === 5">
                     <p
                         v-show="isSidebarOpen"
@@ -324,11 +368,78 @@ const hapusNotifikasi = (id) => {
                     >
                         HR Admin
                     </p>
+
+
+                    <Link
+                        :href="route('admin.pegawai')"
+                        :title="!isSidebarOpen ? 'Kelola Pegawai' : ''"
+                        :class="[
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
+                            isActive('admin.pegawai')
+                                ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
+                                : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
+                            !isSidebarOpen ? 'justify-center' : '',
+                        ]"
+                    >
+                        <svg
+                            class="w-5 h-5 shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                            ></path>
+                        </svg>
+                        <span v-show="isSidebarOpen" class="truncate"
+                            >Kelola Pegawai</span
+                        >
+                    </Link>
+
+
+                    <Link
+                        :href="route('admin.monitoring')"
+                        :title="!isSidebarOpen ? 'Monitoring Cuti' : ''"
+                        :class="[
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
+                            isActive('admin.monitoring')
+                                ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
+                                : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
+                            !isSidebarOpen ? 'justify-center' : '',
+                        ]"
+                    >
+                        <!-- Ikon Mata (Monitor) -->
+                        <svg
+                            class="w-5 h-5 shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                            ></path>
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                            ></path>
+                        </svg>
+                        <span v-show="isSidebarOpen" class="truncate"
+                            >Monitoring Cuti</span
+                        >
+                    </Link>
                     <Link
                         :href="route('admin.rekap')"
                         :title="!isSidebarOpen ? 'Rekap Laporan' : ''"
                         :class="[
-                            'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('admin.rekap')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
@@ -556,21 +667,7 @@ const hapusNotifikasi = (id) => {
                                                 class="shrink-0 transition-transform group-hover:scale-110 mt-1"
                                             >
                                                 <div
-                                                    v-if="
-                                                        notif.pesan
-                                                            .toLowerCase()
-                                                            .includes(
-                                                                'tolak',
-                                                            ) ||
-                                                        notif.pesan
-                                                            .toLowerCase()
-                                                            .includes(
-                                                                'batal',
-                                                            ) ||
-                                                        notif.judul
-                                                            .toLowerCase()
-                                                            .includes('tolak')
-                                                    "
+                                                    v-if="isIconTolak(notif)"
                                                     class="bg-red-50 text-red-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
                                                 >
                                                     <svg
@@ -617,76 +714,13 @@ const hapusNotifikasi = (id) => {
                                                 </p>
 
 
-                                                <!-- Desain Border/Pill Persis Gambar -->
+                                                <!-- Badge status pengajuan (warna ditentukan via badgeStyle) -->
                                                 <div
                                                     class="mt-2 flex flex-wrap items-center gap-2.5"
                                                 >
-                                                    <!-- Badge Merah -->
                                                     <span
-                                                        v-if="
-                                                            notif.pesan
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'tolak',
-                                                                ) ||
-                                                            notif.pesan
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'batal',
-                                                                ) ||
-                                                            notif.judul
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'tolak',
-                                                                )
-                                                        "
-                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-red-600 bg-red-50 border border-red-200 rounded-full leading-none"
-                                                    >
-                                                        {{ notif.pesan }}
-                                                    </span>
-
-
-                                                    <!-- Badge Hijau -->
-                                                    <span
-                                                        v-else-if="
-                                                            notif.pesan
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'setuju',
-                                                                ) ||
-                                                            notif.pesan
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'berhasil',
-                                                                ) ||
-                                                            notif.judul
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'setuju',
-                                                                )
-                                                        "
-                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-green-700 bg-green-50 border border-green-200 rounded-full leading-none"
-                                                    >
-                                                        {{ notif.pesan }}
-                                                    </span>
-
-
-                                                    <!-- Badge Kuning/Abu Default -->
-                                                    <span
-                                                        v-else-if="
-                                                            notif.pesan
-                                                                .toLowerCase()
-                                                                .includes(
-                                                                    'tangguh',
-                                                                )
-                                                        "
-                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-amber-600 bg-amber-50 border border-amber-200 rounded-full leading-none"
-                                                    >
-                                                        {{ notif.pesan }}
-                                                    </span>
-                                                    <span
-                                                        v-else
-                                                        class="inline-block px-3 py-1 text-[11px] font-medium text-slate-600 bg-slate-50 border border-slate-200 rounded-full leading-none"
+                                                        class="inline-block px-3 py-1 text-[11px] font-medium border rounded-full leading-none"
+                                                        :class="badgeStyle(notif)"
                                                     >
                                                         {{ notif.pesan }}
                                                     </span>
@@ -710,31 +744,8 @@ const hapusNotifikasi = (id) => {
                                                             d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
                                                         ></path>
                                                     </svg>
-                                                    {{
-                                                        new Date(
-                                                            notif.created_at,
-                                                        ).toLocaleDateString(
-                                                            "id-ID",
-                                                            {
-                                                                day: "numeric",
-                                                                month: "short",
-                                                                year: "numeric",
-                                                            },
-                                                        )
-                                                    }},
-                                                    {{
-                                                        new Date(
-                                                            notif.created_at,
-                                                        )
-                                                            .toLocaleTimeString(
-                                                                "id-ID",
-                                                                {
-                                                                    hour: "2-digit",
-                                                                    minute: "2-digit",
-                                                                },
-                                                            )
-                                                            .replace(".", ":")
-                                                    }}
+                                                    {{ formatTanggal(notif.created_at) }},
+                                                    {{ formatJam(notif.created_at) }}
                                                 </p>
                                             </div>
                                             <span
@@ -991,6 +1002,4 @@ const hapusNotifikasi = (id) => {
     background: #475569;
 }
 </style>
-
-
 

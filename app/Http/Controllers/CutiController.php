@@ -82,6 +82,55 @@ class CutiController extends Controller
 
 
 
+    // ================= HELPER BARU: HITUNG HARI KERJA EFEKTIF =================
+    // Menghitung jumlah hari CUTI TAHUNAN yang benar-benar memotong saldo,
+    // dengan MENGECUALIKAN:
+    //   1. Sabtu & Minggu (weekend)
+    //   2. Semua tanggal yang terdaftar di tabel `hari_liburs` (baik hari
+    //      libur nasional maupun cuti bersama — keduanya tersimpan di tabel
+    //      yang sama, jadi otomatis ikut ter-exclude tanpa perlu filter
+    //      tambahan berdasarkan flag is_cuti_bersama).
+    //
+    // HANYA dipakai untuk jenis "Cuti Tahunan". Jenis cuti lain (Besar,
+    // Melahirkan, Alasan Penting) TETAP dihitung hari kalender penuh
+    // (termasuk weekend), sesuai kesepakatan: cuti-cuti tersebut memang
+    // dimaksudkan sebagai masa absen utuh, bukan hari kerja saja.
+    private function hitungHariKerjaEfektif($tanggalMulai, $tanggalSelesai)
+    {
+        $start = Carbon::parse($tanggalMulai);
+        $end = Carbon::parse($tanggalSelesai);
+
+        // Ambil semua tanggal hari libur (nasional + cuti bersama) yang
+        // jatuh di dalam rentang tanggal cuti ini, sebagai Y-m-d string
+        // supaya gampang dibandingkan.
+        $tanggalLibur = \App\Models\HariLibur::whereBetween('tanggal', [
+            $start->toDateString(),
+            $end->toDateString(),
+        ])->pluck('tanggal')
+            ->map(fn($tgl) => Carbon::parse($tgl)->toDateString())
+            ->toArray();
+
+        $jumlahHari = 0;
+        $current = $start->copy();
+
+        while ($current->lte($end)) {
+            $bukanWeekend = !$current->isWeekend();
+            $bukanLibur = !in_array($current->toDateString(), $tanggalLibur, true);
+
+            if ($bukanWeekend && $bukanLibur) {
+                $jumlahHari++;
+            }
+
+            $current->addDay();
+        }
+
+        return $jumlahHari;
+    }
+    // ================= END HELPER BARU =================
+
+
+
+
 
 
 
@@ -165,21 +214,50 @@ class CutiController extends Controller
 
 
         // Hitung jumlah hari
-        $jumlah_hari = Carbon::parse($request->tanggal_mulai)->diffInDays(Carbon::parse($request->tanggal_selesai)) + 1;
+        // ---> PERBAIKAN: Cuti Tahunan dihitung HARI KERJA EFEKTIF saja
+        // (weekend & hari libur/cuti bersama dikecualikan), supaya saldo
+        // cuti tidak ikut terpotong untuk hari yang memang sudah libur.
+        // Jenis cuti lain tetap dihitung hari kalender penuh seperti semula.
+        if ($jenisCuti === 'Cuti Tahunan') {
+            $jumlah_hari = $this->hitungHariKerjaEfektif($request->tanggal_mulai, $request->tanggal_selesai);
+
+            // Kalau ternyata SEMUA tanggal yang dipilih jatuh pada
+            // weekend/hari libur, tolak pengajuan karena secara efektif
+            // tidak ada hari kerja yang diambil.
+            if ($jumlah_hari === 0) {
+                return back()->withErrors([
+                    'jenis_cuti' => 'Tanggal yang dipilih seluruhnya jatuh pada akhir pekan atau hari libur/cuti bersama, sehingga tidak ada hari kerja efektif yang bisa diajukan.',
+                ])->withInput();
+            }
+        } else {
+            $jumlah_hari = Carbon::parse($request->tanggal_mulai)->diffInDays(Carbon::parse($request->tanggal_selesai)) + 1;
+        }
 
 
         if ($jenisCuti === 'Cuti Tahunan') {
             $tahunCuti = Carbon::parse($request->tanggal_mulai)->year;
-            $saldo = SaldoCuti::where('pegawai_id', $user->id)
-                ->where('tahun', $tahunCuti)
-                ->first();
-            $sisaSaldo = $saldo?->sisa ?? ($user->jatah_cuti ?? 12);
-            $jumlahMenunggu = PengajuanCuti::where('pegawai_id', $user->id)
+            $jatahCuti = $user->jatah_cuti ?? 12;
+
+
+            // PERBAIKAN: hitung langsung dari pengajuan_cutis (sama seperti create() &
+            // history()), JANGAN pakai kolom saldo_cutis.sisa karena kolom itu tidak
+            // pernah dikurangi otomatis saat pengajuan disetujui, sehingga nilainya
+            // basi/tidak sinkron dengan kenyataan.
+            $cutiTerpakai = PengajuanCuti::where('pegawai_id', $user->id)
+                ->where('jenis_cuti', 'Cuti Tahunan')
+                ->where('status', 'disetujui')
+                ->whereYear('tanggal_mulai', $tahunCuti)
+                ->sum('jumlah_hari');
+
+
+            $cutiMenunggu = PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
                 ->whereIn('status', ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'])
                 ->whereYear('tanggal_mulai', $tahunCuti)
                 ->sum('jumlah_hari');
-            $sisaTersedia = $sisaSaldo - $jumlahMenunggu;
+
+
+            $sisaTersedia = $jatahCuti - $cutiTerpakai - $cutiMenunggu;
 
 
             if ($jumlah_hari > $sisaTersedia) {
@@ -653,60 +731,25 @@ class CutiController extends Controller
 
         $cuti = PengajuanCuti::findOrFail($id);
 
-
-
-
-
-
-
-
         if ($cuti->pegawai_id !== auth()->id() || $cuti->status !== 'dibatalkan_ditangguhkan') {
             return redirect()->back()->with('error', 'Cuti ini tidak dapat direvisi.');
         }
 
-
-
-
-
-
-
-
         $startDate = Carbon::parse($request->tanggal_mulai);
         $endDate = Carbon::parse($request->tanggal_selesai);
-        $jumlah_hari = 0;
 
-
-
-
-
-
-
-
-        $currentDate = $startDate->copy();
-        while ($currentDate->lte($endDate)) {
-            if (!$currentDate->isWeekend()) {
-                $jumlah_hari++;
-            }
-            $currentDate->addDay();
+        // ---> PERBAIKAN: Konsisten dengan store() -- Cuti Tahunan dihitung
+        // hari kerja efektif (weekend & hari libur/cuti bersama
+        // dikecualikan), jenis cuti lain dihitung hari kalender penuh.
+        if ($this->normalizeJenisCuti($cuti->jenis_cuti) === 'Cuti Tahunan') {
+            $jumlah_hari = $this->hitungHariKerjaEfektif($request->tanggal_mulai, $request->tanggal_selesai);
+        } else {
+            $jumlah_hari = $startDate->diffInDays($endDate) + 1;
         }
-
-
-
-
-
-
-
 
         if ($jumlah_hari === 0) {
             return redirect()->back()->with('error', 'Tanggal yang dipilih jatuh pada hari libur sepenuhnya.');
         }
-
-
-
-
-
-
-
 
         $cuti->update([
             'tanggal_mulai' => $request->tanggal_mulai,
@@ -717,23 +760,9 @@ class CutiController extends Controller
             'keterangan' => $cuti->keterangan . ' | [DIREVISI]',
         ]);
 
-
-
-
-
-
-
-
         $userLogin = auth()->user();
         $atasanL1 = Pegawai::where('role_id', 2)->where('departemen', $userLogin->departemen)->first()
             ?? Pegawai::where('role_id', 2)->first();
-
-
-
-
-
-
-
 
         if ($atasanL1) {
             Notifikasi::create([
@@ -744,13 +773,6 @@ class CutiController extends Controller
                 'is_read'    => false,
             ]);
         }
-
-
-
-
-
-
-
 
         return redirect()->back()->with('success', 'Tanggal cuti berhasil direvisi dan diajukan ulang.');
     }

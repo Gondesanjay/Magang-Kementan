@@ -2,9 +2,11 @@
 import MainLayout from '@/Layouts/MainLayout.vue';
 import { Head, useForm, router, Link } from '@inertiajs/vue3';
 
+
 const props = defineProps({
     libur: Object // Diubah menjadi Object karena data dari paginate()
 });
+
 
 // Form Inertia untuk input data
 const form = useForm({
@@ -13,9 +15,11 @@ const form = useForm({
     is_cuti_bersama: false, // Default: Libur Nasional (false)
 });
 
+
 const csvForm = useForm({
     file: null,
 });
+
 
 const submit = () => {
     form.post(route('admin.libur.store'), {
@@ -24,11 +28,13 @@ const submit = () => {
     });
 };
 
+
 const submitCsv = () => {
     if (!csvForm.file) {
         alert('Pilih file CSV terlebih dahulu.');
         return;
     }
+
 
     csvForm.post(route('admin.libur.import'), {
         preserveScroll: true,
@@ -41,6 +47,7 @@ const submitCsv = () => {
     });
 };
 
+
 const hapusLibur = (id, keterangan) => {
     if (confirm(`Hapus tanggal merah: ${keterangan}?`)) {
         router.delete(route('admin.libur.destroy', id), {
@@ -49,6 +56,7 @@ const hapusLibur = (id, keterangan) => {
     }
 };
 
+
 const formatDate = (dateString) => {
     if (!dateString) return '-';
     const date = new Date(dateString);
@@ -56,12 +64,14 @@ const formatDate = (dateString) => {
 };
 </script>
 
+
 <template>
     <Head title="Kelola Hari Libur" />
 
+
     <MainLayout>
         <div class="max-w-7xl mx-auto space-y-6 pb-12">
-            
+           
             <div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div>
                     <h1 class="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">Kelola Hari Libur</h1>
@@ -69,12 +79,13 @@ const formatDate = (dateString) => {
                 </div>
             </div>
 
+
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <!-- FORM INPUT -->
                 <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 self-start space-y-6">
                     <div>
                         <h3 class="text-base font-bold text-slate-800 mb-4 border-b border-slate-100 pb-3">Tambah Hari Libur</h3>
-                        
+                       
                         <form @submit.prevent="submit" class="space-y-4">
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 mb-1.5">Tanggal Libur <span class="text-red-500">*</span></label>
@@ -82,10 +93,12 @@ const formatDate = (dateString) => {
                                 <span v-if="form.errors.tanggal" class="text-xs text-red-500 mt-1">{{ form.errors.tanggal }}</span>
                             </div>
 
+
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 mb-1.5">Nama Peringatan / Keterangan <span class="text-red-500">*</span></label>
                                 <input v-model="form.keterangan" type="text" placeholder="Contoh: Hari Kemerdekaan RI" required class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
                             </div>
+
 
                             <div>
                                 <label class="block text-xs font-semibold text-slate-700 mb-1.5">Jenis Libur <span class="text-red-500">*</span></label>
@@ -95,11 +108,13 @@ const formatDate = (dateString) => {
                                 </select>
                             </div>
 
+
                             <button type="submit" :disabled="form.processing" class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50 mt-2">
                                 Simpan Tanggal
                             </button>
                         </form>
                     </div>
+
 
                     <div class="border-t border-slate-100 pt-5">
                         <h3 class="text-base font-bold text-slate-800 mb-4">Impor Hari Libur dari CSV</h3>
@@ -118,6 +133,7 @@ const formatDate = (dateString) => {
                                 </p>
                             </div>
 
+
                             <button type="submit" :disabled="csvForm.processing" class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50">
                                 Impor CSV
                             </button>
@@ -125,12 +141,13 @@ const formatDate = (dateString) => {
                     </div>
                 </div>
 
+
                 <!-- TABEL DAFTAR LIBUR -->
                 <div class="md:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
                     <div class="px-6 py-4 border-b border-slate-100 bg-slate-50/50">
                         <h3 class="text-base font-bold text-slate-800">Daftar Hari Libur Terdaftar</h3>
                     </div>
-                    
+                   
                     <div class="overflow-x-auto">
                         <table class="min-w-full divide-y divide-slate-100">
                             <thead class="bg-slate-50/50">
@@ -173,20 +190,21 @@ const formatDate = (dateString) => {
                         </table>
                     </div>
 
+
                     <!-- PAGINATION -->
                     <div v-if="libur.data && libur.data.length > 0" class="px-6 py-4 border-t border-slate-100 flex flex-col md:flex-row justify-between items-center gap-4 bg-slate-50/50">
                         <span class="text-sm text-slate-500">
                             Menampilkan {{ libur.from || 0 }} - {{ libur.to || 0 }} dari {{ libur.total }} data
                         </span>
-                        
+                       
                         <div class="flex space-x-1">
                             <template v-for="(link, index) in libur.links" :key="index">
-                                <div v-if="link.url === null" 
-                                    class="px-3 py-1 text-sm text-slate-400 bg-slate-50 border border-slate-200 rounded cursor-not-allowed" 
+                                <div v-if="link.url === null"
+                                    class="px-3 py-1 text-sm text-slate-400 bg-slate-50 border border-slate-200 rounded cursor-not-allowed"
                                     v-html="link.label">
                                 </div>
-                                <Link v-else 
-                                    :href="link.url" 
+                                <Link v-else
+                                    :href="link.url"
                                     class="px-3 py-1 text-sm border border-slate-200 rounded hover:bg-green-50 transition-colors"
                                     :class="link.active ? 'bg-green-600 text-white border-green-600 hover:bg-green-700' : 'text-slate-600 bg-white'"
                                     v-html="link.label">
@@ -195,9 +213,12 @@ const formatDate = (dateString) => {
                         </div>
                     </div>
 
+
                 </div>
             </div>
+
 
         </div>
     </MainLayout>
 </template>
+

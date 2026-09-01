@@ -791,19 +791,11 @@ const getApprovalLevelLabel = (level) =>
                             "
                             class="px-5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
                         >
-                            <svg
-                                class="w-3.5 h-3.5"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2.5"
-                                    d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                                ></path>
-                            </svg>
+                            <img
+                                src="/images/icon-pribadi.png"
+                                alt="Pribadi"
+                                class="w-5 h-5 object-contain"
+                            />
                             Pribadi
                         </button>
                         <button
@@ -815,19 +807,11 @@ const getApprovalLevelLabel = (level) =>
                             "
                             class="px-5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
                         >
-                            <svg
-                                class="w-3.5 h-3.5"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2.5"
-                                    d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"
-                                ></path>
-                            </svg>
+                            <img
+                                src="/images/icon-tim-bawahan.png"
+                                alt="Tim / Bawahan"
+                                class="w-5 h-5 object-contain"
+                            />
                             Tim / Bawahan
                         </button>
                     </div>
@@ -967,6 +951,11 @@ const getApprovalLevelLabel = (level) =>
                 </div>
 
                 <!-- 2. WIDGET STATISTIK RINGKASAN TIM -->
+                <!-- DIPERBARUI: memakai ikon 3D (icon-dokumen.png, shield-icon.png,
+                     icon-tim.png) menggantikan ikon SVG lama, sesuai desain baru
+                     yang diminta. Semua fungsi lama (Link ke approval, buka modal
+                     approvedModal, buka modal showTeamModal, serta seluruh nilai
+                     computed/stats) TETAP dipertahankan tanpa ada yang dihapus. -->
                 <div
                     v-show="
                         activeTab === 'tim' &&
@@ -974,143 +963,99 @@ const getApprovalLevelLabel = (level) =>
                     "
                     class="grid grid-cols-1 md:grid-cols-3 gap-5"
                 >
+                    <!-- 2a. KARTU PERLU PERSETUJUAN -->
                     <Link
                         :href="route('atasan.approval')"
-                        class="relative bg-gradient-to-br from-amber-50/80 to-white/60 border border-white rounded-[2rem] p-6 shadow-sm flex flex-col justify-between transition-all duration-300 hover:shadow-xl hover:-translate-y-1 cursor-pointer overflow-hidden group"
+                        class="relative overflow-hidden bg-gradient-to-br from-amber-50/80 to-white/60 border border-white rounded-[2rem] p-6 shadow-sm flex flex-col justify-between group transition-all duration-300 hover:shadow-xl hover:-translate-y-1"
                     >
-                        <div
-                            class="flex justify-between items-start relative z-10"
-                        >
-                            <p
-                                class="text-[10px] font-extrabold text-amber-600/80 uppercase tracking-widest"
+                        <div class="relative z-10">
+                            <h3
+                                class="text-[10px] font-extrabold text-amber-600/80 uppercase tracking-widest mb-3"
                             >
                                 Perlu Persetujuan
-                            </p>
-                            <div
-                                class="text-amber-500 bg-amber-100/50 p-2.5 rounded-xl shadow-sm border border-amber-100"
-                            >
-                                <svg
-                                    class="w-5 h-5"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2.5"
-                                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                                    ></path>
-                                </svg>
+                            </h3>
+                            <div class="flex items-baseline gap-1.5">
+                                <p class="text-4xl font-black text-slate-800">
+                                    {{
+                                        stats.total_antrean ??
+                                        stats.pengajuan_menunggu ??
+                                        0
+                                    }}
+                                </p>
+                                <p class="text-sm font-bold text-slate-500">
+                                    Antrean
+                                </p>
                             </div>
                         </div>
-                        <div
-                            class="mt-4 flex items-baseline gap-1.5 relative z-10"
-                        >
-                            <p class="text-4xl font-black text-slate-800">
-                                {{
-                                    stats.total_antrean ??
-                                    stats.pengajuan_menunggu ??
-                                    0
-                                }}
-                            </p>
-                            <p class="text-sm font-bold text-slate-500">
-                                Antrean
-                            </p>
-                        </div>
+                        <img
+                            src="/images/icon-dokumen.png"
+                            alt="Perlu Persetujuan"
+                            class="absolute -bottom-2 -right-2 w-24 h-24 object-contain drop-shadow-2xl group-hover:scale-110 transition-transform duration-500"
+                        />
                     </Link>
 
+                    <!-- 2b. KARTU TOTAL CUTI DISETUJUI -->
                     <div
                         @click="approvedModal.show = true"
-                        class="relative bg-gradient-to-br from-green-50/80 to-white/60 border border-white rounded-[2rem] p-6 shadow-sm flex flex-col justify-between transition-all duration-300 hover:shadow-xl hover:-translate-y-1 cursor-pointer overflow-hidden group"
+                        class="relative overflow-hidden bg-gradient-to-br from-emerald-50/80 to-white/60 border border-white rounded-[2rem] p-6 shadow-sm flex flex-col justify-between group transition-all duration-300 hover:shadow-xl hover:-translate-y-1 cursor-pointer"
                     >
-                        <div
-                            class="flex justify-between items-start relative z-10"
-                        >
-                            <p
-                                class="text-[10px] font-extrabold text-green-600/80 uppercase tracking-widest"
+                        <div class="relative z-10">
+                            <h3
+                                class="text-[10px] font-extrabold text-emerald-600/80 uppercase tracking-widest mb-3"
                             >
                                 Total Cuti Disetujui
-                            </p>
-                            <div
-                                class="text-green-500 bg-green-100/50 p-2.5 rounded-xl shadow-sm border border-green-100"
-                            >
-                                <svg
-                                    class="w-5 h-5"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2.5"
-                                        d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    ></path>
-                                </svg>
+                            </h3>
+                            <div class="flex items-baseline gap-1.5">
+                                <p class="text-4xl font-black text-slate-800">
+                                    {{
+                                        stats.cuti_tim_bulan_ini ??
+                                        stats.pengajuan_disetujui ??
+                                        0
+                                    }}
+                                </p>
+                                <p class="text-sm font-bold text-slate-500">
+                                    Bulan Ini
+                                </p>
                             </div>
                         </div>
-                        <div
-                            class="mt-4 flex items-baseline gap-1.5 relative z-10"
-                        >
-                            <p class="text-4xl font-black text-slate-800">
-                                {{
-                                    stats.cuti_tim_bulan_ini ??
-                                    stats.pengajuan_disetujui ??
-                                    0
-                                }}
-                            </p>
-                            <p class="text-sm font-bold text-slate-500">
-                                Bulan Ini
-                            </p>
-                        </div>
+                        <img
+                            src="/images/shield-icon.png"
+                            alt="Cuti Disetujui"
+                            class="absolute -bottom-2 -right-2 w-24 h-24 object-contain drop-shadow-2xl group-hover:scale-110 transition-transform duration-500"
+                        />
                     </div>
 
+                    <!-- 2c. KARTU TOTAL ANGGOTA TIM -->
                     <div
                         @click="showTeamModal = true"
-                        class="relative bg-gradient-to-br from-blue-50/80 to-white/60 border border-white rounded-[2rem] p-6 shadow-sm flex flex-col justify-between transition-all duration-300 hover:shadow-xl hover:-translate-y-1 cursor-pointer overflow-hidden group"
+                        class="relative overflow-hidden bg-gradient-to-br from-blue-50/80 to-white/60 border border-white rounded-[2rem] p-6 shadow-sm flex flex-col justify-between group transition-all duration-300 hover:shadow-xl hover:-translate-y-1 cursor-pointer"
                     >
-                        <div
-                            class="flex justify-between items-start relative z-10"
-                        >
-                            <p
-                                class="text-[10px] font-extrabold text-blue-600/80 uppercase tracking-widest"
+                        <div class="relative z-10">
+                            <h3
+                                class="text-[10px] font-extrabold text-blue-600/80 uppercase tracking-widest mb-3"
                             >
                                 Total Anggota Tim
-                            </p>
-                            <div
-                                class="text-blue-500 bg-blue-100/50 p-2.5 rounded-xl shadow-sm border border-blue-100"
-                            >
-                                <svg
-                                    class="w-5 h-5"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2.5"
-                                        d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-                                    ></path>
-                                </svg>
+                            </h3>
+                            <div class="flex items-baseline gap-1.5 mb-1">
+                                <p class="text-4xl font-black text-slate-800">
+                                    {{ hadirHariIniCount }}/{{ totalAnggota }}
+                                </p>
+                                <p class="text-sm font-bold text-slate-500">
+                                    Hadir
+                                </p>
                             </div>
-                        </div>
-                        <div
-                            class="mt-4 flex items-baseline gap-1.5 relative z-10"
-                        >
-                            <p class="text-4xl font-black text-slate-800">
-                                {{ hadirHariIniCount }}/{{ totalAnggota }}
-                            </p>
-                            <p class="text-sm font-bold text-slate-500">
-                                Hadir
+                            <p
+                                class="text-[11px] text-slate-500 font-semibold"
+                            >
+                                {{ cutiHariIniCount }} orang sedang cuti hari
+                                ini
                             </p>
                         </div>
-                        <p
-                            class="text-[11px] text-slate-500 mt-2 font-semibold"
-                        >
-                            {{ cutiHariIniCount }} orang sedang cuti hari ini
-                        </p>
+                        <img
+                            src="/images/icon-tim.png"
+                            alt="Anggota Tim"
+                            class="absolute -bottom-2 -right-2 w-24 h-24 object-contain drop-shadow-2xl group-hover:scale-110 transition-transform duration-500"
+                        />
                     </div>
                 </div>
             </div>
@@ -2608,5 +2553,3 @@ const getApprovalLevelLabel = (level) =>
         </div>
     </Teleport>
 </template>
-
-

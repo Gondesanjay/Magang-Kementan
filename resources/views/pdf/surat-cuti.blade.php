@@ -143,20 +143,31 @@
 
     <table class="signature-table">
         <tr>
-            <!-- Kolom Kiri: Atasan Langsung (TERKUNCI UNTUK L3) -->
+            <!-- Kolom Kiri: Atasan Langsung (L3 - Kasubag TU) -->
             <td>
                 <br>
                 Atasan Langsung,<br>
                 Kepala Subbagian Tata Usaha
 
+                <!-- AREA GAMBAR TANDA TANGAN L3 -->
+                <div style="height: 70px; margin: 10px 0;">
+                    @if($kasubag && !empty($kasubag->signature_path) && file_exists(public_path('storage/' . $kasubag->signature_path)))
+                    <img src="{{ public_path('storage/' . $kasubag->signature_path) }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    @elseif(file_exists(public_path('storage/signatures/kasubag.png')))
+                    <img src="{{ public_path('storage/signatures/kasubag.png') }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    @else
+                    <!-- Jika file benar-benar tidak ada, kosongkan saja atau berikan teks pengganti -->
+                    <span style="font-size: 10pt; color: #555; font-style: italic;">(Tanda Tangan)</span>
+                    @endif
+                </div>
+
                 <div class="signature-name">
-                    <!-- PERBAIKAN: Ditambahkan tanda $ pada kasubag -->
                     {{ $kasubag ? strtoupper($kasubag->nama) : 'IGNATIUS AGUS HENDARTO, S.E., M.M.' }}
                 </div>
                 NIP. {{ $kasubag ? $kasubag->nip : '777666555' }}
             </td>
 
-            <!-- Kolom Kanan: Pejabat Berwenang (TERKUNCI UNTUK L4) -->
+            <!-- Kolom Kanan: Pejabat Berwenang (L4 - Kepala Biro Perencanaan) -->
             <td>
                 <div class="signature-date">
                     Jakarta, {{ \Carbon\Carbon::now()->locale('id')->translatedFormat('d F Y') }}
@@ -165,8 +176,18 @@
                 Pejabat Yang Berwenang Memberikan Cuti<br>
                 Kepala Biro Perencanaan
 
+                <!-- AREA GAMBAR TANDA TANGAN L4 -->
+                <div style="height: 70px; margin: 10px 0;">
+                    @if($kabiro && file_exists(public_path('storage/' . $kabiro->signature_path)))
+                    <!-- Jika ada gambar di database -->
+                    <img src="{{ public_path('storage/' . $kabiro->signature_path) }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    @else
+                    <!-- Fallback / Gambar Default Statis -->
+                    <img src="{{ public_path('storage/signatures/kabiro.png') }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    @endif
+                </div>
+
                 <div class="signature-name">
-                    <!-- PERBAIKAN: Ditambahkan tanda $ pada kabiro -->
                     {{ $kabiro ? strtoupper($kabiro->nama) : 'SETA RUKMALASARI AGUSTINA, S.P., M.M.A., M.Sc.' }}
                 </div>
                 NIP. {{ $kabiro ? $kabiro->nip : '666555444' }}

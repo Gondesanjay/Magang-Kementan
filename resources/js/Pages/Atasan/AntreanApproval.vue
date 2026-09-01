@@ -50,10 +50,10 @@ watch(
 
 
 const statusLabels = {
-    menunggu_l1: "Menunggu Ketua Tim Kerja (L1)",
-    menunggu_l2: "Menunggu Ketua Kelompok Substansi (L2)",
-    menunggu_l3: "Menunggu Kasubag TU (L3)",
-    menunggu_l4: "Menunggu Kepala Biro Perencanaan (L4)",
+    menunggu_l1: "Menunggu Bapak Ketua Tim Kerja (L1)",
+    menunggu_l2: "Menunggu Bapak Ketua Kelompok Substansi (L2)",
+    menunggu_l3: "Menunggu Ignatius Agus Hendarto (L3)",
+    menunggu_l4: "Menunggu Seta Rukmalasari Agustina (L4)",
 };
 
 
@@ -96,6 +96,59 @@ const goToPage = (url) => {
         },
     );
 };
+
+
+// ================= MODAL DETAIL CUTI (Semua Role) =================
+const detailModal = ref({ show: false, data: null });
+
+
+const bukaDetailModal = (item) => {
+    detailModal.value.data = item;
+    detailModal.value.show = true;
+};
+
+
+const closeDetailModal = () => {
+    detailModal.value.show = false;
+    detailModal.value.data = null;
+};
+// ================= END MODAL DETAIL CUTI =================
+
+
+// ================= HELPER: PEMBERSIH KALIMAT KETERANGAN =================
+// Merapikan data teks lama (format mentah "... | [DITANGGUHKAN/DIBATALKAN ATASAN: ...]")
+// maupun data baru, supaya tampil sebagai kalimat manusiawi yang rapi
+// baik di tabel antrean maupun di Modal Detail Cuti.
+const formatKeteranganRapi = (text) => {
+    if (!text || text === "-") return "-";
+
+
+    // Cek apakah teks mengandung format bawaan sistem yang pakai '|' atau '['
+    if (text.includes("|") || text.includes("[DITANGGUHKAN")) {
+        let bagian = text.split("|").map((item) => item.trim());
+        let alasanAwal =
+            bagian[0] && bagian[0] !== "-" ? bagian[0] : "Ada keperluan";
+
+
+        // Ekstrak catatan atasan dari format mentah database
+        let regex = /\[DITANGGUHKAN\/DIBATALKAN ATASAN:\s*(.*?)\]/i;
+        let match = text.match(regex);
+
+
+        if (match && match[1]) {
+            let catatanAtasan = match[1].trim();
+            // Menggunakan nama lengkap tanpa gelar sesuai kesepakatan
+            return `${alasanAwal} (Ditangguhkan oleh Seta Rukmalasari Agustina: ${catatanAtasan})`;
+        }
+
+
+        return alasanAwal;
+    }
+
+
+    return text;
+};
+// ================= END HELPER KETERANGAN =================
 </script>
 
 
@@ -123,13 +176,11 @@ const goToPage = (url) => {
                             Semua Jenis Cuti
                         </option>
                         <option value="Cuti Tahunan">Cuti Tahunan</option>
-                        <option value="Cuti Sakit">Cuti Sakit</option>
+                        <option value="Cuti Besar">Cuti Besar</option>
                         <option value="Cuti Alasan Penting">
                             Cuti Alasan Penting
                         </option>
-                        <option value="Cuti Melahirkan">
-                            Cuti Melahirkan
-                        </option>
+                        <option value="Cuti Melahirkan">Cuti Melahirkan</option>
                     </select>
 
 
@@ -173,26 +224,18 @@ const goToPage = (url) => {
                             >
                                 Nama Karyawan
                             </th>
-
-
-                            <!-- PINDAHKAN TH JENIS CUTI KE SINI (Setelah Nama) -->
                             <th
                                 scope="col"
                                 class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                             >
                                 Jenis Cuti
                             </th>
-
-
-                            <!-- TH TANGGAL CUTI DIGESER KE SINI (Setelah Jenis Cuti) -->
                             <th
                                 scope="col"
                                 class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                             >
                                 Tanggal Cuti
                             </th>
-
-
                             <th
                                 scope="col"
                                 class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
@@ -235,14 +278,12 @@ const goToPage = (url) => {
                             </td>
 
 
-                            <!-- KOLOM BARU: JENIS CUTI -->
                             <td
                                 class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"
                             >
                                 <span
                                     class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800"
                                 >
-                                    <!-- Sesuaikan jika format databasenya butuh item.jenis_cuti.nama_cuti -->
                                     {{ item.jenis_cuti }}
                                 </span>
                             </td>
@@ -259,44 +300,105 @@ const goToPage = (url) => {
                             >
                                 {{ item.jumlah_hari }} Hari
                             </td>
-                            <td
-                                class="px-6 py-4 whitespace-nowrap text-sm font-medium text-amber-700"
-                            >
-                                {{ statusLabels[item.status] || item.status }}
+                            <td class="px-6 py-4 whitespace-nowrap text-sm">
+                                <span
+                                    class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium"
+                                    :class="{
+                                        'bg-yellow-100 text-yellow-800':
+                                            item.status?.includes('menunggu'),
+                                        'bg-green-100 text-green-800':
+                                            item.status === 'disetujui',
+                                        'bg-red-100 text-red-800':
+                                            item.status === 'ditolak' ||
+                                            item.status?.includes('dibatalkan'),
+                                        'bg-orange-100 text-orange-800':
+                                            item.status === 'ditangguhkan',
+                                        'bg-gray-100 text-gray-800':
+                                            !item.status,
+                                    }"
+                                >
+                                    {{
+                                        statusLabels[item.status] || item.status
+                                    }}
+                                </span>
                             </td>
+                            <!-- Kolom Keterangan: pakai helper formatKeteranganRapi agar
+                                 kalimat lama/format mentah tetap tampil rapi -->
                             <td
                                 class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate"
-                                :title="item.keterangan"
+                                :title="formatKeteranganRapi(item.keterangan)"
                             >
-                                {{ item.keterangan }}
+                                {{ formatKeteranganRapi(item.keterangan) }}
                             </td>
+                            <!-- Kolom Aksi (Urutan: Detail -> Setujui -> Tolak) -->
                             <td
-                                class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium space-x-2"
+                                class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"
                             >
-                                <template v-if="!isReadOnly">
-                                    <button
-                                        @click="processApproval(item.id, 'approve')"
-                                        class="inline-flex items-center px-3 py-1 bg-green-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-green-700 transition ease-in-out duration-150"
-                                    >
-                                        Setujui
-                                    </button>
-                                    <button
-                                        @click="processApproval(item.id, 'reject')"
-                                        class="inline-flex items-center px-3 py-1 bg-red-600 border border-transparent rounded-md font-semibold text-xs text-white uppercase tracking-widest hover:bg-red-700 transition ease-in-out duration-150"
-                                    >
-                                        Tolak
-                                    </button>
-                                </template>
-                                <span
-                                    v-else
-                                    class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500"
+                                <div
+                                    class="flex items-center justify-center gap-2"
                                 >
-                                    Monitor
-                                </span>
+                                    <!-- 1. TOMBOL DETAIL (IKON MATA) DI PALING KIRI —
+                                         tersedia untuk SEMUA role, baik yang bisa
+                                         approve/reject maupun Admin HR read-only, agar
+                                         semua bisa melihat rincian pengajuan lewat
+                                         Modal Detail Cuti. -->
+                                    <button
+                                        type="button"
+                                        @click="bukaDetailModal(item)"
+                                        title="Lihat Detail Pengajuan"
+                                        class="inline-flex items-center justify-center p-1.5 bg-white border border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50 hover:text-blue-600 transition-colors shadow-sm"
+                                    >
+                                        <svg
+                                            class="w-5 h-5"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                        >
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                            />
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                            />
+                                        </svg>
+                                    </button>
+
+
+                                    <!-- 2. TOMBOL PERSETUJUAN DI SEBELAH KANAN -->
+                                    <template v-if="!isReadOnly">
+                                        <button
+                                            @click="
+                                                processApproval(
+                                                    item.id,
+                                                    'approve',
+                                                )
+                                            "
+                                            class="inline-flex items-center px-3 py-1.5 bg-green-600 border border-transparent rounded-lg font-semibold text-xs text-white uppercase tracking-wider hover:bg-green-700 transition ease-in-out duration-150 shadow-sm"
+                                        >
+                                            Setujui
+                                        </button>
+                                        <button
+                                            @click="
+                                                processApproval(
+                                                    item.id,
+                                                    'reject',
+                                                )
+                                            "
+                                            class="inline-flex items-center px-3 py-1.5 bg-red-600 border border-transparent rounded-lg font-semibold text-xs text-white uppercase tracking-wider hover:bg-red-700 transition ease-in-out duration-150 shadow-sm"
+                                        >
+                                            Tolak
+                                        </button>
+                                    </template>
+                                </div>
                             </td>
                         </tr>
                         <tr v-if="antrean.data.length === 0">
-                            <!-- COLSPAN DIUBAH MENJADI 7 KARENA ADA TAMBAHAN 1 KOLOM -->
                             <td
                                 colspan="7"
                                 class="px-6 py-8 text-center text-gray-500"
@@ -316,7 +418,9 @@ const goToPage = (url) => {
                 class="flex flex-wrap items-center justify-between gap-2 mt-6"
             >
                 <p class="text-sm text-gray-500">
-                    Menampilkan {{ antrean.from ?? 0 }}–{{ antrean.to ?? 0 }}
+                    Menampilkan {{ antrean.from ?? 0 }}–{{
+                        antrean.to ?? 0
+                    }}
                     dari {{ antrean.total ?? 0 }} data
                 </p>
                 <div class="flex flex-wrap gap-1">
@@ -340,5 +444,238 @@ const goToPage = (url) => {
             </div>
         </div>
     </MainLayout>
+
+
+    <!-- ================= MODAL DETAIL CUTI (Semua Role) ================= -->
+    <Teleport to="body">
+        <div
+            v-if="detailModal.show"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            @click.self="closeDetailModal"
+        >
+            <div
+                class="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden mx-4"
+            >
+                <!-- Header Modal -->
+                <div
+                    class="flex justify-between items-center px-6 py-5 border-b border-gray-100"
+                >
+                    <h3 class="text-lg font-semibold text-slate-800">
+                        Detail Cuti
+                    </h3>
+                    <button
+                        type="button"
+                        @click="closeDetailModal"
+                        class="text-gray-400 hover:text-gray-600 transition-colors"
+                    >
+                        <svg
+                            class="w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M6 18L18 6M6 6l12 12"
+                            />
+                        </svg>
+                    </button>
+                </div>
+
+
+                <!-- Body Modal: layout list, label kiri - nilai kanan -->
+                <div
+                    class="px-6 py-5 space-y-3.5 text-sm"
+                    v-if="detailModal.data"
+                >
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Nama Pegawai
+                        </div>
+                        <div
+                            class="col-span-8 font-semibold text-slate-800 leading-snug"
+                        >
+                            {{ detailModal.data.pegawai?.nama || "-" }}
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            NIP
+                        </div>
+                        <div class="col-span-8 text-slate-700 font-medium">
+                            {{ detailModal.data.pegawai?.nip || "-" }}
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Jabatan
+                        </div>
+                        <div
+                            class="col-span-8 text-slate-800 font-semibold uppercase leading-snug"
+                        >
+                            {{ detailModal.data.pegawai?.jabatan || "-" }}
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Departemen
+                        </div>
+                        <div class="col-span-8 text-slate-800 font-semibold">
+                            {{ detailModal.data.pegawai?.departemen || "-" }}
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Jenis Cuti
+                        </div>
+                        <div class="col-span-8 font-semibold text-slate-800">
+                            {{ detailModal.data.jenis_cuti || "-" }}
+                        </div>
+                    </div>
+
+
+                    <!-- Sisa Cuti Tahunan (mengikuti logika Dashboard) -->
+                    <div
+                        v-if="
+                            detailModal.data.jenis_cuti
+                                ?.toLowerCase()
+                                .includes('tahunan')
+                        "
+                        class="grid grid-cols-12 gap-2 items-center bg-blue-50/50 border border-blue-100 rounded-lg px-2 py-2 -mx-1"
+                    >
+                        <div class="col-span-4 text-gray-600 font-medium">
+                            Sisa Cuti Tahunan
+                        </div>
+                        <div class="col-span-8 font-bold text-blue-600">
+                            {{
+                                detailModal.data.pegawai?.sisa_cuti_tersedia ??
+                                0
+                            }}
+                            Hari
+                            <span
+                                class="text-xs font-normal text-gray-500 ml-1"
+                            >
+                                (Tahun ini:
+                                {{
+                                    (detailModal.data.pegawai
+                                        ?.sisa_cuti_tersedia ?? 0) -
+                                    (detailModal.data.pegawai
+                                        ?.sisa_tahun_lalu ?? 0)
+                                }}
+                                hari, Tahun lalu:
+                                {{
+                                    detailModal.data.pegawai?.sisa_tahun_lalu ??
+                                    0
+                                }}
+                                hari)
+                            </span>
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Waktu Cuti
+                        </div>
+                        <div class="col-span-8 text-slate-800 font-semibold">
+                            {{ formatDate(detailModal.data.tanggal_mulai) }} s/d
+                            {{ formatDate(detailModal.data.tanggal_selesai) }}
+                            ({{ detailModal.data.jumlah_hari }} Hari)
+                        </div>
+                    </div>
+
+
+                    <!-- Alasan: pakai helper formatKeteranganRapi agar kalimat lama/
+                         format mentah tetap tampil sebagai kalimat manusiawi -->
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Alasan
+                        </div>
+                        <div
+                            class="col-span-8 text-slate-800 font-semibold leading-relaxed"
+                        >
+                            {{
+                                formatKeteranganRapi(
+                                    detailModal.data.keterangan,
+                                )
+                            }}
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Alamat
+                        </div>
+                        <div
+                            class="col-span-8 text-slate-800 font-semibold uppercase leading-normal"
+                        >
+                            {{
+                                detailModal.data.alamat_selama_cuti ||
+                                detailModal.data.alamat_cuti ||
+                                "-"
+                            }}
+                        </div>
+                    </div>
+
+
+                    <div class="grid grid-cols-12 gap-2 items-center pt-1">
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Lampiran
+                        </div>
+                        <div class="col-span-8">
+                            <div
+                                class="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-400 rounded-xl text-xs font-medium"
+                            >
+                                <svg
+                                    class="w-4 h-4"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                    />
+                                </svg>
+                                Tidak ada lampiran
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <!-- Footer Modal: area status abu-abu pucat -->
+                <div
+                    class="bg-slate-50/70 border-t border-gray-100 px-6 py-4 text-center"
+                >
+                    <p
+                        class="text-sm font-medium text-gray-500"
+                        v-if="detailModal.data"
+                    >
+                        {{
+                            statusLabels[detailModal.data.status] ||
+                            detailModal.data.status ||
+                            "Menunggu Persetujuan"
+                        }}
+                    </p>
+                </div>
+            </div>
+        </div>
+    </Teleport>
 </template>
+
+
 

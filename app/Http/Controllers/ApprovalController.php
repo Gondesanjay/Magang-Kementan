@@ -20,7 +20,8 @@ class ApprovalController extends Controller
     public function index(Request $request)
     {
         $user = Auth::user();
-        $query = PengajuanCuti::with('pegawai');
+        // PERBAIKAN: Menambahkan relasi 'saldoCutiTahunIni' agar sisa cuti terbawa ke frontend
+        $query = PengajuanCuti::with(['pegawai.saldoCutiTahunIni']);
 
 
         if ($user->role_id === 2) { // L1 (Ketua Tim)
@@ -57,9 +58,41 @@ class ApprovalController extends Controller
         }
 
 
-        $antrean = $query->orderBy('created_at', 'asc')
+        // Pengurutan data terbaru di paling atas
+        $antrean = $query->orderBy('created_at', 'desc')
             ->paginate(10)
             ->withQueryString();
+
+
+        // Hitung sisa cuti dinamis (sama persis logika Dashboard) untuk setiap item
+        $tahun = date('Y');
+        $antrean->getCollection()->transform(function ($item) use ($tahun) {
+            $saldo = $item->pegawai->saldoCutiTahunIni ?? null;
+
+
+            $kuotaTahunan  = $saldo->kuota_tahunan ?? 0;
+            $sisaTahunLalu = $saldo->sisa_cuti_tahun_lalu ?? 0;
+
+
+            $cutiTerpakai = PengajuanCuti::where('pegawai_id', $item->pegawai_id)
+                ->where('jenis_cuti', 'Cuti Tahunan')
+                ->where('status', 'disetujui')
+                ->whereYear('tanggal_mulai', $tahun)
+                ->sum('jumlah_hari');
+
+
+            $totalTersedia = ($kuotaTahunan + $sisaTahunLalu) - $cutiTerpakai;
+
+
+            // Tambahkan property baru ke object pegawai agar bisa dibaca di Vue
+            $item->pegawai->sisa_cuti_tersedia = $totalTersedia;
+            $item->pegawai->kuota_tahunan      = $kuotaTahunan;
+            $item->pegawai->sisa_tahun_lalu    = $sisaTahunLalu;
+            $item->pegawai->cuti_terpakai      = $cutiTerpakai;
+
+
+            return $item;
+        });
 
 
         return Inertia::render('Atasan/AntreanApproval', [
@@ -118,11 +151,21 @@ class ApprovalController extends Controller
         ][$statusSaatIni];
 
 
-        // --- JIKA DITOLAK ---
+        // --- JIKA DITOLAK / DITANGGUHKAN ---
         if ($request->action === 'reject') {
-            $alasanPenolakan = $request->input('catatan', 'Ditolak oleh atasan');
-            $keteranganLama = explode('|', $pengajuan->keterangan)[0];
-            $keteranganBaru = trim($keteranganLama) . ' | ' . $alasanPenolakan;
+            $alasanPenolakan = $request->input('catatan', 'Ada agenda/tugas kantor');
+            $namaApprover = $user->nama ?? 'Atasan'; // Mengambil nama atasan yang sedang login
+
+
+            // Ambil alasan murni pegawai (bagian sebelum tanda '|')
+            $alasanUtama = trim(explode('|', $pengajuan->keterangan)[0]);
+            if (empty($alasanUtama) || $alasanUtama === '-') {
+                $alasanUtama = 'Tidak ada alasan awal';
+            }
+
+
+            // Format kalimat rapi memuat nama atasan & keterangan cuti ulang
+            $keteranganBaru = "{$alasanUtama} (Ditangguhkan oleh {$namaApprover}: {$alasanPenolakan} — Pengajuan Cuti Ulang)";
 
 
             $pengajuan->update(['status' => 'ditolak', 'keterangan' => $keteranganBaru]);
@@ -141,13 +184,13 @@ class ApprovalController extends Controller
             // Kirim notifikasi penolakan ke pegawai
             Notifikasi::create([
                 'pegawai_id' => $targetUserId,
-                'judul'      => 'Pengajuan Cuti Ditolak',
-                'pesan'      => 'Pengajuan Anda ditolak oleh atasan. Alasan: ' . $alasanPenolakan,
+                'judul'      => 'Pengajuan Cuti Ditangguhkan',
+                'pesan'      => 'Pengajuan Anda ditangguhkan oleh ' . $namaApprover . '. Alasan: ' . $alasanPenolakan,
                 'is_read'    => false,
             ]);
 
 
-            return back()->with('success', 'Pengajuan cuti berhasil ditolak.');
+            return back()->with('success', 'Pengajuan cuti berhasil ditangguhkan.');
         }
 
 
@@ -318,7 +361,8 @@ class ApprovalController extends Controller
     public function history(Request $request)
     {
         $user = Auth::user();
-        $query = PengajuanCuti::with('pegawai');
+        // PERBAIKAN: Menambahkan relasi 'saldoCutiTahunIni' pada riwayat
+        $query = PengajuanCuti::with(['pegawai.saldoCutiTahunIni']);
 
 
         // Logika filter riwayat: Tampilkan data yang SUDAH melewati tahap/level atasan tersebut

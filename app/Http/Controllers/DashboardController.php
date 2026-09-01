@@ -1,6 +1,12 @@
 <?php
 
+
+
+
 namespace App\Http\Controllers;
+
+
+
 
 use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
@@ -58,7 +64,12 @@ class DashboardController extends Controller
 
             // Hitung cuti terpakai secara dinamis
             $kuotaTahunan = $saldo ? $saldo->kuota_tahunan : 0;
-            $sisaTahunLalu = $saldo ? $saldo->sisa_cuti_tahun_lalu : 0;
+            // ---> PERBAIKAN: nama kolom asli di tabel `saldo_cutis` adalah
+            // 'carry_forward_normal', BUKAN 'sisa_cuti_tahun_lalu'. Kolom
+            // 'sisa_cuti_tahun_lalu' tidak pernah ada di database, jadi
+            // sebelumnya nilai ini SELALU null/0 berapa pun yang di-input
+            // Admin HR lewat form Kelola Pegawai.
+            $sisaTahunLalu = $saldo ? $saldo->carry_forward_normal : 0;
             $cutiTerpakai = PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
                 ->where('status', 'disetujui')
@@ -150,7 +161,9 @@ class DashboardController extends Controller
 
             // Hitung dinamis untuk Atasan/Admin
             $kuotaTahunanAtasan = $saldoAtasan?->kuota_tahunan ?? 12;
-            $sisaTahunLaluAtasan = $saldoAtasan?->sisa_cuti_tahun_lalu ?? 0;
+            // ---> PERBAIKAN: sama seperti di atas, nama kolom asli adalah
+            // 'carry_forward_normal', bukan 'sisa_cuti_tahun_lalu'.
+            $sisaTahunLaluAtasan = $saldoAtasan?->carry_forward_normal ?? 0;
             $cutiTerpakaiAtasan = $saldoAtasan
                 ? PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
