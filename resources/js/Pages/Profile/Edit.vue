@@ -8,11 +8,12 @@ const page = usePage();
 const user = computed(() => page.props.auth.user);
 
 
-// Setup Form Data Diri (Menambahkan alamat_domisili)
+// Setup Form Data Diri (Menambahkan alamat_domisili & no_telepon)
 const profileForm = useForm({
     _method: "patch",
     nama: user.value.nama,
-    alamat_domisili: user.value.alamat_domisili || "", // Kolom baru agar bisa diedit
+    alamat_domisili: user.value.alamat_domisili || "", // Kolom agar bisa diedit
+    no_telepon: user.value.no_telepon || "", // Kolom baru: Nomor Telepon
     foto_profil: null,
 });
 
@@ -321,6 +322,26 @@ const updatePassword = () => {
                             </div>
 
 
+                            <!-- Input Nomor Telepon (Baru) -->
+                            <div>
+                                <label
+                                    class="block text-sm font-medium text-slate-700 mb-1"
+                                    >Nomor Telepon</label
+                                >
+                                <input
+                                    v-model="profileForm.no_telepon"
+                                    type="text"
+                                    placeholder="Contoh: 081234567890"
+                                    class="w-full rounded-lg border-slate-300 shadow-sm focus:border-green-500 focus:ring-green-500 text-sm py-2 px-3"
+                                />
+                                <span
+                                    v-if="profileForm.errors.no_telepon"
+                                    class="text-xs text-red-500 mt-1"
+                                    >{{ profileForm.errors.no_telepon }}</span
+                                >
+                            </div>
+
+
                             <!-- Input NIP, Divisi, Jabatan, Kelompok, Tim Kerja (Read-Only) -->
                             <div class="pt-6 mt-4 border-t border-slate-100">
                                 <p
@@ -528,6 +549,3 @@ const updatePassword = () => {
         </div>
     </MainLayout>
 </template>
-
-
-

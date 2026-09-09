@@ -3,7 +3,6 @@ import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, router } from "@inertiajs/vue3";
 import { ref, watch, computed } from "vue";
 
-
 const props = defineProps({
     laporan: {
         type: Array,
@@ -13,8 +12,17 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    // ---> BARU: info pagination dari server (lihat AdminController@rekapLaporan) <---
+    pagination: {
+        type: Object,
+        default: () => ({
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 0,
+        }),
+    },
 });
-
 
 // State untuk filter, mengambil nilai default dari backend jika ada
 const searchQuery = ref(props.filters.search || "");
@@ -22,7 +30,6 @@ const filterTahun = ref(
     props.filters.tahun || new Date().getFullYear().toString(),
 );
 const filterBulan = ref(props.filters.bulan || "");
-
 
 // Daftar bulan untuk looping header tabel dan key data
 const bulanList = [
@@ -54,15 +61,24 @@ const keyBulan = [
     "des",
 ];
 
+// ================= PAGINATION SERVER-SIDE (10 BARIS PER HALAMAN) =================
+// Sekarang backend (AdminController@rekapLaporan) yang memotong data jadi
+// 10 baris per halaman, bukan lagi Vue. Nomor halaman ikut dikirim lewat
+// query string (?page=...) setiap kali fetchFilteredData dipanggil.
 
-// Fungsi Auto-Submit menggunakan Inertia router.get
-const fetchFilteredData = () => {
+// Fungsi Auto-Submit menggunakan Inertia router.get.
+// Parameter "page" opsional: dipakai saat pindah halaman lewat tombol
+// paginasi. Kalau tidak diisi, otomatis kembali ke halaman 1 — dipakai saat
+// search/filter bulan/tahun berubah, supaya tidak "nyangkut" di halaman
+// kosong pada hasil filter yang baru.
+const fetchFilteredData = (page = 1) => {
     router.get(
         route("admin.rekap"), // Nama route sesuai pendaftaran di routes/web.php
         {
             search: searchQuery.value,
             tahun: filterTahun.value,
             bulan: filterBulan.value,
+            page,
         },
         {
             preserveState: true,
@@ -72,22 +88,51 @@ const fetchFilteredData = () => {
     );
 };
 
-
-// Watcher untuk Dropdown (Langsung fetch saat dipilih)
+// Watcher untuk Dropdown (Langsung fetch saat dipilih, kembali ke halaman 1)
 watch([filterTahun, filterBulan], () => {
-    fetchFilteredData();
+    fetchFilteredData(1);
 });
-
 
 // Watcher untuk Input Pencarian (Menggunakan delay/debounce agar tidak spam request saat mengetik)
 let searchTimeout = null;
 watch(searchQuery, () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
-        fetchFilteredData();
+        fetchFilteredData(1);
     }, 500); // delay 500ms
 });
 
+// Pindah ke halaman tertentu (dipakai oleh kontrol paginasi di bawah tabel)
+const goToPage = (page) => {
+    if (page < 1 || page > props.pagination.last_page) return;
+    if (page === props.pagination.current_page) return;
+    fetchFilteredData(page);
+};
+
+// Nomor urut ("No") tetap berlanjut sesuai halaman aktif (11, 12, 13, ...
+// di halaman 2, dst), bukan reset ke 1 tiap halaman.
+const startIndex = computed(
+    () => (props.pagination.current_page - 1) * props.pagination.per_page,
+);
+
+// Daftar nomor halaman yang ditampilkan (maks 5 tombol, dengan ellipsis sederhana)
+const pageNumbers = computed(() => {
+    const total = props.pagination.last_page;
+    const current = props.pagination.current_page;
+    const delta = 2;
+    const range = [];
+
+    for (
+        let i = Math.max(1, current - delta);
+        i <= Math.min(total, current + delta);
+        i++
+    ) {
+        range.push(i);
+    }
+
+    return range;
+});
+// ================= END PAGINATION SERVER-SIDE =================
 
 // Kolom bulan yang ditampilkan di tabel.
 // Jika filterBulan dipilih (misal Agustus), tabel hanya menampilkan 1 kolom bulan itu.
@@ -103,13 +148,11 @@ const columnsToShow = computed(() => {
         ];
     }
 
-
     return bulanList.map((label, index) => ({
         label,
         key: keyBulan[index],
     }));
 });
-
 
 // ================= PERBAIKAN TAMPILAN EMPTY STATE =================
 // Sebelumnya pesan kosong selalu generik ("Belum ada data rekapitulasi cuti
@@ -119,19 +162,16 @@ const columnsToShow = computed(() => {
 // Sekarang pesan menyesuaikan filter yang sedang aktif, plus disediakan
 // tombol Reset Filter supaya Admin HR mudah kembali melihat semua data.
 
-
 // Apakah ada filter yang sedang aktif (selain tahun, karena tahun selalu terisi)
 const isFilterAktif = computed(() => {
     return Boolean(searchQuery.value) || Boolean(filterBulan.value);
 });
-
 
 // Pesan kontekstual untuk empty state, menyebutkan filter yang sedang aktif
 const emptyStateMessage = computed(() => {
     const bagianBulan = filterBulan.value
         ? bulanList[parseInt(filterBulan.value, 10) - 1]
         : null;
-
 
     if (bagianBulan && searchQuery.value) {
         return `Tidak ditemukan pengajuan cuti untuk "${searchQuery.value}" pada bulan ${bagianBulan} ${filterTahun.value}.`;
@@ -145,21 +185,18 @@ const emptyStateMessage = computed(() => {
     return `Belum ada data rekapitulasi cuti untuk tahun ${filterTahun.value}.`;
 });
 
-
 // Reset semua filter (kecuali tahun, biarkan tahun berjalan tetap dipilih)
 // supaya Admin HR bisa langsung melihat kembali seluruh data.
 const resetFilters = () => {
     searchQuery.value = "";
     filterBulan.value = "";
-    fetchFilteredData();
+    fetchFilteredData(1);
 };
 // ================= END PERBAIKAN TAMPILAN EMPTY STATE =================
 </script>
 
-
 <template>
     <Head title="Rekap Laporan Cuti" />
-
 
     <MainLayout>
         <div class="p-6">
@@ -173,7 +210,6 @@ const resetFilters = () => {
                     <h2 class="text-xl font-bold text-gray-700">
                         Rekapitulasi Cuti Tahunan Pegawai
                     </h2>
-
 
                     <div
                         class="flex flex-wrap items-center gap-3 w-full xl:w-auto"
@@ -205,12 +241,20 @@ const resetFilters = () => {
                             />
                         </div>
 
-
-                        <!-- Dropdown Bulan -->
+                        <!--
+                            Dropdown Bulan
+                            PERBAIKAN TAMPILAN:
+                            - "bg-none" ditambahkan supaya tidak numpuk sama
+                              background-image chevron bawaan (mis. dari plugin
+                              @tailwindcss/forms) dengan SVG panah custom di bawah
+                              -> ini yang bikin efek "berbayang"/dobel sebelumnya.
+                            - border & warna teks dibikin lebih tegas (tidak pudar),
+                              menyamai gaya dropdown di halaman Monitoring Cuti.
+                        -->
                         <div class="relative">
                             <select
                                 v-model="filterBulan"
-                                class="pl-4 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white min-w-[120px]"
+                                class="pl-4 pr-8 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 font-medium focus:ring-blue-500 focus:border-blue-500 appearance-none bg-none bg-white min-w-[120px]"
                             >
                                 <option value="">Semua Bulan</option>
                                 <option
@@ -225,7 +269,7 @@ const resetFilters = () => {
                                 class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
                             >
                                 <svg
-                                    class="w-4 h-4 text-gray-400"
+                                    class="w-4 h-4 text-gray-500"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -240,14 +284,18 @@ const resetFilters = () => {
                             </span>
                         </div>
 
-
-                        <!-- Dropdown Tahun -->
+                        <!--
+                            Dropdown Tahun
+                            PERBAIKAN TAMPILAN: sama seperti Dropdown Bulan di atas
+                            -> "bg-none" (fix efek berbayang) + border & teks lebih
+                            tegas + ikon kalender & panah dibikin lebih pekat.
+                        -->
                         <div class="relative">
                             <span
                                 class="absolute inset-y-0 left-0 flex items-center pl-3"
                             >
                                 <svg
-                                    class="w-4 h-4 text-gray-400"
+                                    class="w-4 h-4 text-gray-500"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -262,7 +310,7 @@ const resetFilters = () => {
                             </span>
                             <select
                                 v-model="filterTahun"
-                                class="pl-10 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 appearance-none bg-white"
+                                class="pl-10 pr-8 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 font-medium focus:ring-blue-500 focus:border-blue-500 appearance-none bg-none bg-white"
                             >
                                 <option value="2026">2026</option>
                                 <option value="2025">2025</option>
@@ -272,7 +320,7 @@ const resetFilters = () => {
                                 class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
                             >
                                 <svg
-                                    class="w-4 h-4 text-gray-400"
+                                    class="w-4 h-4 text-gray-500"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -286,7 +334,6 @@ const resetFilters = () => {
                                 </svg>
                             </span>
                         </div>
-
 
                         <!-- Tombol Export Data Excel -->
                         <a
@@ -317,7 +364,6 @@ const resetFilters = () => {
                         </a>
                     </div>
                 </div>
-
 
                 <!-- Tabel Matriks Sesuai Screenshot -->
                 <div class="overflow-x-auto rounded-lg border border-gray-200">
@@ -355,13 +401,13 @@ const resetFilters = () => {
                         >
                             <tr
                                 v-for="(item, index) in laporan"
-                                :key="item.id || index"
+                                :key="item.id || startIndex + index"
                                 class="hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)] transition-all duration-150"
                             >
                                 <td
                                     class="px-4 py-4 whitespace-nowrap text-center text-sm font-semibold text-gray-800 border-r border-gray-200"
                                 >
-                                    {{ index + 1 }}
+                                    {{ startIndex + index + 1 }}
                                 </td>
                                 <td
                                     class="px-6 py-4 whitespace-nowrap border-r border-gray-200"
@@ -408,7 +454,6 @@ const resetFilters = () => {
                                 </td>
                             </tr>
                         </tbody>
-
 
                         <!-- ================= PERBAIKAN EMPTY STATE =================
                              Pesan sekarang menyesuaikan filter yang sedang aktif (lihat
@@ -476,11 +521,107 @@ const resetFilters = () => {
                         <!-- ================= END PERBAIKAN EMPTY STATE ================= -->
                     </table>
                 </div>
+
+                <!-- ================= KONTROL PAGINASI SERVER-SIDE (10 BARIS/HALAMAN) ================= -->
+                <div
+                    v-if="laporan.length > 0"
+                    class="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4"
+                >
+                    <p class="text-xs text-gray-500">
+                        Menampilkan
+                        <span class="font-semibold text-gray-700">{{
+                            startIndex + 1
+                        }}</span>
+                        -
+                        <span class="font-semibold text-gray-700">{{
+                            Math.min(
+                                startIndex + pagination.per_page,
+                                pagination.total,
+                            )
+                        }}</span>
+                        dari
+                        <span class="font-semibold text-gray-700">{{
+                            pagination.total
+                        }}</span>
+                        pegawai
+                    </p>
+
+                    <div
+                        v-if="pagination.last_page > 1"
+                        class="flex items-center gap-1"
+                    >
+                        <button
+                            type="button"
+                            :disabled="pagination.current_page === 1"
+                            @click="goToPage(pagination.current_page - 1)"
+                            class="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                            Sebelumnya
+                        </button>
+
+                        <button
+                            v-if="pageNumbers[0] > 1"
+                            type="button"
+                            @click="goToPage(1)"
+                            class="w-8 h-8 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                        >
+                            1
+                        </button>
+                        <span
+                            v-if="pageNumbers[0] > 2"
+                            class="px-1 text-xs text-gray-400"
+                            >...</span
+                        >
+
+                        <button
+                            v-for="page in pageNumbers"
+                            :key="page"
+                            type="button"
+                            @click="goToPage(page)"
+                            :class="[
+                                'w-8 h-8 text-xs font-semibold rounded-lg border transition-colors',
+                                page === pagination.current_page
+                                    ? 'bg-blue-600 border-blue-600 text-white'
+                                    : 'border-gray-300 text-gray-600 hover:bg-gray-50',
+                            ]"
+                        >
+                            {{ page }}
+                        </button>
+
+                        <span
+                            v-if="
+                                pageNumbers[pageNumbers.length - 1] <
+                                pagination.last_page - 1
+                            "
+                            class="px-1 text-xs text-gray-400"
+                            >...</span
+                        >
+                        <button
+                            v-if="
+                                pageNumbers[pageNumbers.length - 1] <
+                                pagination.last_page
+                            "
+                            type="button"
+                            @click="goToPage(pagination.last_page)"
+                            class="w-8 h-8 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                        >
+                            {{ pagination.last_page }}
+                        </button>
+
+                        <button
+                            type="button"
+                            :disabled="
+                                pagination.current_page === pagination.last_page
+                            "
+                            @click="goToPage(pagination.current_page + 1)"
+                            class="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                            Berikutnya
+                        </button>
+                    </div>
+                </div>
+                <!-- ================= END KONTROL PAGINASI ================= -->
             </div>
         </div>
     </MainLayout>
 </template>
-
-
-
-

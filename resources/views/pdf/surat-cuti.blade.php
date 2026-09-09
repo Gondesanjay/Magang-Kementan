@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="id">
 
+
 <head>
     <meta charset="UTF-8">
     <title>Surat Persetujuan Cuti - {{ $pegawai->nama }}</title>
@@ -13,6 +14,7 @@
             color: #000;
         }
 
+
         .title {
             text-align: center;
             font-weight: bold;
@@ -21,10 +23,12 @@
             text-decoration: underline;
         }
 
+
         .content {
             margin-top: 20px;
             text-align: justify;
         }
+
 
         .table-info {
             width: 100%;
@@ -33,25 +37,30 @@
             border-collapse: collapse;
         }
 
+
         .table-info td {
             padding: 4px 0;
             vertical-align: top;
         }
 
+
         .table-info td:first-child {
             width: 25%;
         }
+
 
         .table-info td:nth-child(2) {
             width: 3%;
             text-align: center;
         }
 
+
         .status-box {
             font-weight: bold;
             margin-top: 15px;
             margin-bottom: 15px;
         }
+
 
         .signature-table {
             width: 100%;
@@ -60,31 +69,47 @@
             border-collapse: collapse;
         }
 
+
         .signature-table td {
             width: 50%;
             padding: 5px;
             vertical-align: bottom;
         }
 
+
         .signature-date {
             text-align: center;
             margin-bottom: 10px;
         }
 
+
+        /* PERBAIKAN KERAPIAN FORMAT: font-size nama penandatangan diperkecil
+           lagi ke 10pt (dari semula 11pt) karena nama yang lebih panjang
+           bergelar (mis. "Seta Rukmalasari Agustina, S.P., M.M.A., M.Sc.")
+           masih terpotong jadi dua baris di 11pt. Ukuran 10pt dipastikan
+           cukup untuk memuat nama terpanjang dalam satu baris di lebar
+           kolom tanda tangan (50% halaman), sekaligus tetap proporsional
+           dengan teks jabatan di atasnya. */
         .signature-name {
             text-decoration: underline;
             font-weight: bold;
+            font-size: 10pt;
+            white-space: nowrap;
             margin-top: 80px;
         }
     </style>
 </head>
 
+
 <body>
+
 
     <div class="title">LEMBAR PERSETUJUAN CUTI</div>
 
+
     <div class="content">
         <p>Berdasarkan permohonan cuti yang telah diajukan melalui sistem kepegawaian, dengan ini disampaikan bahwa:</p>
+
 
         <table class="table-info">
             <tr>
@@ -128,18 +153,22 @@
             </tr>
         </table>
 
+
         <div class="status-box">
             Status Permohonan : DISETUJUI
         </div>
 
+
         <p>Pegawai yang bersangkutan diberikan izin untuk melaksanakan cuti pada periode tersebut sesuai ketentuan peraturan perundang-undangan.</p>
     </div>
+
 
     <!-- Tarik data L3 dan L4 langsung dari database untuk semua pengajuan -->
     @php
     $kasubag = \App\Models\Pegawai::where('jabatan', 'Kepala Subbagian Tata Usaha')->first();
     $kabiro = \App\Models\Pegawai::where('jabatan', 'Kepala Biro Perencanaan')->first();
     @endphp
+
 
     <table class="signature-table">
         <tr>
@@ -148,6 +177,7 @@
                 <br>
                 Atasan Langsung,<br>
                 Kepala Subbagian Tata Usaha
+
 
                 <!-- AREA GAMBAR TANDA TANGAN L3 -->
                 <div style="height: 70px; margin: 10px 0;">
@@ -161,11 +191,17 @@
                     @endif
                 </div>
 
+
+                <!-- PERBAIKAN: strtoupper() dihapus supaya nama tampil apa
+                     adanya (Title Case) sesuai data di database, bukan
+                     dipaksa huruf kapital semua. Fallback string statis juga
+                     disesuaikan formatnya. -->
                 <div class="signature-name">
-                    {{ $kasubag ? strtoupper($kasubag->nama) : 'IGNATIUS AGUS HENDARTO, S.E., M.M.' }}
+                    {{ $kasubag ? $kasubag->nama : 'Ignatius Agus Hendarto, S.E., M.M.' }}
                 </div>
                 NIP. {{ $kasubag ? $kasubag->nip : '777666555' }}
             </td>
+
 
             <!-- Kolom Kanan: Pejabat Berwenang (L4 - Kepala Biro Perencanaan) -->
             <td>
@@ -175,6 +211,7 @@
                 Mengetahui,<br>
                 Pejabat Yang Berwenang Memberikan Cuti<br>
                 Kepala Biro Perencanaan
+
 
                 <!-- AREA GAMBAR TANDA TANGAN L4 -->
                 <div style="height: 70px; margin: 10px 0;">
@@ -187,14 +224,19 @@
                     @endif
                 </div>
 
+
+                <!-- PERBAIKAN: strtoupper() dihapus, sama seperti kolom kiri -->
                 <div class="signature-name">
-                    {{ $kabiro ? strtoupper($kabiro->nama) : 'SETA RUKMALASARI AGUSTINA, S.P., M.M.A., M.Sc.' }}
+                    {{ $kabiro ? $kabiro->nama : 'Seta Rukmalasari Agustina, S.P., M.M.A., M.Sc.' }}
                 </div>
                 NIP. {{ $kabiro ? $kabiro->nip : '666555444' }}
             </td>
         </tr>
     </table>
 
+
 </body>
 
+
 </html>
+

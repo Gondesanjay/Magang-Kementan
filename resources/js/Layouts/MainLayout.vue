@@ -106,6 +106,15 @@ const formatJam = (tanggal) => {
         })
         .replace(".", ":");
 };
+
+
+// Label menu untuk route 'atasan.approval' dibuat dinamis sesuai role:
+// - Atasan (role 2,3,4,6) -> "Approval Cuti" (tugasnya menyetujui/menolak)
+// - Admin HR (role 5)     -> "Monitoring Cuti" (tugasnya memantau seluruh transaksi cuti)
+// Route dan halaman yang dituju TETAP SAMA ('atasan.approval'), hanya teksnya yang berbeda.
+const approvalMenuLabel = computed(() =>
+    user.value.role_id === 5 ? "Monitoring Cuti" : "Approval Cuti",
+);
 </script>
 
 
@@ -117,7 +126,7 @@ const formatJam = (tanggal) => {
         <!-- SIDEBAR PREMIUM GRADASI GELAP -->
         <aside
             :class="[
-                'bg-gradient-to-b from-[#1e293b] via-[#0f172a] to-[#020617] border-r border-slate-700/50 flex flex-col transition-all duration-300 shadow-[4px_0_24px_rgba(0,0,0,0.15)] z-40 hidden md:flex text-white h-screen fixed top-0 left-0',
+                'bg-gradient-to-b from-[#1e293b] via-[#0f172a] to-[#020617] border-r border-slate-700/50 flex-col transition-all duration-300 shadow-[4px_0_24px_rgba(0,0,0,0.15)] z-40 hidden md:flex text-white h-screen fixed top-0 left-0',
                 isSidebarOpen ? 'w-64' : 'w-20',
             ]"
         >
@@ -291,7 +300,7 @@ const formatJam = (tanggal) => {
                 </div>
 
 
-                <!-- Role 2,3,4,5,6 -> Approval, Role 6 saja -> Pembatalan -->
+                <!-- Role 2,3,4,5,6 -> Approval, Role 6 saja -> Penangguhan -->
                 <div v-if="[2, 3, 4, 5, 6].includes(user.role_id)">
                     <p
                         v-show="isSidebarOpen"
@@ -299,9 +308,16 @@ const formatJam = (tanggal) => {
                     >
                         Managerial
                     </p>
+                    <!-- Label dinamis (route tetap 'atasan.approval'):
+                         - Atasan (role 2,3,4,6) -> "Approval Cuti"
+                         - Admin HR (role 5)     -> "Monitoring Cuti"
+                         CATATAN: menu ini sudah mencakup role 5 (HR Admin) sejak awal,
+                         karena kondisi v-if di atas adalah [2,3,4,5,6]. Jadi HR Admin
+                         SEHARUSNYA sudah melihat menu ini juga di posisi yang sama
+                         dengan atasan L1-L4, terpisah dari menu grup "HR Admin" di bawah. -->
                     <Link
                         :href="route('atasan.approval')"
-                        :title="!isSidebarOpen ? 'Approval Cuti' : ''"
+                        :title="!isSidebarOpen ? approvalMenuLabel : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
                             isActive('atasan.approval')
@@ -323,17 +339,56 @@ const formatJam = (tanggal) => {
                                 d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
                             ></path>
                         </svg>
+                        <span v-show="isSidebarOpen" class="truncate">{{
+                            approvalMenuLabel
+                        }}</span>
+                    </Link>
+                    <!-- Label: "Monitoring Cuti" (route tetap 'atasan.kuota').
+                         Sembunyikan untuk role 5 (HR Admin).
+                         Role 5 tetap punya "Rekap Kuota Detail" di blok HR Admin (admin.monitoring).
+                         Approval Cuti di atas tetap tampil untuk role 5. -->
+                    <Link
+                        v-if="user.role_id !== 5"
+                        :href="route('atasan.kuota')"
+                        :title="!isSidebarOpen ? 'Monitoring Cuti' : ''"
+                        :class="[
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
+                            isActive('atasan.kuota')
+                                ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
+                                : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
+                            !isSidebarOpen ? 'justify-center' : '',
+                        ]"
+                    >
+                        <svg
+                            class="w-5 h-5 shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                            ></path>
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                            ></path>
+                        </svg>
                         <span v-show="isSidebarOpen" class="truncate"
-                            >Approval Cuti</span
+                            >Monitoring Cuti</span
                         >
                     </Link>
                     <Link
                         v-if="user.role_id === 6"
-                        :href="route('atasan.pembatalan')"
-                        :title="!isSidebarOpen ? 'Batalkan Cuti' : ''"
+                        :href="route('atasan.penangguhan')"
+                        :title="!isSidebarOpen ? 'Penangguhan Cuti' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
-                            isActive('atasan.pembatalan')
+                            isActive('atasan.penangguhan')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
                             !isSidebarOpen ? 'justify-center' : '',
@@ -353,14 +408,19 @@ const formatJam = (tanggal) => {
                             ></path>
                         </svg>
                         <span v-show="isSidebarOpen" class="truncate"
-                            >Batalkan Cuti</span
+                            >Penangguhan Cuti</span
                         >
                     </Link>
                 </div>
 
 
                 <!-- Role 5 -> HR Admin: gabungan lengkap dari kedua versi
-                     (Kelola Pegawai + Monitoring Cuti + Rekap Laporan + Kelola Hari Libur) -->
+                     (Kelola Pegawai + Rekap Kuota Detail + Rekap Laporan + Kelola Hari Libur).
+                     Menu "Approval Cuti" (antrean approval) untuk role 5 TETAP ADA
+                     di blok "Managerial" di atas (route 'atasan.approval'), TIDAK
+                     dihapus atau digabung ke sini, supaya "Rekap Kuota Detail" (yang
+                     memang halaman berbeda: rekap saldo/kuota, bukan antrean approval)
+                     tetap utuh sebagai fitur terpisah. -->
                 <div v-if="user.role_id === 5">
                     <p
                         v-show="isSidebarOpen"
@@ -400,9 +460,13 @@ const formatJam = (tanggal) => {
                     </Link>
 
 
+                    <!-- Label: "Rekap Kuota Detail" (route tetap 'admin.monitoring').
+                         Fitur ini TIDAK diubah/dihapus - tetap route 'admin.monitoring'
+                         seperti sebelumnya, karena isinya rekap kuota/saldo, berbeda
+                         dari antrean approval di menu "Approval Cuti" pada blok Managerial. -->
                     <Link
                         :href="route('admin.monitoring')"
-                        :title="!isSidebarOpen ? 'Monitoring Cuti' : ''"
+                        :title="!isSidebarOpen ? 'Rekap Kuota Detail' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('admin.monitoring')
@@ -432,7 +496,7 @@ const formatJam = (tanggal) => {
                             ></path>
                         </svg>
                         <span v-show="isSidebarOpen" class="truncate"
-                            >Monitoring Cuti</span
+                            >Rekap Kuota Detail</span
                         >
                     </Link>
                     <Link
@@ -720,7 +784,9 @@ const formatJam = (tanggal) => {
                                                 >
                                                     <span
                                                         class="inline-block px-3 py-1 text-[11px] font-medium border rounded-full leading-none"
-                                                        :class="badgeStyle(notif)"
+                                                        :class="
+                                                            badgeStyle(notif)
+                                                        "
                                                     >
                                                         {{ notif.pesan }}
                                                     </span>
@@ -744,8 +810,16 @@ const formatJam = (tanggal) => {
                                                             d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
                                                         ></path>
                                                     </svg>
-                                                    {{ formatTanggal(notif.created_at) }},
-                                                    {{ formatJam(notif.created_at) }}
+                                                    {{
+                                                        formatTanggal(
+                                                            notif.created_at,
+                                                        )
+                                                    }},
+                                                    {{
+                                                        formatJam(
+                                                            notif.created_at,
+                                                        )
+                                                    }}
                                                 </p>
                                             </div>
                                             <span
@@ -1002,4 +1076,6 @@ const formatJam = (tanggal) => {
     background: #475569;
 }
 </style>
+
+
 
