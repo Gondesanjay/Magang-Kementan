@@ -176,6 +176,30 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     // memakai controller yang sama untuk modul Kelola Pegawai.
     Route::delete('/admin/pegawai/{id}', [AdminController::class, 'destroyPegawai'])->name('admin.pegawai.destroy');
     Route::get('/admin/saldo-cuti', [AdminController::class, 'kelolaSaldo'])->name('admin.saldo');
+
+
+    // ================= [BARU] GENERATE SALDO CUTI TAHUN BARU (MANUAL) =================
+    // Dipanggil dari tombol "Generate Saldo Tahun Baru (Manual)" di halaman
+    // Admin/RekapKuotaDetail.vue. Method generateSaldoManual() di
+    // AdminController hanya memanggil Artisan Command
+    // 'saldo-cuti:generate-tahun-baru' — command YANG SAMA PERSIS dengan
+    // yang dijalankan otomatis oleh Laravel Scheduler setiap 1 Januari
+    // (lihat routes/console.php), supaya hasil generate manual dan
+    // otomatis selalu identik.
+    //
+    // PENTING — URUTAN ROUTE: baris ini WAJIB didaftarkan SEBELUM route
+    // '/admin/saldo-cuti/{id}' (admin.saldo.update) di bawah. Laravel
+    // mencocokkan route dari atas ke bawah dan berhenti di kecocokan
+    // PERTAMA. Kalau '/admin/saldo-cuti/{id}' didaftarkan lebih dulu, maka
+    // POST ke '/admin/saldo-cuti/generate' akan tertangkap oleh pola
+    // '{id}' tsb (dengan $id diisi string "generate"), menyebabkan
+    // TypeError pada updateSaldo(Request $request, int $id) karena $id
+    // wajib bertipe int. Riwayat bug ini sudah pernah terjadi persis
+    // seperti itu — JANGAN pindahkan baris ini ke bawah route {id} lagi.
+    Route::post('/admin/saldo-cuti/generate', [AdminController::class, 'generateSaldoManual'])->name('admin.saldo.generate');
+    // ================= [END BARU] =================
+
+
     Route::post('/admin/saldo-cuti/{id}', [AdminController::class, 'updateSaldo'])->name('admin.saldo.update');
 
 
@@ -199,6 +223,7 @@ Route::middleware(['auth', 'force.password'])->group(function () {
     // halaman Atasan tidak menampilkan fitur "Impor Kuota".
     Route::get('/admin/monitoring', [RekapKuotaDetailController::class, 'index'])->name('admin.monitoring');
     Route::get('/admin/monitoring/export', [RekapKuotaDetailController::class, 'exportExcel'])->name('admin.monitoring.export');
+    Route::put('/admin/rekap-kuota/{id}/update-saldo', [RekapKuotaDetailController::class, 'updateSaldo'])->name('admin.rekap-kuota.update-saldo');
 
 
     Route::get('/admin/rekap-laporan', [AdminController::class, 'rekapLaporan'])->name('admin.rekap');

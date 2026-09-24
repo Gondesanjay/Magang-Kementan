@@ -13,156 +13,202 @@ use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
+    /**
+     * Menempelkan info saldo cuti tahunan milik PEGAWAI PEMILIK PENGAJUAN
+     * (bukan Auth::user()) ke setiap item collection, agar modal detail
+     * menampilkan saldo yang benar.
+     */
+    private function attachSaldoInfoKePegawai($collection, int $tahun): void
+    {
+        static $cache = [];
+
+        foreach ($collection as $item) {
+            $pegawai = $item->pegawai ?? null;
+            if (!$pegawai) {
+                continue;
+            }
+
+            if (!isset($cache[$pegawai->id])) {
+                $saldo = SaldoCuti::where('pegawai_id', $pegawai->id)
+                    ->where('tahun', $tahun)
+                    ->first();
+                $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawai->id)
+                    ->where('tahun', $tahun - 1)
+                    ->first();
+
+                $kuotaTahunan = $saldo->kuota_tahunan ?? ($pegawai->jatah_cuti ?? 12);
+                $sisaTahunLalu = $saldo->carry_forward_normal ?? 0;
+                $sisaDuaTahunLalu = $saldoTahunLalu?->carry_forward_normal ?? 0;
+
+                $cutiTerpakai = PengajuanCuti::where('pegawai_id', $pegawai->id)
+                    ->where('jenis_cuti', 'Cuti Tahunan')
+                    ->where('status', 'disetujui')
+                    ->whereYear('tanggal_mulai', $tahun)
+                    ->sum('jumlah_hari');
+
+                $sisaHakTahunBerjalan = max($kuotaTahunan - $cutiTerpakai, 0);
+                $saldoBawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
+                    ? 12
+                    : min(6, $sisaTahunLalu);
+
+                $cache[$pegawai->id] = [
+                    'kuota_tahunan'            => $kuotaTahunan,
+                    'sisa_tahun_lalu'          => $sisaTahunLalu,
+                    'sisa_dua_tahun_lalu'      => $sisaDuaTahunLalu,
+                    'sisa_hak_tahun_berjalan'  => $sisaHakTahunBerjalan,
+                    'saldo_bawaan_eligible'    => $saldoBawaanEligible,
+                    'cuti_terpakai'            => $cutiTerpakai,
+                    'total_cuti_tersedia'      => $sisaHakTahunBerjalan + $saldoBawaanEligible,
+                ];
+            }
+
+            $info = $cache[$pegawai->id];
+            $pegawai->kuota_tahunan           = $info['kuota_tahunan'];
+            $pegawai->sisa_tahun_lalu         = $info['sisa_tahun_lalu'];
+            $pegawai->cuti_terpakai           = $info['cuti_terpakai'];
+            $pegawai->sisa_dua_tahun_lalu     = $info['sisa_dua_tahun_lalu'];
+            $pegawai->sisa_hak_tahun_berjalan = $info['sisa_hak_tahun_berjalan'];
+            $pegawai->saldo_bawaan_eligible   = $info['saldo_bawaan_eligible'];
+            $pegawai->total_cuti_tersedia     = $info['total_cuti_tersedia'];
+            $pegawai->sisa_cuti_tersedia      = $info['total_cuti_tersedia'];
+        }
+    }
+
+    /**
+     * Menempelkan nama atasan L1 (Ketua Tim Kerja) & L2 (Ketua Kelompok
+     * Substansi) milik PEGAWAI PEMILIK PENGAJUAN ke $item->pegawai.
+     * Diperlukan karena L1/L2 berbeda-beda per Tim Kerja / Kelompok.
+     */
+    private function attachNamaApproverL1L2KePegawai($collection): void
+    {
+        static $cache = [];
+
+        foreach ($collection as $item) {
+            $pegawai = $item->pegawai ?? null;
+            if (!$pegawai) {
+                continue;
+            }
+
+            if (!isset($cache[$pegawai->id])) {
+                $cache[$pegawai->id] = [
+                    'nama_l1' => optional($pegawai->ketua_tim_kerja)->nama,
+                    'nama_l2' => optional($pegawai->ketua_kelompok)->nama,
+                ];
+            }
+
+            $pegawai->nama_l1 = $cache[$pegawai->id]['nama_l1'];
+            $pegawai->nama_l2 = $cache[$pegawai->id]['nama_l2'];
+        }
+    }
+
     public function index(Request $request)
     {
         /** @var \App\Models\Pegawai $user */
         $user = Auth::user();
         $tahun = date('Y');
-        $stats = [];
-        $recentCuti = [];
-        $recentCutiPribadi = []; // FIX: inisialisasi agar tidak undefined utk role selain 1,2,3,4,6
-        $anggotaTim = [];
-        $allCutiDisetujui = [];
-        $timCutiHariIni = [];
 
-        // ================================================================
-        // TAMBAHAN: Filter Divisi (kolom DB: `departemen`, label UI: "Divisi/Departemen")
-        // Catatan penamaan (penting, jangan tertukar dengan kolom `divisi`):
-        //   - Kolom `pegawais.departemen` => berlabel "Divisi/Departemen" di form
-        //     Kelola Pegawai, dan INI yang dipakai untuk filter "Filter Divisi"
-        //     (dropdown drill-down manual di Dashboard).
-        //   - Kolom `pegawais.divisi`     => berlabel "Tim Kerja" di form,
-        //     dipakai untuk PEMBATASAN WILAYAH otomatis L1 (lihat blok
-        //     "PERBAIKAN GRANULARITAS WILAYAH" di bawah).
-        // Nilainya null jika user tidak memilih apa-apa di dropdown (=semua divisi).
-        // ================================================================
-        $departemenFilter = $request->query('departemen');
+        $stats               = [];
+        $recentCuti          = [];
+        $recentCutiPribadi   = [];
+        $anggotaTim          = [];
+        $allCutiDisetujui    = [];
+        $timCutiHariIni      = [];
+        $cutiPribadiDisetujui = collect();
+        $chartDataBackend    = array_fill(0, 12, 0);
+        $chartDataPribadi    = array_fill(0, 12, 0);
 
-        // Flag Admin HR
+        // Filter Divisi hanya untuk role 4, 5, 6 (L3, Admin HR, L4).
+        // Role 1, 2, 3 sudah punya pembatasan wilayah otomatis.
+        $kelompokSubstansiFilter = in_array($user->role_id, [1, 2, 3], true)
+            ? null
+            : $request->query('kelompok_substansi');
+
         $isAdminHR = $user->role_id === 5;
 
-        // 1. Data Hari Libur
         $hariLiburs = HariLibur::where('tanggal', '>=', Carbon::today()->toDateString())
             ->orderBy('tanggal', 'asc')
             ->get();
 
-        // 2. Inisialisasi chart default (TIM)
-        $chartDataBackend = array_fill(0, 12, 0);
-
-        // === TAMBAHAN: Data cuti & chart Pribadi ===
-        $cutiPribadiDisetujui = collect();
-        $chartDataPribadi = array_fill(0, 12, 0);
-
-
+        // =====================================================================
+        // DASHBOARD KARYAWAN (role 1)
+        // =====================================================================
         if ($user->role_id === 1) {
-            // ==========================================
-            // --- DASHBOARD KARYAWAN ---
-            // ==========================================
-            $saldo = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun)->first();
+            $saldo            = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun)->first();
+            $saldoTahunLalu   = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun - 1)->first();
+            $saldoDuaTahunLalu = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun - 2)->first();
 
-            $kuotaTahunan = $saldo ? $saldo->kuota_tahunan : 0;
+            $kuotaTahunan     = $saldo ? $saldo->kuota_tahunan : 0;
+            $sisaTahunLalu    = $saldo ? $saldo->carry_forward_normal : 0;
+            $sisaDuaTahunLalu = $saldoTahunLalu?->carry_forward_normal
+                ?? $saldoDuaTahunLalu?->carry_forward_normal
+                ?? 0;
 
-            // ---> PERBAIKAN (root cause "Sisa Tahun Kemarin" selalu 0) <---
-            // Sebelumnya kode membaca kolom `sisa_cuti_tahun_lalu`, padahal
-            // kolom itu TIDAK ADA di tabel `saldo_cutis` (dicek lewat
-            // phpMyAdmin: kolom yang benar-benar ada adalah
-            // `carry_forward_normal`). Karena Eloquent tidak melempar error
-            // untuk kolom yang tidak ada di $attributes, nilainya diam-diam
-            // selalu null/0, walau AdminController::updatePegawai() sudah
-            // benar menyimpan input Admin HR ke `carry_forward_normal`.
-            // Sekarang dashboard membaca kolom yang SAMA PERSIS dengan yang
-            // ditulis oleh form Edit Pegawai di AdminController, supaya
-            // kedua sisi selalu sinkron.
-            $sisaTahunLalu = $saldo ? $saldo->carry_forward_normal : 0;
             $cutiTerpakai = PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->sum('jumlah_hari');
 
-            $totalTersedia = ($kuotaTahunan + $sisaTahunLalu) - $cutiTerpakai;
+            $saldoBawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
+                ? 12
+                : min(6, $sisaTahunLalu);
+
+            $sisaKuotaTahunIni = max($kuotaTahunan - $cutiTerpakai, 0);
+            $totalTersedia     = $sisaKuotaTahunIni + $saldoBawaanEligible;
 
             $stats = [
-                'sisa_cuti' => $totalTersedia,
-                'kuota_tahunan' => $kuotaTahunan,
-                'sisa_cuti_tahun_lalu' => $sisaTahunLalu,
-                'cuti_terpakai' => $cutiTerpakai,
-                'total_cuti_tersedia' => $totalTersedia,
+                'sisa_cuti'                 => $totalTersedia,
+                'kuota_tahunan'             => $kuotaTahunan,
+                'sisa_kuota_tahun_ini'      => $sisaKuotaTahunIni,
+                'carry_forward_normal'      => $sisaTahunLalu,
+                'sisa_cuti_dua_tahun_lalu'  => $sisaDuaTahunLalu,
+                'saldo_bawaan_eligible'     => $saldoBawaanEligible,
+                'cuti_terpakai'             => $cutiTerpakai,
+                'total_cuti_tersedia'       => $totalTersedia,
+                'saldo_tahunan'             => [
+                    ['tahun' => $tahun - 2, 'nilai' => $sisaDuaTahunLalu],
+                    ['tahun' => $tahun - 1, 'nilai' => $sisaTahunLalu],
+                    ['tahun' => $tahun,     'nilai' => $sisaKuotaTahunIni],
+                ],
                 'total_pengajuan' => PengajuanCuti::where('pegawai_id', $user->id)->count(),
-                'menunggu' => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'like', 'menunggu%')->count(),
-                'disetujui' => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'disetujui')->count(),
+                'menunggu'        => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'like', 'menunggu%')->count(),
+                'disetujui'       => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'disetujui')->count(),
             ];
 
-            // === FIX: Ambil 5 riwayat pengajuan cuti terbaru milik Karyawan ini ===
-            // Sebelumnya variabel ini tidak pernah diisi untuk role_id === 1,
-            // sehingga tabel "Riwayat Pengajuan Terbaru" di dashboard selalu kosong
-            // meskipun data pengajuan cuti sudah ada di halaman Riwayat Pengajuan.
-            $recentCuti = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $recentCuti = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
                 ->where('pegawai_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->take(5)
                 ->get();
 
-            // Untuk role 1, versi "pribadi" sama dengan versi utama
             $recentCutiPribadi = $recentCuti;
 
-            if (in_array($user->role_id, [2, 3, 4, 6], true)) {
-                // ... query cutiPribadiDisetujui & chartDataPribadi ...
-                // (blok ini tidak pernah tereksekusi untuk role_id === 1,
-                // dipertahankan apa adanya agar tidak mengubah struktur asli)
-            }
-
-            // Data pribadi (juga dipakai sebagai cutiDisetujuiData)
-            $allCutiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $allCutiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
                 ->where('pegawai_id', $user->id)
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
-            // Untuk role 1, data pribadi = data utama
             $cutiPribadiDisetujui = $allCutiDisetujui;
-        } elseif (in_array($user->role_id, [2, 3, 4, 5, 6])) {
-            // ==========================================
-            // --- DASHBOARD ATASAN & ADMIN (L1, L2, L3, L4, HR) ---
-            // ==========================================
 
-            // ================================================================
-            // PERBAIKAN GRANULARITAS WILAYAH (konsisten dengan MonitoringCutiController)
-            // Struktur organisasi: satu Departemen/Kelompok (`departemen`)
-            // bisa berisi BEBERAPA Tim Kerja (`divisi`), masing-masing
-            // punya L1 sendiri; L2 membawahi SEMUA Tim Kerja dalam satu
-            // Departemen/Kelompok.
-            //
-            // SEBELUMNYA: seluruh data tim (anggota tim, cuti tim, antrean,
-            // dll) untuk L1 MAUPUN L2 sama-sama difilter pakai `departemen`
-            // saja — ini salah granularitas untuk L1, karena artinya L1
-            // bisa melihat staf dari Tim Kerja lain selama masih satu
-            // Departemen/Kelompok yang sama (persis bug yang dilaporkan:
-            // Maria Rosalin, L1 Tim Kerja "TIM KERJA KEBIJAKAN PERTANIAN",
-            // melihat 12 orang dari seluruh Kelompok, padahal harusnya
-            // hanya 5 orang di Tim Kerjanya sendiri).
-            //
-            // PERBAIKAN: tentukan $wilayahField & $wilayahValue berdasarkan
-            // role sebelum membangun query manapun di bawah:
-            //   - L1 (role_id 2): field = 'divisi'     (Tim Kerja sendiri)
-            //   - L2 (role_id 3): field = 'departemen'  (Kelompok sendiri)
-            //   - L3, L4 (role_id 4, 6): TIDAK dibatasi (null)
-            //   - Admin HR (role_id 5): TIDAK dibatasi (null)
-            // Lalu dipakai secara konsisten di SEMUA query tim di bawah ini
-            // (anggotaTim, allCutiDisetujui, timCutiHariIni, recentCuti,
-            // antrean/'total_antrean', 'cuti_tim_bulan_ini').
-            // ================================================================
+            // =====================================================================
+            // DASHBOARD ATASAN & ADMIN (L1, L2, L3, L4, HR)
+            // =====================================================================
+        } elseif (in_array($user->role_id, [2, 3, 4, 5, 6])) {
+
+            // Granularitas wilayah:
+            //   L1 (role 2) → tim_kerja
+            //   L2 (role 3) → kelompok_substansi
+            //   L3/L4/HR    → tidak dibatasi
             $wilayahField = null;
             $wilayahValue = null;
             if ($user->role_id === 2) {
-                $wilayahField = 'divisi';
-                $wilayahValue = $user->divisi;
+                $wilayahField = 'tim_kerja';
+                $wilayahValue = $user->tim_kerja;
             } elseif ($user->role_id === 3) {
-                $wilayahField = 'departemen';
-                $wilayahValue = $user->departemen;
+                $wilayahField = 'kelompok_substansi';
+                $wilayahValue = $user->kelompok_substansi;
             }
-            // role_id 4, 6, dan 5 (Admin HR) sengaja dibiarkan $wilayahField
-            // tetap null -> tidak ada pembatasan wilayah (lintas departemen).
 
             $targetStatus = [
                 2 => 'menunggu_l1',
@@ -171,44 +217,37 @@ class DashboardController extends Controller
                 6 => 'menunggu_l4',
             ][$user->role_id] ?? null;
 
+            // --- Antrean ---
             $antreanQuery = $targetStatus
                 ? PengajuanCuti::where('status', $targetStatus)
                 : PengajuanCuti::where('status', 'like', 'menunggu%');
 
-            // PERBAIKAN: dulu hanya role_id===2 yang dibatasi wilayah di
-            // sini (L2 tidak dibatasi sama sekali untuk hitungan "Perlu
-            // Persetujuan"). Sekarang memakai $wilayahField yang generik,
-            // otomatis mencakup L1 (divisi) dan L2 (departemen).
             if ($wilayahField) {
                 $antreanQuery->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                     $q->where($wilayahField, $wilayahValue);
                 });
             }
-
-            // TAMBAHAN: drill-down Filter Divisi (dropdown manual, field
-            // `departemen`) tetap berlaku di atas pembatasan wilayah
-            // otomatis di atas — mempersempit lebih lanjut jika dipilih.
-            if ($departemenFilter) {
-                $antreanQuery->whereHas('pegawai', function ($q) use ($departemenFilter) {
-                    $q->where('departemen', $departemenFilter);
+            if ($kelompokSubstansiFilter) {
+                $antreanQuery->whereHas('pegawai', function ($q) use ($kelompokSubstansiFilter) {
+                    $q->where('kelompok_substansi', $kelompokSubstansiFilter);
                 });
             }
 
-            $anggotaTimQuery = Pegawai::where('role_id', 1);
-            // PERBAIKAN: sebelumnya `if ($user->role_id !== 5) { where('departemen', ...) }`
-            // menyamaratakan L1 & L2 dengan filter departemen yang sama.
-            // Sekarang memakai $wilayahField/$wilayahValue yang sudah
-            // disesuaikan per role di atas.
+            // --- Anggota Tim ---
+            $anggotaTimQuery = in_array($user->role_id, [3, 4, 5, 6], true)
+                ? Pegawai::where('role_id', '!=', 5)
+                : Pegawai::where('role_id', 1);
+
             if ($wilayahField) {
                 $anggotaTimQuery->where($wilayahField, $wilayahValue);
             }
-            // TAMBAHAN: Filter Divisi (dropdown manual)
-            if ($departemenFilter) {
-                $anggotaTimQuery->where('departemen', $departemenFilter);
+            if ($kelompokSubstansiFilter) {
+                $anggotaTimQuery->where('kelompok_substansi', $kelompokSubstansiFilter);
             }
-
+            $anggotaTimQuery->where('id', '!=', $user->id);
             $anggotaTim = $anggotaTimQuery->get();
 
+            // --- Saldo Atasan (role 2,3,4,6) ---
             $saldoAtasan = null;
             if (in_array($user->role_id, [2, 3, 4, 6], true)) {
                 $saldoAtasan = SaldoCuti::firstOrCreate(
@@ -217,15 +256,9 @@ class DashboardController extends Controller
                 );
             }
 
-            $kuotaTahunanAtasan = $saldoAtasan?->kuota_tahunan ?? 12;
-
-            // ---> PERBAIKAN (sama seperti Dashboard Karyawan di atas) <---
-            // Baca `carry_forward_normal`, bukan `sisa_cuti_tahun_lalu` yang
-            // memang tidak ada kolomnya di tabel saldo_cutis, supaya
-            // "Sisa Tahun Kemarin" Atasan juga ikut sinkron dengan input
-            // Admin HR di form Edit Pegawai.
-            $sisaTahunLaluAtasan = $saldoAtasan?->carry_forward_normal ?? 0;
-            $cutiTerpakaiAtasan = $saldoAtasan
+            $kuotaTahunanAtasan     = $saldoAtasan?->kuota_tahunan ?? 12;
+            $sisaTahunLaluAtasan    = $saldoAtasan?->carry_forward_normal ?? 0;
+            $cutiTerpakaiAtasan     = $saldoAtasan
                 ? PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
                 ->where('status', 'disetujui')
@@ -233,26 +266,24 @@ class DashboardController extends Controller
                 ->sum('jumlah_hari')
                 : 0;
 
-            $totalTersediaAtasan = ($kuotaTahunanAtasan + $sisaTahunLaluAtasan) - $cutiTerpakaiAtasan;
+            $totalTersediaAtasan    = ($kuotaTahunanAtasan + $sisaTahunLaluAtasan) - $cutiTerpakaiAtasan;
+            $sisaKuotaTahunIniAtasan = max($kuotaTahunanAtasan - $cutiTerpakaiAtasan, 0);
 
             $stats = [
-                'kuota_tahunan' => $kuotaTahunanAtasan,
-                'sisa_cuti_tahun_lalu' => $sisaTahunLaluAtasan,
-                'cuti_terpakai' => $cutiTerpakaiAtasan,
-                'total_cuti_tersedia' => $totalTersediaAtasan,
-                'total_antrean' => $antreanQuery->count(),
-                // PERBAIKAN: 'cuti_tim_bulan_ini' sebelumnya memakai
-                // `departemen` untuk semua role !== 5. Sekarang memakai
-                // $wilayahField generik (divisi untuk L1, departemen untuk L2).
-                'cuti_tim_bulan_ini' => PengajuanCuti::when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
+                'kuota_tahunan'        => $kuotaTahunanAtasan,
+                'sisa_kuota_tahun_ini' => $sisaKuotaTahunIniAtasan,
+                'carry_forward_normal' => $sisaTahunLaluAtasan,
+                'cuti_terpakai'        => $cutiTerpakaiAtasan,
+                'total_cuti_tersedia'  => $totalTersediaAtasan,
+                'total_antrean'        => $antreanQuery->count(),
+                'cuti_tim_bulan_ini'   => PengajuanCuti::when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                         $q->where($wilayahField, $wilayahValue);
                     });
                 })
-                    // TAMBAHAN: Filter Divisi
-                    ->when($departemenFilter, function ($query) use ($departemenFilter) {
-                        $query->whereHas('pegawai', function ($q) use ($departemenFilter) {
-                            $q->where('departemen', $departemenFilter);
+                    ->when($kelompokSubstansiFilter, function ($query) use ($kelompokSubstansiFilter) {
+                        $query->whereHas('pegawai', function ($q) use ($kelompokSubstansiFilter) {
+                            $q->where('kelompok_substansi', $kelompokSubstansiFilter);
                         });
                     })
                     ->where('status', 'disetujui')
@@ -262,19 +293,16 @@ class DashboardController extends Controller
                 'total_anggota_tim' => $anggotaTimQuery->count(),
             ];
 
-            // Tabel Atasan
-            // PERBAIKAN: sebelumnya `when($user->role_id !== 5, ...where('departemen', $user->departemen))`
-            // menyamaratakan L1 & L2. Sekarang memakai $wilayahField generik.
-            $recentCuti = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            // --- Recent Cuti (tabel atasan) ---
+            $recentCuti = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                         $q->where($wilayahField, $wilayahValue);
                     });
                 })
-                // TAMBAHAN: Filter Divisi
-                ->when($departemenFilter, function ($query) use ($departemenFilter) {
-                    $query->whereHas('pegawai', function ($q) use ($departemenFilter) {
-                        $q->where('departemen', $departemenFilter);
+                ->when($kelompokSubstansiFilter, function ($query) use ($kelompokSubstansiFilter) {
+                    $query->whereHas('pegawai', function ($q) use ($kelompokSubstansiFilter) {
+                        $q->where('kelompok_substansi', $kelompokSubstansiFilter);
                     });
                 })
                 ->when($targetStatus, function ($query) use ($targetStatus) {
@@ -284,42 +312,34 @@ class DashboardController extends Controller
                 ->take(5)
                 ->get();
 
-            // Data TIM (untuk grafik Tim & tabel)
-            // PERBAIKAN: sama seperti di atas, memakai $wilayahField generik
-            // (bukan hardcode 'departemen' untuk semua role !== 5). Karena
-            // chart TIM (chartDataBackend) dihitung dari hasil
-            // $allCutiDisetujui di bawah (lihat loop "Loop chart TIM"),
-            // perbaikan di sini otomatis membuat chart bar & donut milik
-            // L1 juga ikut ter-scope ke Tim Kerja-nya sendiri.
-            $allCutiDisetujui = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
-                ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
-                    $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
-                        $q->where($wilayahField, $wilayahValue);
+            // --- Cuti Disetujui TIM (chart + tabel) ---
+            // Exclude cuti milik atasan sendiri agar tidak dobel dengan data pribadi
+            $allCutiDisetujui = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue, $user) {
+                    $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue, $user) {
+                        $q->where($wilayahField, $wilayahValue)
+                            ->where('id', '!=', $user->id);
                     });
                 })
-                // TAMBAHAN: Filter Divisi
-                ->when($departemenFilter, function ($query) use ($departemenFilter) {
-                    $query->whereHas('pegawai', function ($q) use ($departemenFilter) {
-                        $q->where('departemen', $departemenFilter);
+                ->when($kelompokSubstansiFilter, function ($query) use ($kelompokSubstansiFilter) {
+                    $query->whereHas('pegawai', function ($q) use ($kelompokSubstansiFilter) {
+                        $q->where('kelompok_substansi', $kelompokSubstansiFilter);
                     });
                 })
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
-            // Tim cuti hari ini
-            // PERBAIKAN: memakai $wilayahField generik, bukan hardcode
-            // 'departemen'.
-            $timCutiHariIni = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            // --- Tim cuti hari ini ---
+            $timCutiHariIni = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                         $q->where($wilayahField, $wilayahValue);
                     });
                 })
-                // TAMBAHAN: Filter Divisi
-                ->when($departemenFilter, function ($query) use ($departemenFilter) {
-                    $query->whereHas('pegawai', function ($q) use ($departemenFilter) {
-                        $q->where('departemen', $departemenFilter);
+                ->when($kelompokSubstansiFilter, function ($query) use ($kelompokSubstansiFilter) {
+                    $query->whereHas('pegawai', function ($q) use ($kelompokSubstansiFilter) {
+                        $q->where('kelompok_substansi', $kelompokSubstansiFilter);
                     });
                 })
                 ->where('status', 'disetujui')
@@ -327,9 +347,9 @@ class DashboardController extends Controller
                 ->whereDate('tanggal_selesai', '>=', Carbon::today())
                 ->get();
 
-            // === TAMBAHAN: Data cuti Pribadi untuk Atasan (role 2,3,4,6) ===
+            // --- Data cuti Pribadi untuk Atasan (role 2,3,4,6) ---
             if (in_array($user->role_id, [2, 3, 4, 6], true)) {
-                $cutiPribadiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                $cutiPribadiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
                     ->where('pegawai_id', $user->id)
                     ->where('status', 'disetujui')
                     ->whereYear('tanggal_mulai', $tahun)
@@ -342,11 +362,7 @@ class DashboardController extends Controller
                     }
                 }
 
-                // === FIX: Ambil 5 riwayat pengajuan pribadi terbaru milik Atasan ini ===
-                // Sebelumnya, hasil ini dihitung tapi tidak pernah dikirim ke frontend
-                // karena di return Inertia::render() key 'recentCutiPribadi' di-hardcode
-                // menjadi collect() kosong. Sekarang kita query & kirim datanya dengan benar.
-                $recentCutiPribadi = PengajuanCuti::with(['atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                $recentCutiPribadi = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
                     ->where('pegawai_id', $user->id)
                     ->orderBy('created_at', 'desc')
                     ->take(5)
@@ -354,7 +370,7 @@ class DashboardController extends Controller
             }
         }
 
-        // Loop chart TIM
+        // Chart TIM
         foreach ($allCutiDisetujui as $cuti) {
             $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
             if ($monthIndex >= 0 && $monthIndex <= 11) {
@@ -362,41 +378,46 @@ class DashboardController extends Controller
             }
         }
 
-        // Untuk role 1, chart pribadi = chart utama
+        // Role 1: chart pribadi = chart utama
         if ($user->role_id === 1) {
             $chartDataPribadi = $chartDataBackend;
         }
 
-        // ================================================================
-        // TAMBAHAN: Daftar opsi "Filter Divisi" untuk dropdown di dashboard.
-        // Diambil dari kolom `pegawais.departemen` (BUKAN `pegawais.divisi`,
-        // yang di form berlabel "Tim Kerja" dan dipakai untuk pembatasan
-        // wilayah otomatis L1, bukan untuk dropdown drill-down ini).
-        // ================================================================
-        $listDivisi = Pegawai::whereNotNull('departemen')
-            ->where('departemen', '!=', '')
+        // Daftar opsi Filter Divisi
+        $listKelompokSubstansi = Pegawai::whereNotNull('kelompok_substansi')
+            ->where('kelompok_substansi', '!=', '')
             ->distinct()
-            ->orderBy('departemen')
-            ->pluck('departemen');
+            ->orderBy('kelompok_substansi')
+            ->pluck('kelompok_substansi');
+
+        // Tempel saldo + nama approver L1/L2 ke semua collection yang dikirim ke modal
+        $this->attachSaldoInfoKePegawai($recentCuti, $tahun);
+        $this->attachSaldoInfoKePegawai($recentCutiPribadi, $tahun);
+        $this->attachSaldoInfoKePegawai($allCutiDisetujui, $tahun);
+        $this->attachSaldoInfoKePegawai($cutiPribadiDisetujui, $tahun);
+        $this->attachSaldoInfoKePegawai($timCutiHariIni, $tahun);
+
+        $this->attachNamaApproverL1L2KePegawai($recentCuti);
+        $this->attachNamaApproverL1L2KePegawai($recentCutiPribadi);
+        $this->attachNamaApproverL1L2KePegawai($allCutiDisetujui);
+        $this->attachNamaApproverL1L2KePegawai($cutiPribadiDisetujui);
+        $this->attachNamaApproverL1L2KePegawai($timCutiHariIni);
 
         return Inertia::render('Dashboard', [
-            'stats'               => $stats,
-            'recentCuti'          => $recentCuti,
-            'cutiDisetujuiData'    => $allCutiDisetujui,        // Data TIM
-            'cutiDisetujuiPribadi' => $cutiPribadiDisetujui,    // Data PRIBADI (baru)
-            'chartDataBackend'    => $chartDataBackend,        // Chart TIM
-            'chartDataPribadi'    => $chartDataPribadi,        // Chart PRIBADI (baru)
-            'hariLiburs'          => $hariLiburs,
-            'anggotaTim'          => $anggotaTim,
-            'timCutiHariIni'      => $timCutiHariIni,
-            'isAdminHR'           => $isAdminHR,
-            // FIX: kirim variabel $recentCutiPribadi yang sudah benar-benar diisi,
-            // bukan collect() kosong yang sebelumnya menimpa hasil query di atas.
-            'recentCutiPribadi'   => $recentCutiPribadi,
-            // TAMBAHAN: dukungan Filter Divisi
-            'listDivisi'          => $listDivisi,
-            'filter'              => [
-                'departemen' => $departemenFilter,
+            'stats'                 => $stats,
+            'recentCuti'            => $recentCuti,
+            'cutiDisetujuiData'      => $allCutiDisetujui,
+            'cutiDisetujuiPribadi'   => $cutiPribadiDisetujui,
+            'chartDataBackend'      => $chartDataBackend,
+            'chartDataPribadi'      => $chartDataPribadi,
+            'hariLiburs'            => $hariLiburs,
+            'anggotaTim'            => $anggotaTim,
+            'timCutiHariIni'        => $timCutiHariIni,
+            'isAdminHR'             => $isAdminHR,
+            'recentCutiPribadi'     => $recentCutiPribadi,
+            'listKelompokSubstansi' => $listKelompokSubstansi,
+            'filter'                => [
+                'kelompok_substansi' => $kelompokSubstansiFilter,
             ],
         ]);
     }

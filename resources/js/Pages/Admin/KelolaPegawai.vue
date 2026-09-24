@@ -10,12 +10,6 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
-    // Tahun berjalan (dikirim dari AdminController@kelolaPegawai), dipakai
-    // hanya untuk label "Saldo Cuti Tahun {{ tahunBerjalan }}" di modal.
-    tahunBerjalan: {
-        type: [Number, String],
-        default: () => new Date().getFullYear(),
-    },
 });
 
 
@@ -43,7 +37,7 @@ const formatRole = (roleId) => {
 
 // ===================== FITUR SEARCH + FILTER + PAGINATION =====================
 const searchNama = ref("");
-const selectedDepartemen = ref("");
+const selectedKelompokSubstansi = ref("");
 const currentPage = ref(1);
 const itemsPerPage = 10;
 
@@ -55,22 +49,24 @@ const filteredPegawai = computed(() => {
     return props.pegawai.filter((item) => {
         const nama = (item?.nama || "").toLowerCase();
         const nip = String(item?.nip || "").toLowerCase();
-        const departemen = item?.departemen || "";
+        const kelompokSubstansi = item?.kelompok_substansi || "";
 
 
         return (
             (!keyword || nama.includes(keyword) || nip.includes(keyword)) &&
-            (!selectedDepartemen.value ||
-                departemen === selectedDepartemen.value)
+            (!selectedKelompokSubstansi.value ||
+                kelompokSubstansi === selectedKelompokSubstansi.value)
         );
     });
 });
 
 
-const daftarDepartemen = computed(() =>
+const daftarKelompokSubstansi = computed(() =>
     [
         ...new Set(
-            props.pegawai.map((item) => item?.departemen).filter(Boolean),
+            props.pegawai
+                .map((item) => item?.kelompok_substansi)
+                .filter(Boolean),
         ),
     ].sort((a, b) => a.localeCompare(b)),
 );
@@ -87,7 +83,7 @@ const paginatedPegawai = computed(() => {
 });
 
 
-watch([searchNama, selectedDepartemen], () => {
+watch([searchNama, selectedKelompokSubstansi], () => {
     currentPage.value = 1;
 });
 
@@ -104,23 +100,26 @@ const isEditMode = ref(false);
 const currentEditId = ref(null);
 
 
-// Default saldo cuti untuk pegawai baru (dipakai saat openAddModal)
-const DEFAULT_KUOTA_TAHUNAN = 12;
-
-
+// ---> CATATAN PEMISAHAN TANGGUNG JAWAB <---
+// Form ini HANYA menangani identitas & posisi pegawai (nama, NIP, jabatan,
+// role, dsb). Manajemen kuota/saldo cuti (hak tahunan, carry forward,
+// cuti ditangguhkan) SENGAJA tidak ditangani di sini — itu domainnya
+// halaman "Rekap Kuota Detail" agar tidak ada dua pintu edit untuk data
+// yang sama (single source of truth untuk saldo cuti).
+//
+// Saat pegawai baru dibuat lewat "Tambah Pegawai", saldo cuti awal
+// (default 12 hari) sebaiknya di-generate otomatis di sisi backend
+// (mis. di AdminController@store / observer model Pegawai), sehingga
+// admin HR tidak perlu mengisinya manual di form ini.
 const form = useForm({
     nip: "",
     nama: "",
-    departemen: "", // Divisi/Departemen
-    divisi: "", // Tim Kerja
     jabatan: "",
-    kelompok_substansi: "", // Field baru ditambahkan
+    kelompok_substansi: "",
+    tim_kerja: "",
     role_id: 1,
     no_telp: "",
     alamat: "",
-    kuota_tahunan: DEFAULT_KUOTA_TAHUNAN,
-    sisa: DEFAULT_KUOTA_TAHUNAN,
-    carry_forward_normal: 0,
 });
 
 
@@ -139,25 +138,12 @@ const openEditModal = (item) => {
     currentEditId.value = item.id;
     form.nip = item.nip || "";
     form.nama = item.nama || "";
-    form.departemen = item.departemen || "";
-    form.divisi = item.divisi || "";
     form.jabatan = item.jabatan || "";
     form.kelompok_substansi = item.kelompok_substansi || "";
+    form.tim_kerja = item.tim_kerja || "";
     form.role_id = item.role_id || 1;
     form.no_telp = item.no_telp || "";
     form.alamat = item.alamat || "";
-
-
-    // Ambil saldo cuti tahun berjalan pegawai ini
-    const saldoTahunIni =
-        item.saldo_cuti && item.saldo_cuti.length > 0
-            ? item.saldo_cuti[0]
-            : null;
-
-
-    form.kuota_tahunan = saldoTahunIni?.kuota_tahunan ?? DEFAULT_KUOTA_TAHUNAN;
-    form.sisa = saldoTahunIni?.sisa ?? DEFAULT_KUOTA_TAHUNAN;
-    form.carry_forward_normal = saldoTahunIni?.carry_forward_normal ?? 0;
 
 
     isModalOpen.value = true;
@@ -353,20 +339,64 @@ const submitImportForm = () => {
                 v-else
                 class="bg-white overflow-hidden shadow-sm sm:rounded-lg p-6 relative z-10"
             >
+                <!-- ================= HEADER HALAMAN (JUDUL + SUBJUDUL + TOMBOL AKSI) =================
+                     Judul & subjudul di kiri, badge "Total Pegawai" + tombol
+                     "Impor Data" + "Tambah Pegawai" sejajar satu baris di
+                     kanan. Kedua tombol aksi berbentuk pill (rounded-full),
+                     konsisten dengan tombol aksi di halaman Rekap Kuota
+                     Detail & Rekap Laporan. Badge "Total Pegawai" bukan
+                     tombol, jadi bentuk pill-nya (rounded-full pada lencana
+                     angka) dibiarkan seperti semula.
+
+
+                     KONSISTENSI WARNA TOMBOL (skema final, berlaku di
+                     seluruh halaman AgriLeave):
+                       - Impor          -> Blue
+                       - Tambah/Create  -> Violet/Ungu
+                       - Export         -> Emerald/Hijau
+                       - Edit           -> Blue (ikon aksi baris tabel)
+                       - Reset Password -> Orange
+                       - Hapus          -> Red -->
                 <div
-                    class="flex justify-between items-center mb-6 border-b pb-4"
+                    class="flex flex-col md:flex-row md:justify-between md:items-center mb-6 border-b pb-4 gap-4"
                 >
-                    <h2 class="text-2xl font-bold text-gray-800">
-                        Master Data Pegawai
-                    </h2>
+                    <div>
+                        <h2 class="text-2xl font-bold text-gray-800">
+                            Master Data Pegawai
+                        </h2>
+                        <p class="text-sm text-gray-500 mt-1">
+                            Kelola data induk seluruh pegawai dan hak aksesnya.
+                            Untuk kuota &amp; saldo cuti, kelola melalui menu
+                            <span class="font-medium text-gray-600"
+                                >Rekap Kuota Detail</span
+                            >.
+                        </p>
+                    </div>
 
 
-                    <!-- Kontainer tombol aksi: Impor Data + Tambah Pegawai -->
+                    <!-- Kontainer tombol aksi: Total Pegawai + Impor Data + Tambah Pegawai -->
                     <div class="flex flex-wrap items-center justify-end gap-3">
+                        <div
+                            class="inline-flex h-12 min-w-[170px] items-center justify-center gap-3 rounded-lg border border-indigo-100 bg-indigo-50 px-4 text-indigo-900 shadow-sm"
+                        >
+                            <span
+                                class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white"
+                            >
+                                {{ filteredPegawai.length }}
+                            </span>
+                            <span
+                                class="text-sm font-semibold whitespace-nowrap"
+                            >
+                                Total Pegawai
+                            </span>
+                        </div>
+
+
+                        <!-- Tombol Impor Data: biru -->
                         <button
                             type="button"
                             @click="openImportModal"
-                            class="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 border border-transparent rounded-lg font-semibold text-sm text-white hover:bg-emerald-700 transition ease-in-out duration-150 shadow-sm cursor-pointer"
+                            class="inline-flex items-center gap-2 px-5 py-2.5 bg-blue-600 border border-transparent rounded-full font-semibold text-sm text-white hover:bg-blue-700 transition ease-in-out duration-150 shadow-sm cursor-pointer"
                         >
                             <svg
                                 class="w-4 h-4"
@@ -385,10 +415,11 @@ const submitImportForm = () => {
                         </button>
 
 
+                        <!-- Tombol Tambah Pegawai: ungu/violet -->
                         <button
                             type="button"
                             @click="openAddModal"
-                            class="px-5 py-2.5 bg-indigo-600 text-white rounded-md text-sm font-extrabold hover:bg-indigo-700 cursor-pointer shadow-lg hover:scale-105 transition-all"
+                            class="px-5 py-2.5 bg-violet-600 text-white rounded-full text-sm font-extrabold hover:bg-violet-700 cursor-pointer shadow-lg hover:scale-105 transition-all"
                         >
                             + Tambah Pegawai
                         </button>
@@ -396,9 +427,15 @@ const submitImportForm = () => {
                 </div>
 
 
-                <!-- FILTER + SEARCH + TOTAL -->
-                <div class="mb-4 flex flex-wrap items-center gap-3">
-                    <div class="relative w-full max-w-md">
+                <!-- ================= BARIS FILTER & PENCARIAN =================
+                     Baris terpisah di bawah judul. Search dan dropdown filter
+                     tetap bentuk kotak (rounded-md) — bukan tombol aksi,
+                     jadi tidak perlu jadi pill. Logikanya (v-model, computed
+                     filteredPegawai, dst) TIDAK diubah sama sekali. -->
+                <div
+                    class="mb-4 flex flex-col sm:flex-row sm:flex-wrap items-center gap-3"
+                >
+                    <div class="relative min-w-0 flex-1 w-full">
                         <input
                             v-model="searchNama"
                             type="text"
@@ -419,33 +456,19 @@ const submitImportForm = () => {
 
 
                     <select
-                        v-model="selectedDepartemen"
-                        aria-label="Filter departemen"
-                        class="w-full max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                        v-model="selectedKelompokSubstansi"
+                        aria-label="Filter kelompok substansi"
+                        class="w-full sm:w-auto shrink-0 max-w-xs rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                     >
-                        <option value="">Semua Departemen</option>
+                        <option value="">Semua Kelompok Substansi</option>
                         <option
-                            v-for="departemen in daftarDepartemen"
-                            :key="departemen"
-                            :value="departemen"
+                            v-for="kelompokSubstansi in daftarKelompokSubstansi"
+                            :key="kelompokSubstansi"
+                            :value="kelompokSubstansi"
                         >
-                            {{ departemen }}
+                            {{ kelompokSubstansi }}
                         </option>
                     </select>
-
-
-                    <div
-                        class="inline-flex h-12 min-w-[170px] items-center justify-center gap-3 rounded-lg border border-indigo-100 bg-indigo-50 px-4 text-indigo-900 shadow-sm"
-                    >
-                        <span
-                            class="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-bold text-white"
-                        >
-                            {{ pegawai.length }}
-                        </span>
-                        <span class="text-sm font-semibold whitespace-nowrap">
-                            Total Pegawai
-                        </span>
-                    </div>
                 </div>
 
 
@@ -466,7 +489,7 @@ const submitImportForm = () => {
                                 <th
                                     class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"
                                 >
-                                    Divisi/Dept.
+                                    Kelompok Substansi
                                 </th>
                                 <th
                                     class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase"
@@ -533,12 +556,12 @@ const submitImportForm = () => {
                                 <td
                                     class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"
                                 >
-                                    {{ item?.departemen || "-" }}
+                                    {{ item?.kelompok_substansi || "-" }}
                                 </td>
                                 <td
                                     class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"
                                 >
-                                    {{ item?.divisi || "-" }}
+                                    {{ item?.tim_kerja || "-" }}
                                 </td>
                                 <td
                                     class="px-4 py-3 whitespace-nowrap text-sm text-gray-500"
@@ -566,7 +589,7 @@ const submitImportForm = () => {
                                             type="button"
                                             @click="openEditModal(item)"
                                             title="Edit Pegawai"
-                                            class="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 hover:text-blue-700 transition-colors shadow-sm cursor-pointer"
+                                            class="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 hover:text-blue-700 transition-colors shadow-sm cursor-pointer"
                                         >
                                             <svg
                                                 xmlns="http://www.w3.org/2000/svg"
@@ -590,7 +613,7 @@ const submitImportForm = () => {
                                             type="button"
                                             @click="konfirmasiReset(item)"
                                             title="Reset Password"
-                                            class="p-2 bg-orange-50 text-orange-600 rounded-lg hover:bg-orange-100 hover:text-orange-700 transition-colors shadow-sm cursor-pointer"
+                                            class="p-2 bg-orange-50 text-orange-600 rounded-full hover:bg-orange-100 hover:text-orange-700 transition-colors shadow-sm cursor-pointer"
                                         >
                                             <svg
                                                 xmlns="http://www.w3.org/2000/svg"
@@ -614,7 +637,7 @@ const submitImportForm = () => {
                                             type="button"
                                             @click="konfirmasiHapus(item)"
                                             title="Hapus Pegawai"
-                                            class="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 hover:text-red-700 transition-colors shadow-sm cursor-pointer"
+                                            class="p-2 bg-red-50 text-red-600 rounded-full hover:bg-red-100 hover:text-red-700 transition-colors shadow-sm cursor-pointer"
                                         >
                                             <svg
                                                 xmlns="http://www.w3.org/2000/svg"
@@ -639,7 +662,8 @@ const submitImportForm = () => {
                 </div>
 
 
-                <!-- PAGINATION -->
+                <!-- PAGINATION — tombol dibuat pill (rounded-full),
+                 konsisten dengan pagination di Rekap Laporan. -->
                 <div
                     v-if="filteredPegawai.length > 0"
                     class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 pt-4"
@@ -655,7 +679,7 @@ const submitImportForm = () => {
                             type="button"
                             @click="goToPage(currentPage - 1)"
                             :disabled="currentPage === 1"
-                            class="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            class="rounded-full border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             Sebelumnya
                         </button>
@@ -663,7 +687,7 @@ const submitImportForm = () => {
                             type="button"
                             @click="goToPage(currentPage + 1)"
                             :disabled="currentPage === totalPages"
-                            class="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            class="rounded-full border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                             Berikutnya
                         </button>
@@ -674,6 +698,8 @@ const submitImportForm = () => {
 
             <!-- ========================================== -->
             <!-- MODAL FORM EDIT / TAMBAH PEGAWAI           -->
+            <!-- (HANYA identitas & posisi — kuota cuti ada  -->
+            <!-- di halaman Rekap Kuota Detail)              -->
             <!-- ========================================== -->
             <Teleport to="body">
                 <div
@@ -803,7 +829,7 @@ const submitImportForm = () => {
                             </div>
 
 
-                            <div class="border-t border-gray-100 pt-4 mb-5">
+                            <div class="border-t border-gray-100 pt-4 mb-2">
                                 <p
                                     class="text-xs font-bold uppercase tracking-wide text-gray-400 mb-3"
                                 >
@@ -811,19 +837,9 @@ const submitImportForm = () => {
                                 </p>
 
 
-                                <div class="grid grid-cols-2 gap-x-4 mb-3">
-                                    <div>
-                                        <label
-                                            class="block text-sm font-medium text-gray-700"
-                                            >Divisi/Departemen</label
-                                        >
-                                        <input
-                                            type="text"
-                                            v-model="form.departemen"
-                                            required
-                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                        />
-                                    </div>
+                                <div
+                                    class="grid grid-cols-1 md:grid-cols-3 gap-4"
+                                >
                                     <div>
                                         <label
                                             class="block text-sm font-medium text-gray-700"
@@ -835,10 +851,17 @@ const submitImportForm = () => {
                                             class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                         />
                                     </div>
-                                </div>
-
-
-                                <div class="grid grid-cols-2 gap-x-4">
+                                    <div>
+                                        <label
+                                            class="block text-sm font-medium text-gray-700"
+                                            >Tim Kerja</label
+                                        >
+                                        <input
+                                            type="text"
+                                            v-model="form.tim_kerja"
+                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                                        />
+                                    </div>
                                     <div>
                                         <label
                                             class="block text-sm font-medium text-gray-700"
@@ -851,67 +874,49 @@ const submitImportForm = () => {
                                             class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
                                         />
                                     </div>
-                                    <div>
-                                        <label
-                                            class="block text-sm font-medium text-gray-700"
-                                            >Tim Kerja</label
-                                        >
-                                        <input
-                                            type="text"
-                                            v-model="form.divisi"
-                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                        />
-                                    </div>
                                 </div>
                             </div>
 
 
-                            <div class="border-t border-gray-100 pt-4 mb-4">
-                                <p
-                                    class="text-xs font-bold uppercase tracking-wide text-gray-400 mb-3"
+                            <!-- ================= CATATAN KUOTA CUTI =================
+                                 Section "Manajemen Kuota Cuti" SENGAJA tidak ada di
+                                 sini. Untuk mengatur hak tahunan, sisa/carry-forward,
+                                 dan cuti ditangguhkan, gunakan menu "Rekap Kuota
+                                 Detail" -> tombol "Kelola Kuota" per pegawai. Ini
+                                 memastikan hanya ada satu tempat edit untuk saldo
+                                 cuti (single source of truth) dan riwayat perubahan
+                                 kuota tetap konsisten. -->
+                            <div
+                                v-if="isEditMode"
+                                class="mt-4 flex items-start gap-2 rounded-lg border border-blue-100 bg-blue-50/60 p-3"
+                            >
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke-width="1.5"
+                                    stroke="currentColor"
+                                    class="w-5 h-5 text-blue-500 flex-shrink-0 mt-0.5"
                                 >
-                                    Saldo Cuti Tahun {{ tahunBerjalan }}
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
+                                    />
+                                </svg>
+                                <p class="text-xs text-blue-700 leading-relaxed">
+                                    Untuk mengubah kuota/saldo cuti pegawai ini
+                                    (hak tahunan, sisa cuti, atau cuti
+                                    ditangguhkan), buka menu
+                                    <span class="font-semibold"
+                                        >Rekap Kuota Detail</span
+                                    >
+                                    lalu klik
+                                    <span class="font-semibold"
+                                        >Kelola Kuota</span
+                                    >
+                                    pada baris pegawai terkait.
                                 </p>
-
-
-                                <div class="grid grid-cols-3 gap-x-3">
-                                    <div>
-                                        <label
-                                            class="block text-sm font-medium text-gray-700"
-                                            >Jatah Cuti</label
-                                        >
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            v-model="form.kuota_tahunan"
-                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label
-                                            class="block text-sm font-medium text-gray-700"
-                                            >Sisa Tahun Ini</label
-                                        >
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            v-model="form.sisa"
-                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label
-                                            class="block text-sm font-medium text-gray-700"
-                                            >Sisa Tahun Kemarin</label
-                                        >
-                                        <input
-                                            type="number"
-                                            min="0"
-                                            v-model="form.carry_forward_normal"
-                                            class="mt-1 block w-full border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
-                                        />
-                                    </div>
-                                </div>
                             </div>
 
 
@@ -994,7 +999,7 @@ const submitImportForm = () => {
                                     type="file"
                                     accept=".xlsx,.xls,.csv"
                                     @change="handleImportFileChange"
-                                    class="block w-full text-sm text-gray-600 border border-gray-300 rounded-md cursor-pointer focus:outline-none file:mr-3 file:py-2 file:px-4 file:border-0 file:bg-emerald-50 file:text-emerald-700 file:font-semibold hover:file:bg-emerald-100"
+                                    class="block w-full text-sm text-gray-600 border border-gray-300 rounded-md cursor-pointer focus:outline-none file:mr-3 file:py-2 file:px-4 file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100"
                                 />
                             </div>
 
@@ -1010,7 +1015,8 @@ const submitImportForm = () => {
                             <p class="text-xs text-gray-400 mb-5">
                                 Pastikan kolom pada file mengikuti format
                                 template yang sudah ditentukan (NIP, Nama,
-                                Divisi/Departemen, Jabatan, Role, dsb).
+                                Kelompok Substansi, Tim Kerja, Jabatan, Role,
+                                dsb).
                             </p>
 
 
@@ -1026,7 +1032,7 @@ const submitImportForm = () => {
                                 </button>
                                 <button
                                     type="submit"
-                                    class="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
                                     :disabled="
                                         importForm.processing ||
                                         !importForm.file
@@ -1298,6 +1304,4 @@ const submitImportForm = () => {
         </div>
     </MainLayout>
 </template>
-
-
 

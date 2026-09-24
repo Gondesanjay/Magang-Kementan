@@ -1,8 +1,7 @@
 <script setup>
-import { ref, watch } from "vue";
+import { ref, watch, computed } from "vue";
 import { router, Head } from "@inertiajs/vue3";
 import MainLayout from "@/Layouts/MainLayout.vue";
-
 
 // Halaman ini adalah versi ATASAN dari "Rekap Kuota Detail" milik HR Admin
 // (lihat Pages/Admin/RekapKuotaDetail.vue). Data & tampilan tabel/modal
@@ -12,17 +11,24 @@ import MainLayout from "@/Layouts/MainLayout.vue";
 const props = defineProps({
     dataPegawai: Object,
     filters: Object,
+    userRoleId: Number, // 1=Staff, 2=L1, 3=L2, 4=L3, 6=L4
+    userTimKerja: String, // dipakai untuk badge info L1
+    listTimKerja: {
+        type: Array,
+        default: () => [],
+    },
+    listKelompok: {
+        type: Array,
+        default: () => [],
+    },
 });
 
-
 const search = ref(props.filters?.search || "");
-
 
 // State untuk Modal Detail Riwayat Cuti
 const showModal = ref(false);
 const selectedPegawai = ref(null);
 const expandedRiwayatId = ref(null);
-
 
 const openDetailModal = (pegawai) => {
     selectedPegawai.value = pegawai;
@@ -30,34 +36,32 @@ const openDetailModal = (pegawai) => {
     showModal.value = true;
 };
 
-
 const closeModal = () => {
     showModal.value = false;
     selectedPegawai.value = null;
     expandedRiwayatId.value = null;
 };
 
-
 const toggleExpand = (id) => {
     expandedRiwayatId.value = expandedRiwayatId.value === id ? null : id;
 };
 
-
+// Label status generik — nama pejabat tampil di approval_chain (dari backend),
+// bukan hardcode di sini.
 const statusLabels = {
-    menunggu_l1: "Menunggu Bapak Ketua Tim Kerja (L1)",
-    menunggu_l2: "Menunggu Bapak Ketua Kelompok Substansi (L2)",
-    menunggu_l3: "Menunggu Ignatius Agus Hendarto (L3)",
-    menunggu_l4: "Menunggu Seta Rukmalasari Agustina (L4)",
+    menunggu_l1: "Menunggu Ketua Tim Kerja (L1)",
+    menunggu_l2: "Menunggu Ketua Kelompok Substansi (L2)",
+    menunggu_l3: "Menunggu Kasubag TU (L3)",
+    menunggu_l4: "Menunggu Kepala Biro Perencanaan (L4)",
     disetujui: "Disetujui",
     ditolak: "Ditolak",
     dibatalkan_ditangguhkan: "Dibatalkan/Ditangguhkan",
+    dibatalkan_reguler: "Dibatalkan",
 };
-
 
 const getStatusLabel = (st) => {
     return statusLabels[st] || st?.replace(/_/g, " ").toUpperCase();
 };
-
 
 const approvalStepLabel = (status) => {
     switch (status) {
@@ -76,7 +80,6 @@ const approvalStepLabel = (status) => {
     }
 };
 
-
 const approvalStepClass = (status) => {
     switch (status) {
         case "setuju":
@@ -94,6 +97,73 @@ const approvalStepClass = (status) => {
     }
 };
 
+// ================= APPROVAL CHAIN (MURNI DARI BACKEND) =================
+// Tidak ada hardcode NIP/nama. Backend (RekapKuotaDetailController::
+// buildApprovalChain + getRequiredLevels) sudah menentukan level mana yang
+// relevan per role pemohon dan mengisi nama approver dari DB.
+//
+// Frontend hanya:
+//   1) mengurutkan langkah berlevel L1 → L4
+//   2) (opsional) menyembunyikan status "belum_giliran" agar tampilan ringkas
+//
+// Jika ingin menampilkan SEMUA langkah termasuk "Belum Giliran", ubah
+// HIDE_BELUM_GILIRAN menjadi false.
+const HIDE_BELUM_GILIRAN = true;
+
+const urutkanChain = (chain) => {
+    const berlevel = chain
+        .filter((step) => step?.level)
+        .sort((a, b) => Number(a.level) - Number(b.level));
+    let i = 0;
+    return chain.map((step) => (step?.level ? berlevel[i++] : step));
+};
+
+const getVisibleApprovalChain = (chainAsli) => {
+    if (!Array.isArray(chainAsli)) return [];
+    const chain = urutkanChain(chainAsli);
+    if (!HIDE_BELUM_GILIRAN) return chain;
+    return chain.filter((step) => step?.status !== "belum_giliran");
+};
+// ================= END APPROVAL CHAIN =================
+
+// ================= FILTER BERJENJANG SESUAI LEVEL ATASAN =================
+// Diselaraskan dengan pola yang sama di KalenderTim.vue:
+//   L1 (role_id 2)       : TANPA dropdown, badge "Menampilkan tim Anda: ..."
+//   L2 (role_id 3)       : dropdown Tim Kerja (dalam kelompoknya sendiri)
+//   L3 & L4 (role_id 4/6): dropdown Kelompok/Subbagian (lintas kelompok)
+const filterMode = computed(() => {
+    if (props.userRoleId === 2) return "l1";
+    if (props.userRoleId === 3) return "l2";
+    if (props.userRoleId === 4 || props.userRoleId === 6) return "l3l4";
+    return "none";
+});
+
+const showFilterDropdown = computed(
+    () => filterMode.value === "l2" || filterMode.value === "l3l4",
+);
+
+const showBadgeTimL1 = computed(
+    () => filterMode.value === "l1" && !!props.userTimKerja,
+);
+
+const filterQueryParam = computed(() =>
+    filterMode.value === "l2" ? "tim_kerja" : "kelompok_substansi",
+);
+
+const filterAllLabel = computed(() =>
+    filterMode.value === "l2" ? "Semua Tim Kerja" : "Semua Kelompok",
+);
+
+const filterOptions = computed(() => {
+    if (filterMode.value === "l2") return props.listTimKerja || [];
+    if (filterMode.value === "l3l4") return props.listKelompok || [];
+    return [];
+});
+
+const kelompok = ref(props.filters?.[filterQueryParam.value] || "");
+// ================= END FILTER BERJENJANG =================
+
+const daftarPegawai = computed(() => props.dataPegawai?.data ?? []);
 
 const hitungDurasi = (mulai, selesai) => {
     if (!mulai || !selesai) return 1;
@@ -104,7 +174,6 @@ const hitungDurasi = (mulai, selesai) => {
     return selisihHari > 0 ? selisihHari : 1;
 };
 
-
 const getDurasi = (item) => {
     if (item?.jumlah_hari && item.jumlah_hari > 0) {
         return item.jumlah_hari;
@@ -112,9 +181,13 @@ const getDurasi = (item) => {
     return hitungDurasi(item?.tanggal_mulai, item?.tanggal_selesai);
 };
 
+const formatKeteranganRapi = (teksAsli) => {
+    if (!teksAsli || teksAsli === "-") return "-";
 
-const formatKeteranganRapi = (text) => {
-    if (!text || text === "-") return "-";
+    const text = teksAsli
+        .replace(/\s*[—–-]\s*Pengajuan Cuti Ulang\b/gi, "")
+        .trim();
+    if (!text) return "-";
 
     if (text.includes("|") || text.includes("[DITANGGUHKAN")) {
         let bagian = text.split("|").map((item) => item.trim());
@@ -135,7 +208,6 @@ const formatKeteranganRapi = (text) => {
     return text;
 };
 
-
 function debounce(fn, delay = 300) {
     let timeoutId;
     return (...args) => {
@@ -144,32 +216,68 @@ function debounce(fn, delay = 300) {
     };
 }
 
+const buildParams = () => {
+    const params = {};
+    if (search.value) params.search = search.value;
+    if (kelompok.value) params[filterQueryParam.value] = kelompok.value;
+    return params;
+};
 
-// NOTE: route name 'atasan.kuota' — perlu didaftarkan di web.php,
-// menunjuk ke method index (bisa reuse controller yang sama dengan
-// RekapKuotaDetailController, cukup render view Inertia yang berbeda).
-watch(
-    search,
-    debounce(function (value) {
-        router.get(
-            route("atasan.kuota"),
-            { search: value },
-            { preserveState: true, preserveScroll: true, replace: true },
-        );
-    }, 300),
-);
+const terapkanFilter = debounce(() => {
+    router.get(route("atasan.kuota"), buildParams(), {
+        preserveState: true,
+        preserveScroll: true,
+        replace: true,
+    });
+}, 300);
 
+watch([search, kelompok], terapkanFilter);
 
 const goToPage = (url) => {
     if (!url) return;
-    router.get(url, {}, { preserveState: true, preserveScroll: true });
+    router.get(url, buildParams(), {
+        preserveState: true,
+        preserveScroll: true,
+    });
 };
-</script>
 
+// ================= PERHITUNGAN KUOTA =================
+const currentYear = new Date().getFullYear();
+
+const toNum = (nilai) => {
+    const angka = Number(nilai);
+    return Number.isFinite(angka) ? angka : 0;
+};
+
+const getTerpakai = (pegawai) => {
+    return toNum(pegawai?.cuti_terpakai);
+};
+
+const getSisaTahunIni = (pegawai) => {
+    return toNum(pegawai?.sisa_cuti_tahun_ini) + getTerpakai(pegawai);
+};
+
+const getSaldoBawaanEligible = (pegawai) => {
+    return toNum(pegawai?.carry_forward_normal);
+};
+
+const getTotalTersedia = (pegawai) => {
+    return getSisaTahunIni(pegawai) + getSaldoBawaanEligible(pegawai);
+};
+
+const getSisaTahunBerjalan = (pegawai) => {
+    const sisa = getSisaTahunIni(pegawai) - getTerpakai(pegawai);
+    return sisa > 0 ? sisa : 0;
+};
+
+const getSaldoAkhir = (pegawai) => {
+    return getTotalTersedia(pegawai) - getTerpakai(pegawai);
+};
+// ================= END PERHITUNGAN KUOTA =================
+</script>
 
 <template>
     <Head title="Rekap Kuota Cuti Pegawai" />
-
 
     <MainLayout>
         <div class="relative w-full h-full">
@@ -177,18 +285,74 @@ const goToPage = (url) => {
                 <div
                     class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4"
                 >
-                    <h2 class="text-xl font-bold">Rekap Kuota Cuti Pegawai</h2>
-
+                    <div>
+                        <h2 class="text-xl font-bold">
+                            Rincian Kuota & Riwayat Pegawai
+                        </h2>
+                        <div
+                            v-if="showBadgeTimL1"
+                            class="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-green-700 text-xs font-semibold"
+                        >
+                            <svg
+                                class="w-3.5 h-3.5"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8zm6 3c0-2.21-3.582-4-8-4s-8 1.79-8 4"
+                                ></path>
+                            </svg>
+                            Menampilkan tim Anda: {{ userTimKerja }}
+                        </div>
+                    </div>
 
                     <div
                         class="flex flex-col sm:flex-row gap-3 items-center w-full md:w-auto"
                     >
+                        <!-- FILTER BERJENJANG — ukuran lebar seperti versi lama -->
+                        <div
+                            v-if="showFilterDropdown"
+                            class="relative w-full sm:w-[600px] shrink-0"
+                        >
+                            <svg
+                                class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"
+                                />
+                            </svg>
+                            <select
+                                v-model="kelompok"
+                                class="border border-gray-300 rounded-lg pl-9 pr-3 py-2 w-full text-sm bg-white truncate focus:ring-green-500 focus:border-green-500"
+                            >
+                                <option value="">{{ filterAllLabel }}</option>
+                                <option
+                                    v-for="opsi in filterOptions"
+                                    :key="opsi"
+                                    :value="opsi"
+                                    :title="opsi"
+                                >
+                                    {{ opsi }}
+                                </option>
+                            </select>
+                        </div>
+
                         <div class="relative w-full sm:w-auto">
                             <input
                                 v-model="search"
                                 type="text"
                                 placeholder="Cari nama/NIP..."
-                                class="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full sm:w-64 text-sm focus:ring-green-500 focus:border-green-500"
+                                class="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full sm:w-[400px] text-sm focus:ring-green-500 focus:border-green-500"
                             />
                             <svg
                                 class="w-4 h-4 text-gray-400 absolute left-3 top-3"
@@ -204,130 +368,138 @@ const goToPage = (url) => {
                                 />
                             </svg>
                         </div>
-
-                        <!-- Tidak ada tombol "Impor Kuota" di halaman atasan
-                             ini — hanya "Export Excel" untuk keperluan
-                             melihat/mengunduh rekap. -->
-                        <a
-                            :href="route('atasan.kuota.export')"
-                            class="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm transition inline-flex items-center justify-center gap-2"
-                        >
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                class="w-4 h-4"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                />
-                            </svg>
-                            Export Excel
-                        </a>
                     </div>
                 </div>
 
+                <div
+                    v-if="kelompok && showFilterDropdown"
+                    class="flex items-center gap-2 mb-4 text-xs"
+                >
+                    <span
+                        class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 font-semibold"
+                    >
+                        {{ kelompok }}
+                        <button
+                            type="button"
+                            @click="kelompok = ''"
+                            class="hover:text-green-900 cursor-pointer"
+                            title="Hapus filter"
+                        >
+                            &times;
+                        </button>
+                    </span>
+                </div>
 
                 <div class="overflow-x-auto">
-                    <table class="w-full text-left border-collapse">
+                    <table
+                        class="w-full text-left border-collapse whitespace-nowrap"
+                    >
                         <thead>
                             <tr
-                                class="border-b bg-gray-50 text-xs text-gray-600 uppercase tracking-wider"
+                                class="bg-slate-50 border-b border-slate-200 text-[11px] text-slate-500 uppercase tracking-wider font-bold"
                             >
-                                <th class="p-3">Nama Pegawai</th>
-                                <th class="p-3">Sisa Cuti Tahunan</th>
-                                <th class="p-3">Cuti Tahunan Terpakai</th>
-                                <th class="p-3 text-center">Aksi</th>
+                                <th class="p-4">Nama Pegawai</th>
+                                <th class="p-4 text-center">
+                                    Hak {{ currentYear }}
+                                </th>
+                                <th class="p-4 text-center">
+                                    Terpakai {{ currentYear }}
+                                </th>
+                                <th class="p-4 text-center">
+                                    Sisa {{ currentYear }}
+                                </th>
+                                <th class="p-4 text-center text-slate-800">
+                                    Saldo Akhir {{ currentYear }}
+                                </th>
+                                <th class="p-4 text-center">Aksi</th>
                             </tr>
                         </thead>
-                        <tbody class="text-sm">
+
+                        <tbody class="text-sm align-middle">
                             <tr
-                                v-for="pegawai in dataPegawai?.data"
+                                v-for="pegawai in daftarPegawai"
                                 :key="pegawai.id"
-                                class="border-b hover:bg-gray-50/50"
+                                class="border-b border-slate-100 hover:bg-slate-50 transition-colors"
                             >
-                                <td class="p-3">
-                                    <div class="font-medium text-gray-900">
+                                <td class="p-4">
+                                    <div
+                                        class="font-bold text-slate-800 text-sm"
+                                    >
                                         {{ pegawai.nama }}
                                     </div>
-                                    <div class="text-xs text-gray-500">
+                                    <div
+                                        class="text-[11px] text-slate-500 mt-0.5"
+                                    >
                                         {{
+                                            pegawai.jabatan ||
+                                            pegawai.kelompok_substansi ||
                                             pegawai.departemen ||
-                                            "Biro Perencanaan"
+                                            "Staf"
                                         }}
                                     </div>
                                 </td>
 
-                                <td class="p-3">
-                                    <div class="font-bold text-blue-600">
-                                        {{
-                                            (pegawai.sisa_cuti_tahun_ini || 0) +
-                                            (pegawai.sisa_cuti_tahun_lalu || 0)
-                                        }}
-                                        Hari
-                                    </div>
-                                    <div class="text-xs text-gray-500">
-                                        (Tahun Ini:
-                                        {{ pegawai.sisa_cuti_tahun_ini || 0 }}
-                                        hari, Tahun Lalu:
-                                        {{ pegawai.sisa_cuti_tahun_lalu || 0 }}
-                                        hari)
-                                    </div>
+                                <td class="p-4 text-center">
+                                    <span
+                                        class="inline-block min-w-[32px] px-2 py-1 bg-slate-100 text-slate-700 rounded-md font-bold text-xs border border-slate-300/80"
+                                    >
+                                        {{ getSisaTahunIni(pegawai) }}
+                                    </span>
                                 </td>
 
-                                <td class="p-3">
-                                    <div class="font-bold text-red-600">
-                                        {{ pegawai.cuti_terpakai || 0 }} Hari
-                                    </div>
+                                <td class="p-4 text-center">
+                                    <span
+                                        class="inline-block min-w-[32px] px-2 py-1 bg-rose-100 text-rose-800 rounded-md font-bold text-xs border border-rose-300/80"
+                                    >
+                                        {{ pegawai.cuti_terpakai || 0 }}
+                                    </span>
                                 </td>
 
-                                <td class="p-3 text-center">
+                                <td class="p-4 text-center">
+                                    <span
+                                        class="inline-block min-w-[32px] px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-bold text-xs border border-blue-300/80"
+                                    >
+                                        {{ getSisaTahunBerjalan(pegawai) }}
+                                    </span>
+                                </td>
+
+                                <td class="p-4 text-center">
+                                    <span
+                                        class="inline-block min-w-[36px] px-2.5 py-1 bg-slate-800 text-white rounded-md font-extrabold text-xs shadow-sm border border-slate-900"
+                                    >
+                                        {{ getSaldoAkhir(pegawai) }}
+                                    </span>
+                                </td>
+
+                                <td class="p-4 text-center">
                                     <button
                                         @click="openDetailModal(pegawai)"
                                         type="button"
-                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 rounded-lg text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 transition shadow-sm cursor-pointer"
+                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 hover:text-slate-900 transition shadow-sm cursor-pointer"
                                         title="Lihat Riwayat Cuti"
                                     >
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            class="w-4 h-4 text-gray-500"
-                                            fill="none"
-                                            viewBox="0 0 24 24"
-                                            stroke="currentColor"
-                                        >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                                            />
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                                            />
-                                        </svg>
                                         Detail
                                     </button>
                                 </td>
                             </tr>
 
-                            <tr
-                                v-if="
-                                    !dataPegawai?.data ||
-                                    dataPegawai.data.length === 0
-                                "
-                            >
+                            <tr v-if="daftarPegawai.length === 0">
                                 <td
-                                    colspan="4"
-                                    class="p-8 text-center text-gray-400"
+                                    colspan="6"
+                                    class="p-8 text-center text-slate-400"
                                 >
                                     Tidak ada data pegawai ditemukan.
+                                    <button
+                                        v-if="kelompok || search"
+                                        type="button"
+                                        @click="
+                                            search = '';
+                                            kelompok = '';
+                                        "
+                                        class="ml-1 text-green-700 font-semibold hover:underline cursor-pointer"
+                                    >
+                                        Reset filter
+                                    </button>
                                 </td>
                             </tr>
                         </tbody>
@@ -365,9 +537,7 @@ const goToPage = (url) => {
                 </div>
             </div>
 
-            <!-- MODAL DETAIL KUOTA + RIWAYAT CUTI PEGAWAI (identik dengan versi
-                 Admin, tanpa perubahan apapun — atasan tetap perlu melihat
-                 rincian & jejak approval lengkap) -->
+            <!-- MODAL DETAIL -->
             <div
                 v-if="showModal"
                 class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto"
@@ -430,89 +600,99 @@ const goToPage = (url) => {
                                     &middot;
                                     {{
                                         selectedPegawai.jabatan ||
+                                        selectedPegawai.kelompok_substansi ||
                                         "Staf / Pegawai"
                                     }}
                                 </p>
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                             <div
-                                class="bg-blue-100 border border-blue-200 rounded-xl p-3.5 text-center"
+                                class="bg-white p-3 rounded-xl border border-gray-200 shadow-sm text-center flex flex-col justify-center"
                             >
-                                <span
-                                    class="block text-[11px] font-bold text-blue-700 uppercase tracking-wider mb-1"
-                                    >Tahun Ini</span
+                                <p
+                                    class="text-[10px] font-bold text-gray-400 uppercase tracking-wider"
                                 >
-                                <span
-                                    class="block text-2xl font-bold text-blue-900"
-                                    >{{
-                                        selectedPegawai.sisa_cuti_tahun_ini || 0
-                                    }}
+                                    Hak {{ currentYear }}
+                                </p>
+                                <p
+                                    class="text-2xl font-black text-gray-800 mt-1"
+                                >
+                                    {{ getSisaTahunIni(selectedPegawai) }}
                                     <span class="text-xs font-normal"
-                                        >Hari</span
-                                    ></span
-                                >
-                            </div>
-
-                            <div
-                                class="bg-indigo-100 border border-indigo-200 rounded-xl p-3.5 text-center"
-                            >
-                                <span
-                                    class="block text-[11px] font-bold text-indigo-700 uppercase tracking-wider mb-1"
-                                    >Tahun Lalu</span
-                                >
-                                <span
-                                    class="block text-2xl font-bold text-indigo-900"
-                                    >{{
-                                        selectedPegawai.sisa_cuti_tahun_lalu ||
-                                        0
-                                    }}
-                                    <span class="text-xs font-normal"
-                                        >Hari</span
-                                    ></span
-                                >
-                            </div>
-
-                            <div
-                                class="bg-green-100 border border-green-300 rounded-xl p-3.5 text-center"
-                            >
-                                <span
-                                    class="block text-[11px] font-bold text-green-700 uppercase tracking-wider mb-1"
-                                    >Total Tersedia</span
-                                >
-                                <span
-                                    class="block text-2xl font-bold text-green-800"
-                                >
-                                    {{
-                                        (selectedPegawai.sisa_cuti_tahun_ini ||
-                                            0) +
-                                        (selectedPegawai.sisa_cuti_tahun_lalu ||
-                                            0)
-                                    }}
-                                    <span class="text-xs font-normal"
-                                        >Hari</span
+                                        >hari</span
                                     >
-                                </span>
+                                </p>
                             </div>
 
                             <div
-                                class="bg-red-100 border border-red-300 rounded-xl p-3.5 text-center"
+                                class="bg-rose-50 p-3 rounded-xl border border-rose-100 shadow-sm text-center flex flex-col justify-center"
                             >
-                                <span
-                                    class="block text-[11px] font-bold text-red-700 uppercase tracking-wider mb-1"
-                                    >Terpakai</span
+                                <p
+                                    class="text-[10px] font-bold text-rose-500 uppercase tracking-wider"
                                 >
-                                <span
-                                    class="block text-2xl font-bold text-red-800"
+                                    Terpakai {{ currentYear }}
+                                </p>
+                                <p
+                                    class="text-2xl font-black text-rose-600 mt-1"
                                 >
                                     {{ selectedPegawai.cuti_terpakai || 0 }}
                                     <span class="text-xs font-normal"
-                                        >Hari</span
+                                        >hari</span
                                     >
-                                </span>
+                                </p>
+                            </div>
+
+                            <div
+                                class="bg-blue-50 p-3 rounded-xl border border-blue-100 shadow-sm text-center flex flex-col justify-center"
+                            >
+                                <p
+                                    class="text-[10px] font-bold text-blue-500 uppercase tracking-wider"
+                                >
+                                    Sisa {{ currentYear }}
+                                </p>
+                                <p
+                                    class="text-2xl font-black text-blue-600 mt-1"
+                                >
+                                    {{ getSisaTahunBerjalan(selectedPegawai) }}
+                                    <span class="text-xs font-normal"
+                                        >hari</span
+                                    >
+                                </p>
+                            </div>
+
+                            <div
+                                class="bg-slate-800 border border-slate-900 text-white p-3 rounded-xl shadow-md text-center flex flex-col justify-center"
+                            >
+                                <p
+                                    class="text-[10px] font-bold text-slate-400 uppercase tracking-wider"
+                                >
+                                    Saldo Akhir {{ currentYear }}
+                                </p>
+                                <p class="text-2xl font-black text-white mt-1">
+                                    {{ getSaldoAkhir(selectedPegawai) }}
+                                    <span class="text-xs font-normal"
+                                        >hari</span
+                                    >
+                                </p>
                             </div>
                         </div>
+
+                        <p
+                            class="bg-gray-50 px-3 py-2 rounded-lg text-xs text-gray-600 border border-gray-100"
+                        >
+                            Saldo Akhir {{ currentYear }}:
+                            <span class="font-semibold text-gray-800">
+                                Hak {{ getSisaTahunIni(selectedPegawai) }} +
+                                Bawaan
+                                {{ getSaldoBawaanEligible(selectedPegawai) }} -
+                                Terpakai {{ getTerpakai(selectedPegawai) }} =
+                            </span>
+                            <span class="font-bold text-green-700">
+                                {{ getSaldoAkhir(selectedPegawai) }} hari
+                            </span>
+                        </p>
 
                         <div>
                             <h5
@@ -748,18 +928,21 @@ const goToPage = (url) => {
                                             >
                                         </div>
 
+                                        <!-- Approval chain: hanya dari backend -->
                                         <div
                                             v-if="
-                                                riwayat.approval_chain &&
-                                                riwayat.approval_chain.length >
-                                                    0
+                                                getVisibleApprovalChain(
+                                                    riwayat.approval_chain,
+                                                ).length > 0
                                             "
                                             class="bg-white p-3 rounded-lg border border-green-100 space-y-1"
                                         >
                                             <div
                                                 v-for="(
                                                     step, idx
-                                                ) in riwayat.approval_chain"
+                                                ) in getVisibleApprovalChain(
+                                                    riwayat.approval_chain,
+                                                )"
                                                 :key="
                                                     step.level ??
                                                     `tangguh-${idx}`

@@ -122,4 +122,41 @@ class Pegawai extends Authenticatable
     {
         return $this->hasMany(PengajuanCuti::class, 'pegawai_id');
     }
+
+    // ================= APPROVER DINAMIS (L1 & L2) =================
+    // Dipakai untuk menampilkan NAMA atasan L1/L2 di Modal Detail
+    // (RiwayatPengajuan.vue / Dashboard.vue), sama seperti L3/L4 yang
+    // sudah tetap (satu orang untuk seluruh biro, boleh hardcode di
+    // Vue). Berbeda dengan L3/L4, L1 & L2 berbeda-beda per Tim Kerja /
+    // Kelompok Substansi, sehingga harus dicari dinamis dari tabel
+    // pegawais itu sendiri, bukan hardcode.
+
+    // L1 = pegawai berjabatan "KETUA TIM KERJA" pada tim_kerja yang SAMA
+    // dengan pegawai ini.
+    public function getKetuaTimKerjaAttribute()
+    {
+        if (empty($this->tim_kerja)) {
+            return null;
+        }
+
+        return static::where('tim_kerja', $this->tim_kerja)
+            ->where('jabatan', 'like', '%KETUA TIM KERJA%')
+            ->where('id', '!=', $this->id)
+            ->first();
+    }
+
+    // L2 = pegawai berjabatan "KETUA KELOMPOK" pada kelompok_substansi
+    // yang SAMA dengan pegawai ini.
+    public function getKetuaKelompokAttribute()
+    {
+        if (empty($this->kelompok_substansi)) {
+            return null;
+        }
+
+        return static::where('kelompok_substansi', $this->kelompok_substansi)
+            ->where('jabatan', 'like', '%KETUA KELOMPOK%')
+            ->where('id', '!=', $this->id)
+            ->first();
+    }
+    // ================= END APPROVER DINAMIS (L1 & L2) =================
 }

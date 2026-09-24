@@ -155,7 +155,7 @@ const updatePassword = () => {
                                     class="text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-100 px-3 py-1.5 rounded-full w-full max-w-[200px] truncate"
                                 >
                                     {{
-                                        user.departemen ||
+                                        user.kelompok_substansi ||
                                         "Divisi/Departemen Kosong"
                                     }}
                                 </span>
@@ -367,11 +367,11 @@ const updatePassword = () => {
                                     <div>
                                         <label
                                             class="block text-sm font-medium text-slate-700 mb-1"
-                                            >Divisi / Departemen</label
+                                            >Kelompok Substansi</label
                                         >
                                         <input
                                             :value="
-                                                user.departemen ||
+                                                user.kelompok_substansi ||
                                                 'Belum Diatur'
                                             "
                                             type="text"
@@ -395,21 +395,6 @@ const updatePassword = () => {
                                     </div>
 
 
-                                    <!-- Field Baru yang Hanya Baca -->
-                                    <div>
-                                        <label
-                                            class="block text-sm font-medium text-slate-700 mb-1"
-                                            >Kelompok Substansi</label
-                                        >
-                                        <input
-                                            :value="
-                                                user.kelompok_substansi || '-'
-                                            "
-                                            type="text"
-                                            disabled
-                                            class="w-full rounded-lg border-slate-200 bg-slate-50 text-slate-500 shadow-sm text-sm py-2 px-3 cursor-not-allowed"
-                                        />
-                                    </div>
                                     <div>
                                         <label
                                             class="block text-sm font-medium text-slate-700 mb-1"

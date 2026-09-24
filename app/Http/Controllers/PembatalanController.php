@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 
 
 use App\Models\ApprovalLog;
+use App\Models\CutiDitangguhkan;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use Illuminate\Http\Request;
@@ -74,16 +75,28 @@ class PembatalanController extends Controller
     // termasuk menunggu_l1/l2/l3/l4 dan disetujui, penangguhan
     // diperbolehkan sesuai aturan terbaru.
     //
-    // ---> PERBAIKAN TAMBAHAN <---
-    // Di index() daftar cuti sudah dibatasi hanya untuk pegawai di
-    // departemen yang sama dengan L4 yang login. Namun endpoint process()
-    // ini sebelumnya TIDAK memvalidasi hal tersebut, sehingga secara
-    // teknis seseorang bisa mengirim request langsung (mis. lewat
-    // Postman/curl) dengan ID pengajuan milik pegawai di departemen lain
-    // dan tetap berhasil menangguhkannya. Sekarang ditambahkan pengecekan
-    // departemen pegawai pemilik pengajuan harus sama dengan departemen
-    // L4 yang sedang login, konsisten dengan batasan yang sudah ada di
-    // index().
+    // ---> PERBAIKAN LANJUTAN (menghapus batasan kelompok_substansi) <---
+    // SEBELUMNYA method ini mewajibkan kelompok_substansi pegawai pemilik
+    // pengajuan SAMA PERSIS dengan kelompok_substansi user yang login,
+    // dengan asumsi itu meniru batasan departemen yang ada di index().
+    // INI KELIRU: L4 (Kepala Biro, role_id 6) adalah jabatan yang
+    // membawahi SELURUH kelompok substansi di dalam Biro, bukan anggota
+    // dari satu kelompok substansi tertentu — persis seperti yang berlaku
+    // di MonitoringCutiController::process(), di mana batasan
+    // "harus satu departemen/kelompok" HANYA diterapkan untuk L1 (role_id
+    // 2, dibatasi ke tim_kerja miliknya) dan L2 (role_id 3, dibatasi ke
+    // kelompok_substansi miliknya) — L3 (role_id 4) dan L4 (role_id 6)
+    // SENGAJA tidak dibatasi kelompok_substansi, karena wewenangnya lintas
+    // unit. Karena kelompok_substansi milik Kepala Biro pada praktiknya
+    // TIDAK SAMA dengan kelompok_substansi staf mana pun, pengecekan lama
+    // ini membuat SETIAP permintaan penangguhan oleh L4 selalu gagal
+    // (redirect balik dengan flash 'error', tanpa status yang benar-benar
+    // berubah) — inilah sebab utama kenapa penangguhan tidak pernah
+    // "nyambung" ke halaman Riwayat Pengajuan karyawan. Pengecekan
+    // kelompok_substansi ini DIHAPUS; cukup abort_unless(role_id === 6) di
+    // atas yang menjaga bahwa hanya Kepala Biro yang bisa mengeksekusi aksi
+    // ini, sama seperti index() yang juga tidak membatasi kelompok
+    // substansi untuk L4.
     public function process(Request $request, $id)
     {
         $user = auth()->user();
@@ -98,14 +111,6 @@ class PembatalanController extends Controller
 
 
         $pengajuan = PengajuanCuti::with('pegawai')->findOrFail($id);
-
-
-        // Jaga-jaga di level backend: L4 hanya boleh menangguhkan cuti
-        // milik pegawai di departemen yang sama dengannya, sama seperti
-        // batasan yang sudah diterapkan di index().
-        if (!$pengajuan->pegawai || $pengajuan->pegawai->departemen !== $user->departemen) {
-            return back()->with('error', 'Anda tidak berwenang menangguhkan cuti pegawai di luar departemen Anda.');
-        }
 
 
         // Jaga-jaga di level backend: status yang termasuk
@@ -159,6 +164,34 @@ class PembatalanController extends Controller
             'catatan' => $request->alasan,
             'tanggal_keputusan' => now(),
         ]);
+
+
+        // ================= [BARU] CATAT KE CUTI DITANGGUHKAN =================
+        // Ini adalah SUMBER KEBENARAN untuk perhitungan carry-over saldo
+        // cuti tahunan "Jalur Khusus (b)" (lihat GenerateSaldoCutiTahunBaru
+        // & AdminController::hitungCarryForwardEligible()) — hari yang
+        // tercatat di sini akan SELALU dibawa penuh ke tahun berikutnya,
+        // tidak kena potongan maksimal 6 hari seperti sisa saldo biasa,
+        // karena memang bukan "pegawai tidak sempat pakai" melainkan
+        // "pegawai dilarang pakai oleh institusi" (ditangguhkan resmi
+        // oleh Kepala Biro/L4).
+        //
+        // `updateOrCreate` dipakai (bukan `create`) supaya kalau ada
+        // percobaan menangguhkan pengajuan yang sama dua kali (seharusnya
+        // sudah dicegah oleh pengecekan status di atas, tapi ini jaga-jaga
+        // tambahan), baris yang tercatat tetap satu, bukan dobel.
+        CutiDitangguhkan::updateOrCreate(
+            ['pengajuan_asal_id' => $pengajuan->id],
+            [
+                'pegawai_id' => $pengajuan->pegawai_id,
+                'jumlah_hari' => $pengajuan->jumlah_hari,
+                'tahun_asal' => (int) date('Y', strtotime($pengajuan->tanggal_mulai)),
+                'tahun_penggunaan' => null,
+                'status_pakai' => 'belum_dipakai',
+                'alasan_penangguhan' => $request->alasan,
+            ]
+        );
+        // ================= [END BARU] =================
 
 
         return back()->with('success', 'Cuti berhasil ditangguhkan.');

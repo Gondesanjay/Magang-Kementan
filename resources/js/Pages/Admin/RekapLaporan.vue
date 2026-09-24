@@ -3,6 +3,7 @@ import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, router } from "@inertiajs/vue3";
 import { ref, watch, computed } from "vue";
 
+
 const props = defineProps({
     laporan: {
         type: Array,
@@ -12,7 +13,10 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
-    // ---> BARU: info pagination dari server (lihat AdminController@rekapLaporan) <---
+    daftarKelompokSubstansi: {
+        type: Array,
+        default: () => [],
+    },
     pagination: {
         type: Object,
         default: () => ({
@@ -24,14 +28,15 @@ const props = defineProps({
     },
 });
 
-// State untuk filter, mengambil nilai default dari backend jika ada
+
 const searchQuery = ref(props.filters.search || "");
 const filterTahun = ref(
     props.filters.tahun || new Date().getFullYear().toString(),
 );
 const filterBulan = ref(props.filters.bulan || "");
+const filterKelompok = ref(props.filters.kelompok_substansi || "");
 
-// Daftar bulan untuk looping header tabel dan key data
+
 const bulanList = [
     "Januari",
     "Februari",
@@ -61,23 +66,15 @@ const keyBulan = [
     "des",
 ];
 
-// ================= PAGINATION SERVER-SIDE (10 BARIS PER HALAMAN) =================
-// Sekarang backend (AdminController@rekapLaporan) yang memotong data jadi
-// 10 baris per halaman, bukan lagi Vue. Nomor halaman ikut dikirim lewat
-// query string (?page=...) setiap kali fetchFilteredData dipanggil.
 
-// Fungsi Auto-Submit menggunakan Inertia router.get.
-// Parameter "page" opsional: dipakai saat pindah halaman lewat tombol
-// paginasi. Kalau tidak diisi, otomatis kembali ke halaman 1 — dipakai saat
-// search/filter bulan/tahun berubah, supaya tidak "nyangkut" di halaman
-// kosong pada hasil filter yang baru.
 const fetchFilteredData = (page = 1) => {
     router.get(
-        route("admin.rekap"), // Nama route sesuai pendaftaran di routes/web.php
+        route("admin.rekap"),
         {
             search: searchQuery.value,
             tahun: filterTahun.value,
             bulan: filterBulan.value,
+            kelompok_substansi: filterKelompok.value,
             page,
         },
         {
@@ -88,40 +85,38 @@ const fetchFilteredData = (page = 1) => {
     );
 };
 
-// Watcher untuk Dropdown (Langsung fetch saat dipilih, kembali ke halaman 1)
-watch([filterTahun, filterBulan], () => {
+
+watch([filterTahun, filterBulan, filterKelompok], () => {
     fetchFilteredData(1);
 });
 
-// Watcher untuk Input Pencarian (Menggunakan delay/debounce agar tidak spam request saat mengetik)
+
 let searchTimeout = null;
 watch(searchQuery, () => {
     clearTimeout(searchTimeout);
     searchTimeout = setTimeout(() => {
         fetchFilteredData(1);
-    }, 500); // delay 500ms
+    }, 500);
 });
 
-// Pindah ke halaman tertentu (dipakai oleh kontrol paginasi di bawah tabel)
+
 const goToPage = (page) => {
     if (page < 1 || page > props.pagination.last_page) return;
     if (page === props.pagination.current_page) return;
     fetchFilteredData(page);
 };
 
-// Nomor urut ("No") tetap berlanjut sesuai halaman aktif (11, 12, 13, ...
-// di halaman 2, dst), bukan reset ke 1 tiap halaman.
+
 const startIndex = computed(
     () => (props.pagination.current_page - 1) * props.pagination.per_page,
 );
 
-// Daftar nomor halaman yang ditampilkan (maks 5 tombol, dengan ellipsis sederhana)
+
 const pageNumbers = computed(() => {
     const total = props.pagination.last_page;
     const current = props.pagination.current_page;
     const delta = 2;
     const range = [];
-
     for (
         let i = Math.max(1, current - delta);
         i <= Math.min(total, current + delta);
@@ -129,50 +124,67 @@ const pageNumbers = computed(() => {
     ) {
         range.push(i);
     }
-
     return range;
 });
-// ================= END PAGINATION SERVER-SIDE =================
 
-// Kolom bulan yang ditampilkan di tabel.
-// Jika filterBulan dipilih (misal Agustus), tabel hanya menampilkan 1 kolom bulan itu.
-// Jika "Semua Bulan", tabel menampilkan 12 kolom seperti biasa.
+
 const columnsToShow = computed(() => {
     if (filterBulan.value) {
         const index = parseInt(filterBulan.value, 10) - 1;
-        return [
-            {
-                label: bulanList[index],
-                key: keyBulan[index],
-            },
-        ];
+        return [{ label: bulanList[index], key: keyBulan[index] }];
     }
-
-    return bulanList.map((label, index) => ({
-        label,
-        key: keyBulan[index],
-    }));
+    return bulanList.map((label, index) => ({ label, key: keyBulan[index] }));
 });
 
-// ================= PERBAIKAN TAMPILAN EMPTY STATE =================
-// Sebelumnya pesan kosong selalu generik ("Belum ada data rekapitulasi cuti
-// di sistem") walau penyebabnya cuma filter (bulan/pencarian) yang membuat
-// hasilnya nihil — ini bisa menyesatkan Admin HR, seolah SELURUH sistem
-// kosong padahal cuma bulan/pencarian tertentu saja yang tidak ada datanya.
-// Sekarang pesan menyesuaikan filter yang sedang aktif, plus disediakan
-// tombol Reset Filter supaya Admin HR mudah kembali melihat semua data.
 
-// Apakah ada filter yang sedang aktif (selain tahun, karena tahun selalu terisi)
 const isFilterAktif = computed(() => {
-    return Boolean(searchQuery.value) || Boolean(filterBulan.value);
+    return (
+        Boolean(searchQuery.value) ||
+        Boolean(filterBulan.value) ||
+        Boolean(filterKelompok.value)
+    );
 });
 
-// Pesan kontekstual untuk empty state, menyebutkan filter yang sedang aktif
+
+// Daftar chip filter aktif — hanya berisi filter yang bukan nilai default,
+// jadi baris chip ini otomatis kosong (dan disembunyikan) saat admin belum memfilter apa pun.
+const activeFilterChips = computed(() => {
+    const chips = [];
+    if (searchQuery.value) {
+        chips.push({
+            key: "search",
+            label: `Pencarian: "${searchQuery.value}"`,
+            clear: () => {
+                searchQuery.value = "";
+            },
+        });
+    }
+    if (filterKelompok.value) {
+        chips.push({
+            key: "kelompok",
+            label: filterKelompok.value,
+            clear: () => {
+                filterKelompok.value = "";
+            },
+        });
+    }
+    if (filterBulan.value) {
+        chips.push({
+            key: "bulan",
+            label: bulanList[parseInt(filterBulan.value, 10) - 1],
+            clear: () => {
+                filterBulan.value = "";
+            },
+        });
+    }
+    return chips;
+});
+
+
 const emptyStateMessage = computed(() => {
     const bagianBulan = filterBulan.value
         ? bulanList[parseInt(filterBulan.value, 10) - 1]
         : null;
-
     if (bagianBulan && searchQuery.value) {
         return `Tidak ditemukan pengajuan cuti untuk "${searchQuery.value}" pada bulan ${bagianBulan} ${filterTahun.value}.`;
     }
@@ -185,76 +197,132 @@ const emptyStateMessage = computed(() => {
     return `Belum ada data rekapitulasi cuti untuk tahun ${filterTahun.value}.`;
 });
 
-// Reset semua filter (kecuali tahun, biarkan tahun berjalan tetap dipilih)
-// supaya Admin HR bisa langsung melihat kembali seluruh data.
+
 const resetFilters = () => {
     searchQuery.value = "";
     filterBulan.value = "";
+    filterKelompok.value = "";
     fetchFilteredData(1);
 };
-// ================= END PERBAIKAN TAMPILAN EMPTY STATE =================
 </script>
+
 
 <template>
     <Head title="Rekap Laporan Cuti" />
 
+
     <MainLayout>
-        <div class="p-6">
+        <div class="p-4 sm:p-6">
             <div
-                class="bg-white overflow-hidden shadow-sm sm:rounded-xl border border-gray-200 p-6"
+                class="bg-white overflow-hidden shadow-sm sm:rounded-xl border border-gray-200 p-4 sm:p-6"
             >
-                <!-- Bagian Header & Filter -->
+                <!-- ===================== JUDUL + EXPORT (baris atas) ===================== -->
+                <!-- Judul & subjudul di kiri, tombol Export selalu di
+                 kanan atas baris judul — sesuai aturan layout prototype. -->
                 <div
-                    class="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-6 gap-4"
+                    class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-5 gap-4"
                 >
-                    <h2 class="text-xl font-bold text-gray-700">
-                        Rekapitulasi Cuti Tahunan Pegawai
-                    </h2>
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-800">
+                            Rekapitulasi Cuti Tahunan Pegawai
+                        </h3>
+                        <p class="text-sm text-gray-500 mt-0.5">
+                            Rekap pemakaian cuti tiap pegawai per bulan dalam
+                            satu tahun.
+                        </p>
+                    </div>
 
-                    <div
-                        class="flex flex-wrap items-center gap-3 w-full xl:w-auto"
+
+                    <a
+                        :href="
+                            route('admin.rekap.export', {
+                                search: searchQuery,
+                                tahun: filterTahun,
+                                bulan: filterBulan,
+                                kelompok_substansi: filterKelompok,
+                            })
+                        "
+                        target="_blank"
+                        class="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2.5 bg-green-700 hover:bg-green-800 text-white rounded-full text-sm font-semibold transition-colors shadow-sm whitespace-nowrap shrink-0"
                     >
-                        <!-- Input Pencarian -->
-                        <div class="relative flex-grow md:flex-grow-0">
-                            <span
-                                class="absolute inset-y-0 left-0 flex items-center pl-3"
-                            >
-                                <svg
-                                    class="w-4 h-4 text-gray-400"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-                                    ></path>
-                                </svg>
-                            </span>
-                            <input
-                                type="text"
-                                v-model="searchQuery"
-                                placeholder="Cari nama atau NIP..."
-                                class="pl-10 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 w-full md:w-64"
-                            />
-                        </div>
+                        <svg
+                            class="w-4 h-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                            ></path>
+                        </svg>
+                        Export Excel
+                    </a>
+                </div>
 
-                        <!--
-                            Dropdown Bulan
-                            PERBAIKAN TAMPILAN:
-                            - "bg-none" ditambahkan supaya tidak numpuk sama
-                              background-image chevron bawaan (mis. dari plugin
-                              @tailwindcss/forms) dengan SVG panah custom di bawah
-                              -> ini yang bikin efek "berbayang"/dobel sebelumnya.
-                            - border & warna teks dibikin lebih tegas (tidak pudar),
-                              menyamai gaya dropdown di halaman Monitoring Cuti.
-                        -->
-                        <div class="relative">
+
+                <!-- ===================== TOOLBAR: SEARCH + FILTER ===================== -->
+                <!-- Baris tersendiri tepat di bawah judul: search melebar
+                 mengisi sisa ruang, filter-filter berjajar rapat di ujung
+                 kanan dengan lebar tetap — sesuai proporsi di prototype. -->
+                <div
+                    class="flex flex-col sm:flex-row sm:items-center gap-2 mb-3"
+                >
+                    <!-- Search -->
+                    <div class="relative w-full sm:flex-1">
+                        <div
+                            class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                        >
+                            <svg
+                                class="w-4 h-4 text-gray-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                                ></path>
+                            </svg>
+                        </div>
+                        <input
+                            type="text"
+                            v-model="searchQuery"
+                            placeholder="Cari nama / NIP..."
+                            class="w-full pl-9 pr-3 py-2 text-xs border border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 rounded-lg shadow-sm bg-white"
+                        />
+                    </div>
+
+
+                    <!-- Filter group: satu baris yang bisa digeser di mobile, bukan ditumpuk satu-satu.
+                     Lebar tiap filter dipatok (bukan min-width) supaya tidak melebar mengikuti
+                     panjang teks opsi terpilih, konsisten dengan lebar di prototype. -->
+                    <div
+                        class="flex items-center gap-2 overflow-x-auto sm:overflow-visible -mx-4 sm:mx-0 px-4 sm:px-0 pb-1 sm:pb-0 scrollbar-thin"
+                    >
+                        <select
+                            v-model="filterKelompok"
+                            class="flex-none w-56 truncate text-xs border border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 rounded-lg shadow-sm text-gray-600 py-2 pl-3 pr-8 bg-white"
+                        >
+                            <option value="">Semua Kelompok Substansi</option>
+                            <option
+                                v-for="kelompok in daftarKelompokSubstansi"
+                                :key="kelompok"
+                                :value="kelompok"
+                            >
+                                {{ kelompok }}
+                            </option>
+                        </select>
+
+
+                        <div class="relative flex-none">
                             <select
                                 v-model="filterBulan"
-                                class="pl-4 pr-8 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 font-medium focus:ring-blue-500 focus:border-blue-500 appearance-none bg-none bg-white min-w-[120px]"
+                                class="w-36 truncate text-xs border border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 rounded-lg shadow-sm text-gray-600 py-2 pl-3 pr-8 appearance-none bg-none bg-white"
                             >
                                 <option value="">Semua Bulan</option>
                                 <option
@@ -269,7 +337,7 @@ const resetFilters = () => {
                                 class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
                             >
                                 <svg
-                                    class="w-4 h-4 text-gray-500"
+                                    class="w-3.5 h-3.5 text-gray-500"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -284,33 +352,11 @@ const resetFilters = () => {
                             </span>
                         </div>
 
-                        <!--
-                            Dropdown Tahun
-                            PERBAIKAN TAMPILAN: sama seperti Dropdown Bulan di atas
-                            -> "bg-none" (fix efek berbayang) + border & teks lebih
-                            tegas + ikon kalender & panah dibikin lebih pekat.
-                        -->
-                        <div class="relative">
-                            <span
-                                class="absolute inset-y-0 left-0 flex items-center pl-3"
-                            >
-                                <svg
-                                    class="w-4 h-4 text-gray-500"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
-                                    ></path>
-                                </svg>
-                            </span>
+
+                        <div class="relative flex-none">
                             <select
                                 v-model="filterTahun"
-                                class="pl-10 pr-8 py-2 border border-gray-400 rounded-lg text-sm text-gray-700 font-medium focus:ring-blue-500 focus:border-blue-500 appearance-none bg-none bg-white"
+                                class="w-24 text-xs border border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 rounded-lg shadow-sm text-gray-600 py-2 pl-3 pr-8 appearance-none bg-none bg-white"
                             >
                                 <option value="2026">2026</option>
                                 <option value="2025">2025</option>
@@ -320,7 +366,7 @@ const resetFilters = () => {
                                 class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
                             >
                                 <svg
-                                    class="w-4 h-4 text-gray-500"
+                                    class="w-3.5 h-3.5 text-gray-500"
                                     fill="none"
                                     stroke="currentColor"
                                     viewBox="0 0 24 24"
@@ -334,57 +380,61 @@ const resetFilters = () => {
                                 </svg>
                             </span>
                         </div>
-
-                        <!-- Tombol Export Data Excel -->
-                        <a
-                            :href="
-                                route('admin.rekap.export', {
-                                    search: searchQuery,
-                                    tahun: filterTahun,
-                                    bulan: filterBulan,
-                                })
-                            "
-                            target="_blank"
-                            class="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 flex items-center transition-colors"
-                        >
-                            <svg
-                                class="w-4 h-4 mr-2"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                                ></path>
-                            </svg>
-                            Export Excel
-                        </a>
                     </div>
                 </div>
 
-                <!-- Tabel Matriks Sesuai Screenshot -->
+
+                <!-- ===================== CHIP FILTER AKTIF ===================== -->
+                <!-- Hanya dirender kalau ada minimal 1 filter aktif (search / kelompok / bulan) -->
+                <div
+                    v-if="activeFilterChips.length > 0"
+                    class="flex flex-wrap items-center gap-2 mb-4 text-xs text-gray-500"
+                >
+                    <span>Filter aktif:</span>
+                    <span
+                        v-for="chip in activeFilterChips"
+                        :key="chip.key"
+                        class="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-700 font-semibold pl-3 pr-2 py-1 rounded-full"
+                    >
+                        {{ chip.label }}
+                        <button
+                            type="button"
+                            @click="chip.clear()"
+                            class="text-emerald-600/70 hover:text-emerald-700"
+                            aria-label="Hapus filter"
+                        >
+                            ✕
+                        </button>
+                    </span>
+                    <button
+                        type="button"
+                        @click="resetFilters"
+                        class="text-gray-400 underline hover:text-gray-600"
+                    >
+                        Hapus semua
+                    </button>
+                </div>
+
+
+                <!-- ===================== TABLE ===================== -->
                 <div class="overflow-x-auto rounded-lg border border-gray-200">
                     <table class="divide-y divide-gray-200" style="width: auto">
                         <thead class="bg-gray-50 border-b-2 border-gray-200">
                             <tr>
                                 <th
-                                    class="px-4 py-4 text-center text-xs font-bold text-gray-700 w-12 border-r border-gray-200"
+                                    class="sticky left-0 z-20 bg-gray-50 px-4 py-4 text-center text-xs font-bold text-gray-700 w-12 border-r border-gray-200"
                                 >
                                     No
                                 </th>
                                 <th
-                                    class="px-6 py-4 text-left text-xs font-bold text-gray-700 min-w-[280px] border-r border-gray-200"
+                                    class="sticky left-12 z-20 bg-gray-50 px-6 py-4 text-left text-xs font-bold text-gray-700 min-w-[220px] sm:min-w-[260px] border-r-2 border-gray-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]"
                                 >
                                     Nama Pegawai
                                 </th>
-                                <!-- Looping Header Bulan (dinamis: 1 kolom jika difilter, 12 jika Semua Bulan) -->
                                 <th
                                     v-for="col in columnsToShow"
                                     :key="col.key"
-                                    class="px-3 py-4 text-center text-xs font-bold text-gray-700 whitespace-nowrap border-r border-gray-200 last:border-r-0 w-32 max-w-[8rem]"
+                                    class="px-2 py-3 text-center text-xs font-bold text-gray-700 whitespace-nowrap border-r border-gray-200 last:border-r-0 w-20 max-w-[5rem]"
                                 >
                                     {{ col.label }}
                                 </th>
@@ -402,15 +452,15 @@ const resetFilters = () => {
                             <tr
                                 v-for="(item, index) in laporan"
                                 :key="item.id || startIndex + index"
-                                class="hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)] transition-all duration-150"
+                                class="group hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)] transition-all duration-150"
                             >
                                 <td
-                                    class="px-4 py-4 whitespace-nowrap text-center text-sm font-semibold text-gray-800 border-r border-gray-200"
+                                    class="sticky left-0 z-10 bg-white group-hover:bg-violet-50 px-4 py-4 whitespace-nowrap text-center text-sm font-semibold text-gray-800 border-r border-gray-200 transition-colors duration-150"
                                 >
                                     {{ startIndex + index + 1 }}
                                 </td>
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap border-r border-gray-200"
+                                    class="sticky left-12 z-10 bg-white group-hover:bg-violet-50 px-6 py-4 whitespace-nowrap border-r-2 border-gray-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors duration-150"
                                 >
                                     <div
                                         class="text-sm font-bold text-gray-800 uppercase"
@@ -421,17 +471,16 @@ const resetFilters = () => {
                                         '{{ item.nip }}
                                     </div>
                                 </td>
-                                <!-- Looping Data Angka Cuti Per Bulan (dinamis, ikut columnsToShow) -->
                                 <td
                                     v-for="col in columnsToShow"
                                     :key="col.key"
-                                    class="px-3 py-4 whitespace-nowrap text-center text-sm border-r border-gray-200 last:border-r-0 w-32 max-w-[8rem]"
+                                    class="px-2 py-3 whitespace-nowrap text-center text-sm border-r border-gray-200 last:border-r-0 w-20 max-w-[5rem]"
                                 >
                                     <div
                                         :class="
                                             item.cuti && item.cuti[col.key] > 0
-                                                ? 'mx-auto w-10 py-1.5 bg-blue-100 text-blue-800 font-bold rounded-lg shadow-sm'
-                                                : 'mx-auto w-10 py-1.5 bg-gray-100 text-gray-500 font-medium rounded-lg'
+                                                ? 'mx-auto w-9 py-1.5 bg-blue-100 text-blue-800 font-bold rounded-lg shadow-sm text-xs'
+                                                : 'mx-auto w-9 py-1.5 bg-gray-100 text-gray-500 font-medium rounded-lg text-xs'
                                         "
                                     >
                                         {{
@@ -442,7 +491,6 @@ const resetFilters = () => {
                                         }}
                                     </div>
                                 </td>
-                                <!-- Total Cuti (Pembanding) -->
                                 <td
                                     class="px-4 py-4 whitespace-nowrap text-center border-r border-gray-200 bg-slate-50"
                                 >
@@ -455,13 +503,7 @@ const resetFilters = () => {
                             </tr>
                         </tbody>
 
-                        <!-- ================= PERBAIKAN EMPTY STATE =================
-                             Pesan sekarang menyesuaikan filter yang sedang aktif (lihat
-                             computed emptyStateMessage), dilengkapi ikon supaya tidak
-                             polos, dan tombol Reset Filter kalau memang ada filter yang
-                             aktif (bulan dan/atau pencarian) supaya Admin HR mudah
-                             kembali melihat seluruh data tanpa harus reset manual satu
-                             per satu. -->
+
                         <tbody v-else class="bg-white">
                             <tr>
                                 <td
@@ -497,7 +539,7 @@ const resetFilters = () => {
                                             v-if="isFilterAktif"
                                             type="button"
                                             @click="resetFilters"
-                                            class="mt-1 inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-300 rounded-lg text-xs font-semibold text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
+                                            class="mt-1 inline-flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-300 rounded-full text-xs font-semibold text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors"
                                         >
                                             <svg
                                                 class="w-3.5 h-3.5"
@@ -518,11 +560,10 @@ const resetFilters = () => {
                                 </td>
                             </tr>
                         </tbody>
-                        <!-- ================= END PERBAIKAN EMPTY STATE ================= -->
                     </table>
                 </div>
 
-                <!-- ================= KONTROL PAGINASI SERVER-SIDE (10 BARIS/HALAMAN) ================= -->
+
                 <div
                     v-if="laporan.length > 0"
                     class="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4"
@@ -546,6 +587,7 @@ const resetFilters = () => {
                         pegawai
                     </p>
 
+
                     <div
                         v-if="pagination.last_page > 1"
                         class="flex items-center gap-1"
@@ -554,16 +596,17 @@ const resetFilters = () => {
                             type="button"
                             :disabled="pagination.current_page === 1"
                             @click="goToPage(pagination.current_page - 1)"
-                            class="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            class="px-3 py-1.5 text-xs font-semibold rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                         >
                             Sebelumnya
                         </button>
+
 
                         <button
                             v-if="pageNumbers[0] > 1"
                             type="button"
                             @click="goToPage(1)"
-                            class="w-8 h-8 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                            class="w-8 h-8 text-xs font-semibold rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
                         >
                             1
                         </button>
@@ -573,13 +616,14 @@ const resetFilters = () => {
                             >...</span
                         >
 
+
                         <button
                             v-for="page in pageNumbers"
                             :key="page"
                             type="button"
                             @click="goToPage(page)"
                             :class="[
-                                'w-8 h-8 text-xs font-semibold rounded-lg border transition-colors',
+                                'w-8 h-8 text-xs font-semibold rounded-full border transition-colors',
                                 page === pagination.current_page
                                     ? 'bg-blue-600 border-blue-600 text-white'
                                     : 'border-gray-300 text-gray-600 hover:bg-gray-50',
@@ -587,6 +631,7 @@ const resetFilters = () => {
                         >
                             {{ page }}
                         </button>
+
 
                         <span
                             v-if="
@@ -603,10 +648,11 @@ const resetFilters = () => {
                             "
                             type="button"
                             @click="goToPage(pagination.last_page)"
-                            class="w-8 h-8 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+                            class="w-8 h-8 text-xs font-semibold rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
                         >
                             {{ pagination.last_page }}
                         </button>
+
 
                         <button
                             type="button"
@@ -614,14 +660,18 @@ const resetFilters = () => {
                                 pagination.current_page === pagination.last_page
                             "
                             @click="goToPage(pagination.current_page + 1)"
-                            class="px-3 py-1.5 text-xs font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            class="px-3 py-1.5 text-xs font-semibold rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                         >
                             Berikutnya
                         </button>
                     </div>
                 </div>
-                <!-- ================= END KONTROL PAGINASI ================= -->
             </div>
         </div>
     </MainLayout>
 </template>
+
+
+
+
+

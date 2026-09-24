@@ -57,7 +57,8 @@ class HandleInertiaRequests extends Middleware
                     'role_id'            => $user->role_id,
                     'foto_profil'        => $user->foto_profil,
                     'jabatan'            => $user->jabatan,
-                    'departemen'         => $user->departemen,
+                    'kelompok_substansi' => $user->kelompok_substansi,
+                    'tim_kerja'          => $user->tim_kerja,
                     'alamat_domisili'    => $user->alamat_domisili, // <-- FIX: kolom ini hilang, menyebabkan alamat tidak muncul setelah refresh
                     'no_telepon'         => $user->no_telepon, // <-- FIX: kolom ini juga hilang, menyebabkan nomor telepon tidak muncul setelah refresh
                     'kelompok_substansi' => $user->kelompok_substansi, // <-- Ditambahkan agar konsisten dengan tampilan di Profile Edit

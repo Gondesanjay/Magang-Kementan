@@ -7,10 +7,13 @@ namespace App\Http\Controllers;
 use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
+use App\Models\CutiDitangguhkan;
+use App\Models\HistoriSaldo;
 use App\Models\HariLibur;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
 use Inertia\Inertia;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
@@ -136,10 +139,16 @@ class AdminController extends Controller
     {
         $tahun = $request->input('tahun', date('Y'));
         $search = $request->input('search');
+        $kelompok = $request->input('kelompok_substansi');
         $bulanFilter = $request->input('bulan');
 
 
         $query = Pegawai::where('role_id', '!=', self::ROLE_ID_ADMIN);
+
+
+        $query->when($kelompok, function ($q) use ($kelompok) {
+            return $q->where('kelompok_substansi', $kelompok);
+        });
 
 
         if ($search) {
@@ -212,7 +221,8 @@ class AdminController extends Controller
                 'nama' => $pegawai->nama,
                 'nip' => $pegawai->nip,
                 'jabatan' => $pegawai->jabatan,
-                'departemen' => $pegawai->departemen,
+                'kelompok_substansi' => $pegawai->kelompok_substansi,
+                'tim_kerja' => $pegawai->tim_kerja,
                 'role_id' => $pegawai->role_id,
                 'cuti' => $rekapBulan,
                 'total' => array_sum($rekapBulan),
@@ -245,6 +255,64 @@ class AdminController extends Controller
     // ================= END HELPER BERSAMA =================
 
 
+    // ================= [DIUBAH] HELPER: PREVIEW CARRY-OVER (2 SUMBER) =================
+    // Logika PERSIS SAMA dengan yang dipakai di Command
+    // GenerateSaldoCutiTahunBaru (app/Console/Commands/GenerateSaldoCutiTahunBaru.php)
+    // setelah REVISI menggabungkan 2 sumber carry-over:
+    //   SUMBER 1: sisa saldo biasa (Jalur Normal maks 6 hari / Jalur
+    //              Khusus kalau 2 tahun berturut-turut tidak pakai cuti).
+    //   SUMBER 2: hari dari tabel `cuti_ditangguhkans` yang berstatus
+    //              'belum_dipakai' di tahun lalu (SELALU dibawa penuh,
+    //              dicatat otomatis oleh PembatalanController@process
+    //              setiap kali L4 menangguhkan sebuah pengajuan).
+    //
+    // Dipertahankan di sini HANYA untuk keperluan PREVIEW di halaman
+    // Kelola Saldo Cuti (menampilkan ke Admin berapa carry-over yang akan
+    // didapat pegawai kalau digenerate), TIDAK dipakai untuk benar-benar
+    // menulis ke database — proses generate sesungguhnya SELALU lewat
+    // Command yang sama (dipanggil oleh scheduler otomatis MAUPUN tombol
+    // manual generateSaldoManual() di bawah), supaya logikanya tidak
+    // pernah tertulis dua kali secara terpisah dan berisiko tidak sinkron.
+    private function hitungPreviewCarryOver(int $pegawaiId, int $tahunBaru): array
+    {
+        $tahunLalu = $tahunBaru - 1;
+
+        // SUMBER 1
+        $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawaiId)
+            ->where('tahun', $tahunLalu)
+            ->first();
+
+        $saldoDuaTahunLalu = SaldoCuti::where('pegawai_id', $pegawaiId)
+            ->where('tahun', $tahunBaru - 2)
+            ->first();
+
+        $carryDariSaldoBiasa = 0;
+
+        if ($saldoTahunLalu) {
+            $sisaTahunLalu = (int) $saldoTahunLalu->sisa;
+
+            $tidakDipakaiTahunLalu = $sisaTahunLalu >= $saldoTahunLalu->kuota_tahunan;
+            $tidakDipakaiDuaTahunLalu = $saldoDuaTahunLalu
+                && (int) $saldoDuaTahunLalu->sisa >= $saldoDuaTahunLalu->kuota_tahunan;
+
+            $carryDariSaldoBiasa = ($tidakDipakaiTahunLalu && $tidakDipakaiDuaTahunLalu)
+                ? $sisaTahunLalu
+                : min($sisaTahunLalu, 6);
+        }
+
+        // SUMBER 2
+        $carryDariPenangguhanResmi = CutiDitangguhkan::belumDipakai($pegawaiId, $tahunLalu)
+            ->sum('jumlah_hari');
+
+        return [
+            'dari_saldo_biasa' => $carryDariSaldoBiasa,
+            'dari_penangguhan_resmi' => $carryDariPenangguhanResmi,
+            'total' => $carryDariSaldoBiasa + $carryDariPenangguhanResmi,
+        ];
+    }
+    // ================= [END DIUBAH] =================
+
+
     // 1. Menampilkan Daftar Pegawai
     public function kelolaPegawai()
     {
@@ -275,8 +343,8 @@ class AdminController extends Controller
         $request->validate([
             'nip' => ['required', 'string', 'max:50', 'unique:pegawais,nip'],
             'nama' => ['required', 'string', 'max:255'],
-            'departemen' => ['required', 'string', 'max:255'],
-            'divisi' => ['nullable', 'string', 'max:255'],
+            'kelompok_substansi' => ['required', 'string', 'max:255'],
+            'tim_kerja' => ['nullable', 'string', 'max:255'],
             'jabatan' => ['required', 'string', 'max:255'],
             'role_id' => ['required', 'integer'],
             'tanggal_masuk' => ['nullable', 'date'],
@@ -296,8 +364,8 @@ class AdminController extends Controller
         $pegawai = Pegawai::create([
             'nip' => $request->nip,
             'nama' => $request->nama,
-            'departemen' => $request->departemen,
-            'divisi' => $request->divisi,
+            'kelompok_substansi' => $request->kelompok_substansi,
+            'tim_kerja' => $request->tim_kerja,
             'jabatan' => $request->jabatan,
             'role_id' => $request->role_id,
             'tanggal_masuk' => $tanggalMasuk,
@@ -334,8 +402,8 @@ class AdminController extends Controller
         $request->validate([
             'nip' => ['required', 'string', 'max:50', 'unique:pegawais,nip,' . $id],
             'nama' => ['required', 'string', 'max:255'],
-            'departemen' => ['required', 'string', 'max:255'],
-            'divisi' => ['nullable', 'string', 'max:255'],
+            'kelompok_substansi' => ['required', 'string', 'max:255'],
+            'tim_kerja' => ['nullable', 'string', 'max:255'],
             'jabatan' => ['required', 'string', 'max:255'],
             'role_id' => ['required', 'integer'],
             'tanggal_masuk' => ['nullable', 'date'],
@@ -350,8 +418,8 @@ class AdminController extends Controller
         $pegawai->update([
             'nip' => $request->nip,
             'nama' => $request->nama,
-            'departemen' => $request->departemen,
-            'divisi' => $request->divisi,
+            'kelompok_substansi' => $request->kelompok_substansi,
+            'tim_kerja' => $request->tim_kerja,
             'jabatan' => $request->jabatan,
             'role_id' => $request->role_id,
             ...$request->filled('tanggal_masuk') ? ['tanggal_masuk' => $request->tanggal_masuk] : [],
@@ -398,9 +466,43 @@ class AdminController extends Controller
 
 
     // ---> Import Data Pegawai dari Excel/CSV <---
-    // Nama, Jabatan, Departemen, dan Tim Kerja otomatis dirapikan ke Title
+    // Nama, Kelompok Substansi, Tim Kerja, dan Jabatan otomatis dirapikan ke Title
     // Case lewat toTitleCase() supaya tidak tersimpan dalam ALL CAPS meski
     // file sumbernya ditulis full huruf besar.
+    //
+    // ---> DIPERBAIKI (v2): sebelumnya pakai Pegawai::updateOrCreate(['nip'
+    // => $nip], $dataUmum) supaya NIP yang sudah ada tidak memicu
+    // UniqueConstraintViolationException. Tapi pendekatan itu menimbulkan
+    // bug baru: untuk pegawai BARU, updateOrCreate() langsung menjalankan
+    // INSERT dari $dataUmum SAJA (tanpa kolom `password`), padahal kolom
+    // `password` di tabel `pegawais` NOT NULL tanpa default value ->
+    // MySQL menolak INSERT itu dengan error 1364 SEBELUM sempat sampai ke
+    // pengecekan wasRecentlyCreated/save() untuk mengisi password.
+    //
+    // Sekarang dipakai pengecekan manual (cek dulu by NIP, baru
+    // create/update) supaya:
+    //   - Kalau NIP sudah terdaftar -> $pegawai->update($dataUmum), data
+    //     umum (nama, jabatan, kelompok substansi, tim kerja, role_id,
+    //     tanggal_masuk) DIPERBARUI mengikuti isi file yang baru diimpor,
+    //     TANPA menimpa nip/password/is_first_login yang sudah berjalan.
+    //   - Kalau NIP belum ada -> Pegawai::create() dipanggil dengan `nip`,
+    //     `password`, DAN `is_first_login` LANGSUNG disertakan semua di
+    //     payload-nya (bukan disusulkan lewat save() terpisah setelah
+    //     insert), supaya tidak ada celah INSERT tanpa kolom-kolom yang
+    //     NOT NULL tanpa default value tsb. (Riwayat bug: percobaan
+    //     pertama lupa menyertakan `password` -> error 1364 pada kolom
+    //     password; percobaan kedua lupa menyertakan `nip` di $dataUmum
+    //     -> error 1364 berikutnya pada kolom nip; percobaan ketiga
+    //     pengecekan NIP tidak memakai withTrashed() -> pegawai yang
+    //     sudah di-soft-delete tidak terdeteksi, sistem coba create() baru
+    //     -> UniqueConstraintViolationException karena NIP masih terikat
+    //     unique constraint. Sekarang ketiganya sudah diperbaiki.)
+    // SaldoCuti tahun berjalan memakai SaldoCuti::firstOrCreate(): kalau
+    // baris SaldoCuti pegawai tsb di tahun ini sudah ada, dibiarkan apa
+    // adanya (sisa cuti yang sudah terpakai TIDAK ikut ke-reset balik ke
+    // kuota penuh saat re-import); kalau belum ada (termasuk untuk pegawai
+    // lama yang entah kenapa belum kebagian baris SaldoCuti tahun ini),
+    // baru dibuatkan otomatis dengan kuota default 12 hari.
     public function importPegawai(Request $request)
     {
         $request->validate([
@@ -435,7 +537,7 @@ class AdminController extends Controller
 
         $idxNip = $findCol(['nip']);
         $idxNama = $findCol(['nama']);
-        $idxDepartemen = $findCol(['divisi/departemen', 'departemen', 'subbagian/kelompok']);
+        $idxKelompokSubstansi = $findCol(['kelompok substansi', 'subbagian/kelompok']);
         $idxTimKerja = $findCol(['tim kerja']);
         $idxJabatan = $findCol(['jabatan']);
         $idxRoleOrLevel = $findCol(['role', 'level', 'hak akses']);
@@ -447,6 +549,7 @@ class AdminController extends Controller
 
 
         $inserted = 0;
+        $updated = 0;
         $skipped = 0;
         $tahunIni = (int) date('Y');
 
@@ -459,7 +562,7 @@ class AdminController extends Controller
             $nama = $this->toTitleCase((string) ($row[$idxNama] ?? ''));
             $jabatan = $this->toTitleCase((string) ($row[$idxJabatan] ?? ''));
             $roleTeks = trim((string) ($row[$idxRoleOrLevel] ?? '')); // dipetakan ke role_id, tidak perlu title case
-            $departemen = $idxDepartemen !== false ? $this->toTitleCase((string) ($row[$idxDepartemen] ?? '')) : '';
+            $kelompokSubstansi = $idxKelompokSubstansi !== false ? $this->toTitleCase((string) ($row[$idxKelompokSubstansi] ?? '')) : '';
             $timKerja = $idxTimKerja !== false ? $this->toTitleCase((string) ($row[$idxTimKerja] ?? '')) : null;
 
 
@@ -479,12 +582,6 @@ class AdminController extends Controller
             }
 
 
-            if (Pegawai::where('nip', $nip)->exists()) {
-                $skipped++;
-                continue;
-            }
-
-
             $roleId = $this->mapRoleOrLevelTeks($roleTeks);
             if ($roleId === null) {
                 $skipped++;
@@ -495,36 +592,101 @@ class AdminController extends Controller
             $tanggalMasuk = $this->extractTanggalMasukDariNip($nip) ?? now()->format('Y-m-d');
 
 
-            $pegawai = Pegawai::create([
-                'nip' => $nip,
+            // 1) Cek dulu apakah NIP sudah terdaftar. Pendekatan manual ini
+            //    dipakai (bukan updateOrCreate) supaya kolom `password` bisa
+            //    disertakan LANGSUNG di dalam create() untuk pegawai baru.
+            //    updateOrCreate() sebelumnya gagal karena INSERT awal tidak
+            //    menyertakan `password`, padahal kolom itu NOT NULL tanpa
+            //    default value di database -> query ditolak MySQL (error
+            //    1364) sebelum sempat sampai ke pengecekan wasRecentlyCreated.
+            // 1) Cek dulu apakah NIP sudah terdaftar. PAKAI withTrashed()
+            //    supaya pegawai yang sudah di-soft-delete (diarsipkan lewat
+            //    destroyPegawai()) TETAP TERDETEKSI di sini. Kalau memakai
+            //    where('nip', ...) biasa (tanpa withTrashed), Eloquent
+            //    otomatis menyembunyikan baris yang sudah soft-deleted,
+            //    sehingga sistem mengira NIP itu belum ada -> mencoba
+            //    create() baru -> ditolak MySQL dengan
+            //    UniqueConstraintViolationException (23000) karena baris
+            //    lamanya, meski sudah "diarsipkan", masih ada secara fisik
+            //    di tabel dan tetap terikat unique constraint kolom nip.
+            $pegawai = Pegawai::withTrashed()->where('nip', $nip)->first();
+
+
+            $dataUmum = [
                 'nama' => $nama,
-                'departemen' => $departemen ?: '-',
+                'kelompok_substansi' => $kelompokSubstansi ?: '-',
                 'tim_kerja' => $timKerja,
                 'jabatan' => $jabatan,
                 'role_id' => $roleId,
                 'tanggal_masuk' => $tanggalMasuk,
-                'password' => Hash::make('password123'),
-                'is_first_login' => true,
-            ]);
+            ];
 
 
+            if ($pegawai) {
+                // NIP sudah ada -> update data umum saja. Kolom `nip` SENGAJA
+                // tidak diikutkan di update ini (dan tidak perlu), karena NIP
+                // dipakai sebagai kunci pencarian dan tidak berubah.
+                // password & is_first_login TIDAK disentuh sama sekali.
+                //
+                // Kalau baris ini sebelumnya soft-deleted (pernah dihapus/
+                // diarsipkan lewat destroyPegawai()), otomatis DIPULIHKAN
+                // (restore()) begitu muncul lagi di file import -> masuk
+                // akal karena mengimpor NIP yang sama artinya pegawai itu
+                // aktif kembali / datanya perlu direfresh.
+                if ($pegawai->trashed()) {
+                    $pegawai->restore();
+                }
+                $pegawai->update($dataUmum);
+                $isBaru = false;
+            } else {
+                // NIP belum ada -> buat baru, password default & flag wajib
+                // ganti password disertakan LANGSUNG di sini (bukan lewat
+                // save() terpisah setelah insert), supaya tidak ada celah
+                // INSERT tanpa kolom password.
+                // NIP belum ada -> buat baru. `nip` DISERTAKAN LANGSUNG di
+                // sini (bukan cuma dipakai di where() pengecekan di atas),
+                // karena kolom `nip` NOT NULL tanpa default value. Ini juga
+                // yang jadi penyebab error 1364 "Field 'nip' doesn't have a
+                // default value" sebelumnya -> $dataUmum tidak berisi nip
+                // sama sekali sehingga hilang dari query INSERT.
+                $pegawai = Pegawai::create([
+                    'nip' => $nip,
+                    ...$dataUmum,
+                    'password' => Hash::make('password123'),
+                    'is_first_login' => true,
+                ]);
+                $isBaru = true;
+            }
+
+
+            // 2) Daftarkan ke Rekap Kuota Cuti tahun berjalan kalau belum
+            //    ada (firstOrCreate) -> saldo pegawai lama yang sudah
+            //    berkurang tidak ikut ke-reset balik ke kuota penuh.
             $kuotaTahunan = 12;
-            SaldoCuti::create([
-                'pegawai_id' => $pegawai->id,
-                'tahun' => $tahunIni,
-                'kuota_tahunan' => $kuotaTahunan,
-                'sisa' => $this->hitungSisaOtomatis($pegawai->id, $tahunIni, $kuotaTahunan),
-                'carry_forward_normal' => 0,
-            ]);
+            SaldoCuti::firstOrCreate(
+                [
+                    'pegawai_id' => $pegawai->id,
+                    'tahun' => $tahunIni,
+                ],
+                [
+                    'kuota_tahunan' => $kuotaTahunan,
+                    'sisa' => $this->hitungSisaOtomatis($pegawai->id, $tahunIni, $kuotaTahunan),
+                    'carry_forward_normal' => 0,
+                ]
+            );
 
 
-            $inserted++;
+            if ($isBaru) {
+                $inserted++;
+            } else {
+                $updated++;
+            }
         }
 
 
         return back()->with(
             'success',
-            "Berhasil mengimpor {$inserted} pegawai. {$skipped} baris dilewati (data kosong/duplikat NIP/role-level tidak dikenali)."
+            "Berhasil mengimpor: {$inserted} pegawai baru ditambahkan, {$updated} pegawai diperbarui. {$skipped} baris dilewati (data kosong/role-level tidak dikenali)."
         );
     }
 
@@ -610,6 +772,17 @@ class AdminController extends Controller
 
 
     // 2. Menampilkan Daftar Saldo Cuti Pegawai Tahun Ini
+    //
+    // ================= [DIUBAH] TAMBAHAN: PREVIEW CARRY-OVER (2 SUMBER) =================
+    // Setiap pegawai sekarang dilengkapi field `preview_carry_over` (array
+    // berisi `dari_saldo_biasa`, `dari_penangguhan_resmi`, `total`) —
+    // perkiraan carry-over yang AKAN didapat pegawai tersebut andai saldo
+    // tahun INI digenerate ulang lewat Command GenerateSaldoCutiTahunBaru.
+    // Ini HANYA preview/informasi untuk Admin, BUKAN nilai yang otomatis
+    // tersimpan — angka `sisa`/`kuota_tahunan` yang benar-benar aktif
+    // tetap yang ada di kolom database (`saldo_cutis`), yang bisa diedit
+    // manual di tabel atau digenerate ulang lewat tombol "Generate Saldo
+    // Tahun Baru".
     public function kelolaSaldo()
     {
         $tahun = date('Y');
@@ -620,33 +793,118 @@ class AdminController extends Controller
         }])->orderBy('nama', 'asc')->get();
 
 
+        $pegawai->each(function ($p) use ($tahun) {
+            $p->preview_carry_over = $this->hitungPreviewCarryOver($p->id, $tahun);
+        });
+
+
         return Inertia::render('Admin/KelolaSaldo', [
             'pegawai' => $pegawai,
             'tahun' => $tahun
         ]);
     }
+    // ================= [END DIUBAH] =================
 
 
     // 3. Memperbarui atau Membuat Saldo Cuti Baru
+    //
+    // ================= [DIUBAH] CATATAN AUDIT KE HISTORI SALDO =================
+    // Kolom `ditangguhkan_resmi` yang sebelumnya ada di sini SUDAH TIDAK
+    // DIPAKAI — penangguhan resmi sekarang tercatat otomatis lewat tabel
+    // `cuti_ditangguhkans` (dibuat oleh PembatalanController@process saat
+    // L4 menangguhkan sebuah pengajuan cuti), BUKAN ditandai manual lewat
+    // checkbox di halaman ini. Lihat GenerateSaldoCutiTahunBaru untuk
+    // detail lengkap.
+    //
+    // TAMBAHAN: setiap kali Admin mengubah `sisa` secara manual dari
+    // angka yang sudah ada sebelumnya, perubahan itu dicatat sebagai satu
+    // baris baru di `histori_saldos` (tabel audit yang sudah lama
+    // dirancang tapi belum pernah dipakai) — supaya ada jejak siapa yang
+    // mengubah, kapan, dan berapa besar penyesuaiannya. Baris histori
+    // HANYA dibuat kalau nilai `sisa` benar-benar berubah dari sebelumnya
+    // (bukan setiap kali tombol Simpan ditekan tanpa perubahan apa pun).
     public function updateSaldo(Request $request, int $id)
     {
+        abort_unless((int) $request->user()->role_id === 5, 403);
+
         $request->validate([
             'kuota_tahunan' => ['required', 'numeric', 'min:0'],
-            'sisa' => ['required', 'numeric', 'min:0'],
+            'carry_forward_normal' => ['nullable', 'numeric', 'min:0', 'required_without:sisa'],
+            'sisa' => ['nullable', 'numeric', 'min:0', 'required_without:carry_forward_normal'],
         ]);
 
 
         $tahun = date('Y');
 
 
-        SaldoCuti::updateOrCreate(
+        $saldoSebelumnya = SaldoCuti::where('pegawai_id', $id)->where('tahun', $tahun)->first();
+        $sisaSebelumnya = $saldoSebelumnya->sisa ?? null;
+        $sisa = $request->has('sisa')
+            ? $request->sisa
+            : ($saldoSebelumnya->sisa ?? 0);
+        $carryForward = $request->has('carry_forward_normal')
+            ? $request->carry_forward_normal
+            : ($saldoSebelumnya->carry_forward_normal ?? 0);
+
+
+        $saldo = SaldoCuti::updateOrCreate(
             ['pegawai_id' => $id, 'tahun' => $tahun],
-            ['kuota_tahunan' => $request->kuota_tahunan, 'sisa' => $request->sisa]
+            [
+                'kuota_tahunan' => $request->kuota_tahunan,
+                'sisa' => $sisa,
+                'carry_forward_normal' => $carryForward,
+            ]
         );
 
 
-        return back();
+        // Catat ke histori HANYA kalau ada baris sebelumnya DAN nilai
+        // sisa benar-benar berubah (bukan pertama kali dibuat, dan bukan
+        // simpan tanpa perubahan apa pun).
+        if ($sisaSebelumnya !== null && (int) $sisaSebelumnya !== (int) $sisa) {
+            HistoriSaldo::create([
+                'saldo_cuti_id' => $saldo->id,
+                'pegawai_id' => $id,
+                'jumlah_penyesuaian' => (int) $sisa - (int) $sisaSebelumnya,
+                'alasan' => 'Penyesuaian manual oleh Admin HR lewat halaman Kelola Saldo Cuti.',
+                'diubah_oleh' => auth()->id(),
+                'tanggal_perubahan' => now(),
+            ]);
+        }
+
+
+        return back()->with('success', 'Saldo cuti berhasil diperbarui.');
     }
+    // ================= [END DIUBAH] =================
+
+
+    // ================= [BARU] GENERATE SALDO TAHUN BARU (TOMBOL MANUAL) =================
+    // Dipanggil dari tombol "Generate Saldo Tahun Baru" di halaman Kelola
+    // Saldo Cuti. Method ini SENGAJA tidak menulis ulang logika
+    // perhitungan carry-over di sini — cukup memanggil Artisan Command
+    // `saldo-cuti:generate-tahun-baru` yang SAMA PERSIS dengan yang
+    // dijalankan otomatis oleh scheduler setiap 1 Januari (lihat
+    // routes/console.php & app/Console/Commands/GenerateSaldoCutiTahunBaru.php).
+    // Dengan begini, hasil generate manual dan otomatis SELALU identik,
+    // tidak mungkin tidak sinkron karena keduanya memanggil kode yang
+    // sama persis.
+    //
+    // Tombol ini berguna sebagai CADANGAN kalau scheduler otomatis gagal
+    // jalan (misalnya server belum dipasang cron job saat masih di
+    // tahap development/XAMPP lokal), atau kalau Admin perlu meng-generate
+    // ulang tahun tertentu setelah ada koreksi data histori.
+    public function generateSaldoManual(Request $request)
+    {
+        abort_unless((int) $request->user()->role_id === 5, 403);
+
+        $tahun = $request->input('tahun', date('Y'));
+
+        Artisan::call('saldo-cuti:generate-tahun-baru', [
+            '--tahun' => $tahun,
+        ]);
+
+        return back()->with('success', "Saldo cuti tahun {$tahun} berhasil digenerate ulang untuk semua pegawai.");
+    }
+    // ================= [END BARU] =================
 
 
     // 4. Menampilkan Rekap Laporan Cuti Seluruh Pegawai (Rekap Per Bulan, dengan pagination)
@@ -659,7 +917,13 @@ class AdminController extends Controller
         return Inertia::render('Admin/RekapLaporan', [
             'laporan' => $data['laporan'],
             'tahun' => $data['tahun'],
-            'filters' => $request->only(['search', 'tahun', 'bulan']),
+            'filters' => $request->only(['search', 'tahun', 'bulan', 'kelompok_substansi']),
+            'daftarKelompokSubstansi' => Pegawai::where('role_id', '!=', self::ROLE_ID_ADMIN)
+                ->whereNotNull('kelompok_substansi')
+                ->where('kelompok_substansi', '!=', '')
+                ->distinct()
+                ->orderBy('kelompok_substansi')
+                ->pluck('kelompok_substansi'),
             // info pagination dikirim ke frontend
             'pagination' => [
                 'current_page' => $data['paginator']->currentPage(),
@@ -1190,6 +1454,3 @@ class AdminController extends Controller
         return back();
     }
 }
-
-
-

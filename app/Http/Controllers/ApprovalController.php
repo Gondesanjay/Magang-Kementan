@@ -29,7 +29,8 @@ class ApprovalController extends Controller
         if ($user->role_id === 2) {
             // L1 (Ketua Tim): hanya bisa melihat pengajuan di departemennya saja
             $query->whereHas('pegawai', function ($q) use ($user) {
-                $q->where('departemen', $user->departemen);
+                $q->where('tim_kerja', $user->tim_kerja)
+                    ->where('id', '!=', $user->id);
             });
         } elseif (!in_array($user->role_id, [3, 4, 5, 6])) {
             // Jika bukan L1, L2, L3, L4, atau Admin HR -> blokir aksesnya
@@ -100,7 +101,7 @@ class ApprovalController extends Controller
             $saldo = $item->pegawai->saldoCutiTahunIni ?? null;
 
             $kuotaTahunan  = $saldo->kuota_tahunan ?? 0;
-            $sisaTahunLalu = $saldo->sisa_cuti_tahun_lalu ?? 0;
+            $sisaTahunLalu = $saldo->carry_forward_normal ?? 0;
 
             $cutiTerpakai = PengajuanCuti::where('pegawai_id', $item->pegawai_id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
@@ -157,8 +158,8 @@ class ApprovalController extends Controller
             abort(403, 'Anda tidak berwenang memproses pengajuan pada tahap ini.');
         }
 
-        if ($user->role_id === 2 && $pengajuan->pegawai->departemen !== $user->departemen) {
-            abort(403, 'Pengajuan berada di luar departemen Anda.');
+        if ($user->role_id === 2 && $pengajuan->pegawai->tim_kerja !== $user->tim_kerja) {
+            abort(403, 'Pengajuan berada di luar tim kerja Anda.');
         }
 
         // $levelApproval = angka level (1-4) tempat pengajuan SEDANG berada
@@ -240,7 +241,7 @@ class ApprovalController extends Controller
             $pengajuan->update(['status' => 'menunggu_l3', 'level_saat_ini' => 3, 'atasan_l1_id' => $user->id]);
 
             // Kirim Notifikasi ke L3 (Role 4)
-            $atasanL3 = Pegawai::where('role_id', 4)->where('departemen', $pengajuan->pegawai->departemen)->first()
+            $atasanL3 = Pegawai::where('role_id', 4)->where('kelompok_substansi', $pengajuan->pegawai->kelompok_substansi)->first()
                 ?? Pegawai::where('role_id', 4)->first();
 
             if ($atasanL3) {
@@ -264,7 +265,7 @@ class ApprovalController extends Controller
             $pengajuan->update(['status' => 'menunggu_l3', 'level_saat_ini' => 3]);
 
             // Notifikasi ke L3 (Role 4)
-            $atasanL3 = Pegawai::where('role_id', 4)->where('departemen', $pengajuan->pegawai->departemen)->first()
+            $atasanL3 = Pegawai::where('role_id', 4)->where('kelompok_substansi', $pengajuan->pegawai->kelompok_substansi)->first()
                 ?? Pegawai::where('role_id', 4)->first();
 
             if ($atasanL3) {
@@ -288,7 +289,7 @@ class ApprovalController extends Controller
             $pengajuan->update(['status' => 'menunggu_l4', 'level_saat_ini' => 4, 'atasan_l3_id' => $user->id]);
 
             // Notifikasi ke L4 (KABIRO - ROLE 6)
-            $atasanL4 = Pegawai::where('role_id', 6)->where('departemen', $pengajuan->pegawai->departemen)->first()
+            $atasanL4 = Pegawai::where('role_id', 6)->where('kelompok_substansi', $pengajuan->pegawai->kelompok_substansi)->first()
                 ?? Pegawai::where('role_id', 6)->first();
 
             if ($atasanL4) {
@@ -378,7 +379,8 @@ class ApprovalController extends Controller
         if ($user->role_id === 2) {
             // Atasan L1: Menampilkan cuti di departemennya yang statusnya sudah bukan 'menunggu_l1'
             $query->whereHas('pegawai', function ($q) use ($user) {
-                $q->where('departemen', $user->departemen);
+                $q->where('kelompok_substansi', $user->kelompok_substansi)
+                    ->where('id', '!=', $user->id);
             })->whereNotIn('status', ['menunggu_l1']);
         } elseif ($user->role_id === 3) {
             // L2: Menampilkan cuti yang sudah diproses L2
