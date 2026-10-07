@@ -36,8 +36,71 @@ use Illuminate\Support\Facades\DB;
 // batasan wilayah L1 per Tim Kerja & L2 per Kelompok Substansi, dll) tetap
 // dipertahankan seperti sebelumnya — TIDAK ada logika bisnis yang dihapus.
 // ================= END CATATAN PENGGABUNGAN =================
+//
+// ================= PERBAIKAN TERBARU (SINKRONISASI RUMUS SALDO) =================
+// BUG: index() menghitung saldo untuk modal "Rincian Sisa Cuti" dengan rumus
+// lama (kuota + carry_forward_normal) - terpakai, yaitu carry-forward dipakai
+// UTUH tanpa batas bawaan 6 hari dan tanpa koreksi_saldo Admin HR. Akibatnya
+// angka di modal (mis. 24) tidak sama dengan Dashboard & Rekap Kuota (18).
+// Pengecekan saldo saat L4 menyetujui (process()) juga memakai kolom legacy
+// `sisa` yang hanya mencerminkan (hak - terpakai) dan mengabaikan saldo bawaan.
+//
+// PERBAIKAN: rumus disamakan dengan DashboardController::hitungSaldoPegawai(),
+// CutiController::hitungSaldoCuti(), dan RekapKuotaDetailController::hitungKuota():
+//   bawaan eligible = 12 jika sisa (tahun-2) & sisa (tahun-1) sama-sama 12,
+//                     selain itu min(6, sisa tahun-1)
+//   total tersedia  = (kuota + bawaan eligible) - terpakai EFEKTIF
+//                     (koreksi_saldo Admin HR jika ada, selain itu hitungan sistem)
+//   - index()  : dihitung per halaman dengan query ter-batch (tidak N+1).
+//   - process(): validasi saldo saat approve final L4 memakai total tersedia
+//                di atas. Kolom legacy `sisa` tetap dikurangi seperti semula
+//                (tidak pernah di bawah 0).
+// ================= END PERBAIKAN SINKRONISASI RUMUS SALDO =================
 class MonitoringCutiController extends Controller
 {
+    // ================= HELPER BARU: RUMUS SALDO CUTI TAHUNAN =================
+    // SATU-SATUNYA tempat rumus saldo di controller ini.
+    // $terpakaiMurni = total hari Cuti Tahunan 'disetujui' pada tahun tsb.
+    // koreksi_saldo: NULL = ikut sistem; angka (termasuk 0) = override Admin HR.
+    private function hitungInfoSaldo(?SaldoCuti $saldo, ?SaldoCuti $saldoTahunLalu, int $terpakaiMurni): array
+    {
+        $kuota            = (int) ($saldo->kuota_tahunan ?? 12);
+        $sisaTahunLalu    = (int) ($saldo->carry_forward_normal ?? 0);
+        $sisaDuaTahunLalu = (int) ($saldoTahunLalu->carry_forward_normal ?? 0);
+
+        $koreksi  = $saldo?->koreksi_saldo;
+        $terpakai = $koreksi !== null
+            ? max(0, (int) $koreksi)
+            : max(0, $terpakaiMurni);
+
+        $bawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
+            ? 12
+            : min(6, $sisaTahunLalu);
+
+        $sisaHakTahunIni = max($kuota - $terpakai, 0);
+        $totalTersedia   = max(($kuota + $bawaanEligible) - $terpakai, 0);
+
+        return [
+            'kuota_tahunan'            => $kuota,
+            'sisa_tahun_lalu'          => $sisaTahunLalu,
+            'sisa_dua_tahun_lalu'      => $sisaDuaTahunLalu,
+            'saldo_bawaan_eligible'    => $bawaanEligible,
+            'cuti_terpakai'            => $terpakai,
+            'sisa_hak_tahun_berjalan'  => $sisaHakTahunIni,
+            'total_cuti_tersedia'      => $totalTersedia,
+        ];
+    }
+
+    private function hitungTerpakaiMurni(int $pegawaiId, int $tahun): int
+    {
+        return (int) PengajuanCuti::where('pegawai_id', $pegawaiId)
+            ->where('jenis_cuti', 'Cuti Tahunan')
+            ->where('status', 'disetujui')
+            ->whereYear('tanggal_mulai', $tahun)
+            ->sum('jumlah_hari');
+    }
+    // ================= END HELPER RUMUS SALDO =================
+
     // ================= HELPER: DATA FILTER BERJENJANG UNTUK ATASAN =================
     // Pola sama dengan RekapKuotaDetailController::buildFilterPropsUntukAtasan()
     // supaya kedua halaman (Rekap Kuota & Monitoring/Approval Cuti) konsisten:
@@ -217,11 +280,11 @@ class MonitoringCutiController extends Controller
             ->withQueryString();
         // ================= END PENGURUTAN PRIORITAS =================
 
-        // Hitung sisa cuti dinamis (sama persis logika Dashboard) untuk
-        // setiap item. Total cuti terpakai dihitung dengan SATU query untuk
-        // seluruh pegawai di halaman ini (GROUP BY pegawai_id), bukan satu
-        // query per baris (hindari N+1).
-        $tahun = date('Y');
+        // Hitung sisa cuti dinamis (rumus SAMA dengan Dashboard & Rekap Kuota,
+        // lihat hitungInfoSaldo()) untuk setiap item. Semua data dihitung
+        // dengan query ter-batch untuk seluruh pegawai di halaman ini
+        // (bukan satu query per baris, hindari N+1).
+        $tahun = (int) date('Y');
 
         $pegawaiIdsHalamanIni = $antrean->getCollection()
             ->pluck('pegawai_id')
@@ -239,6 +302,14 @@ class MonitoringCutiController extends Controller
             ->whereYear('tanggal_mulai', $tahun)
             ->groupBy('pegawai_id')
             ->pluck('total_terpakai', 'pegawai_id');
+
+        // Saldo TAHUN LALU (untuk syarat akumulasi penuh 12/12), satu query.
+        $saldoTahunLaluPerPegawai = empty($pegawaiIdsHalamanIni)
+            ? collect()
+            : SaldoCuti::whereIn('pegawai_id', $pegawaiIdsHalamanIni)
+            ->where('tahun', $tahun - 1)
+            ->get()
+            ->keyBy('pegawai_id');
 
         // ================= NAMA ASLI ATASAN L1 & L2 =================
         // Supaya Modal Detail Cuti di Vue bisa menampilkan nama PERSIS
@@ -277,9 +348,17 @@ class MonitoringCutiController extends Controller
             ->whereIn('tim_kerja', $timKerjaUnikHalamanIni)
             ->get()
             ->keyBy('tim_kerja');
+
+        $namaPejabatAktif = fn(int $roleId) => Pegawai::where('role_id', $roleId)
+            ->where(fn($q) => $q->where('status_aktif', 'Aktif')->orWhereNull('status_aktif'))
+            ->orderBy('id')
+            ->value('nama');
+
+        $namaAtasanL3 = $namaPejabatAktif(4) ?? 'Kasubag TU';
+        $namaAtasanL4 = $namaPejabatAktif(6) ?? 'Kepala Biro Perencanaan';
         // ================= END NAMA ASLI ATASAN L1 & L2 =================
 
-        $antrean->getCollection()->transform(function ($item) use ($terpakaiPerPegawai, $petaAtasanL1, $petaAtasanL2) {
+        $antrean->getCollection()->transform(function ($item) use ($terpakaiPerPegawai, $saldoTahunLaluPerPegawai, $petaAtasanL1, $petaAtasanL2, $namaAtasanL3, $namaAtasanL4) {
             // Lewati kalau relasi pegawai tidak ada (mis. data pegawai terhapus)
             if (!$item->pegawai) {
                 return $item;
@@ -287,18 +366,23 @@ class MonitoringCutiController extends Controller
 
             $saldo = $item->pegawai->saldoCutiTahunIni ?? null;
 
-            $kuotaTahunan  = $saldo->kuota_tahunan ?? 0;
-            $sisaTahunLalu = $saldo->carry_forward_normal ?? 0;
+            $info = $this->hitungInfoSaldo(
+                $saldo,
+                $saldoTahunLaluPerPegawai->get($item->pegawai_id),
+                (int) ($terpakaiPerPegawai[$item->pegawai_id] ?? 0)
+            );
 
-            $cutiTerpakai = ($terpakaiPerPegawai[$item->pegawai_id] ?? 0) + 0;
-
-            $totalTersedia = ($kuotaTahunan + $sisaTahunLalu) - $cutiTerpakai;
-
-            // Tambahkan property baru ke object pegawai agar bisa dibaca di Vue
-            $item->pegawai->sisa_cuti_tersedia = $totalTersedia;
-            $item->pegawai->kuota_tahunan      = $kuotaTahunan;
-            $item->pegawai->sisa_tahun_lalu    = $sisaTahunLalu;
-            $item->pegawai->cuti_terpakai      = $cutiTerpakai;
+            // Tambahkan property baru ke object pegawai agar bisa dibaca di Vue.
+            // Nama lama dipertahankan (kompatibilitas), nama baru ditambahkan
+            // supaya modal bisa menampilkan rincian yang sama dengan Dashboard.
+            $item->pegawai->sisa_cuti_tersedia      = $info['total_cuti_tersedia'];
+            $item->pegawai->kuota_tahunan           = $info['kuota_tahunan'];
+            $item->pegawai->sisa_tahun_lalu         = $info['sisa_tahun_lalu'];
+            $item->pegawai->cuti_terpakai           = $info['cuti_terpakai'];
+            $item->pegawai->sisa_dua_tahun_lalu     = $info['sisa_dua_tahun_lalu'];
+            $item->pegawai->sisa_hak_tahun_berjalan = $info['sisa_hak_tahun_berjalan'];
+            $item->pegawai->saldo_bawaan_eligible   = $info['saldo_bawaan_eligible'];
+            $item->pegawai->total_cuti_tersedia     = $info['total_cuti_tersedia'];
 
             // Nama asli atasan L1 & L2 untuk baris ini (lihat blok komentar
             // "NAMA ASLI ATASAN L1 & L2" di atas). Kalau atasannya belum
@@ -314,6 +398,8 @@ class MonitoringCutiController extends Controller
 
             $item->atasan_l1_nama = $atasanL1->nama ?? 'Ketua Tim Kerja Pegawai';
             $item->atasan_l2_nama = $atasanL2->nama ?? 'Ketua Kelompok Substansi';
+            $item->atasan_l3_nama = $namaAtasanL3;
+            $item->atasan_l4_nama = $namaAtasanL4;
 
             return $item;
         });
@@ -510,14 +596,30 @@ class MonitoringCutiController extends Controller
                 $saldo = null;
 
                 if ($this->isCutiTahunan($pengajuan->jenis_cuti)) {
+                    $tahunCuti = (int) date('Y', strtotime($pengajuan->tanggal_mulai));
+
                     // lockForUpdate: kunci baris saldo supaya pemotongan
                     // tidak bisa terjadi dua kali secara bersamaan.
                     $saldo = SaldoCuti::where('pegawai_id', $targetUserId)
-                        ->where('tahun', date('Y', strtotime($pengajuan->tanggal_mulai)))
+                        ->where('tahun', $tahunCuti)
                         ->lockForUpdate()
                         ->first();
 
-                    if (!$saldo || $saldo->sisa < $pengajuan->jumlah_hari) {
+                    if (!$saldo) {
+                        return back()->with('error', 'Saldo Cuti Tahunan tidak mencukupi untuk menyetujui pengajuan ini.');
+                    }
+
+                    // [DIUBAH] Validasi memakai rumus yang SAMA dengan Dashboard
+                    // & Rekap Kuota: (kuota + bawaan eligible) - terpakai efektif.
+                    // Pengajuan ini masih berstatus 'menunggu_l4', jadi belum
+                    // ikut terhitung sebagai terpakai.
+                    $infoSaldo = $this->hitungInfoSaldo(
+                        $saldo,
+                        SaldoCuti::where('pegawai_id', $targetUserId)->where('tahun', $tahunCuti - 1)->first(),
+                        $this->hitungTerpakaiMurni((int) $targetUserId, $tahunCuti)
+                    );
+
+                    if ($infoSaldo['total_cuti_tersedia'] < $pengajuan->jumlah_hari) {
                         return back()->with('error', 'Saldo Cuti Tahunan tidak mencukupi untuk menyetujui pengajuan ini.');
                     }
                 }
@@ -528,8 +630,11 @@ class MonitoringCutiController extends Controller
                     'atasan_l4_id' => $user->id,
                 ]);
 
+                // Kolom legacy `sisa` tetap dikurangi seperti semula, tetapi
+                // tidak pernah di bawah 0 (saldo bawaan bisa membuat
+                // pemakaian melebihi hak tahun berjalan).
                 if ($saldo) {
-                    $saldo->decrement('sisa', $pengajuan->jumlah_hari);
+                    $saldo->update(['sisa' => max(0, (int) $saldo->sisa - (int) $pengajuan->jumlah_hari)]);
                 }
 
                 $statusPesan = 'Disetujui Kepala Biro Perencanaan (L4)';

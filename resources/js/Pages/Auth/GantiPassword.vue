@@ -129,8 +129,9 @@ const submit = () => {
                         </span>
                         <input
                             id="password"
+                            name="password"
                             :type="showPassword ? 'text' : 'password'"
-                            class="w-full pl-10 pr-11 py-3 bg-[#f8fafc] border border-slate-200 rounded-xl text-slate-800 text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                            class="w-full min-h-[44px] pl-10 pr-12 py-3 bg-[#f8fafc] border border-slate-200 rounded-xl text-slate-800 text-base focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
                             v-model="form.password"
                             required
                             autocomplete="new-password"
@@ -140,7 +141,8 @@ const submit = () => {
                         <button
                             type="button"
                             @click="togglePassword"
-                            class="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                            aria-label="Tampilkan atau sembunyikan kata sandi baru"
+                            class="absolute right-1 top-1/2 -translate-y-1/2 flex min-h-[40px] min-w-[40px] items-center justify-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                         >
                             <svg
                                 v-if="!showPassword"
@@ -213,10 +215,11 @@ const submit = () => {
                         </span>
                         <input
                             id="password_confirmation"
+                            name="password_confirmation"
                             :type="
                                 showPasswordConfirmation ? 'text' : 'password'
                             "
-                            class="w-full pl-10 pr-11 py-3 bg-[#f8fafc] border border-slate-200 rounded-xl text-slate-800 text-sm focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                            class="w-full min-h-[44px] pl-10 pr-12 py-3 bg-[#f8fafc] border border-slate-200 rounded-xl text-slate-800 text-base focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
                             v-model="form.password_confirmation"
                             required
                             autocomplete="new-password"
@@ -225,7 +228,8 @@ const submit = () => {
                         <button
                             type="button"
                             @click="togglePasswordConfirmation"
-                            class="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
+                            aria-label="Tampilkan atau sembunyikan konfirmasi kata sandi"
+                            class="absolute right-1 top-1/2 -translate-y-1/2 flex min-h-[40px] min-w-[40px] items-center justify-center text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
                         >
                             <svg
                                 v-if="!showPasswordConfirmation"

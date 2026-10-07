@@ -1,6 +1,7 @@
 <script setup>
 import MainLayout from '@/Layouts/MainLayout.vue';
 import { Head, useForm, router, Link } from '@inertiajs/vue3';
+import { ref } from 'vue'; // Tambahkan ref
 
 
 const props = defineProps({
@@ -29,11 +30,25 @@ const submit = () => {
 };
 
 
+// --- STATE UNTUK MODAL ---
+// Menggantikan confirm() bawaan browser dengan modal custom bertema
+// Tailwind, supaya tampilannya konsisten dengan desain dashboard (tidak
+// kaku/kurang profesional seperti pop-up sistem).
+//
+// [DIPERBARUI] Modal Alert (peringatan "Pilih file CSV terlebih dahulu")
+// SUDAH TIDAK DIPAKAI lagi — sekarang tombol "Impor CSV" otomatis
+// disabled selama belum ada file dipilih (lihat :disabled di template),
+// jadi pendekatannya preventif (mencegah dari awal) bukan reaktif
+// (memberi tahu setelah gagal). Modal Konfirmasi Hapus tetap dipakai
+// karena itu tetap aksi yang butuh persetujuan eksplisit.
+const showConfirmModal = ref(false);
+const itemToDelete = ref(null);
+// -------------------------
+
+
 const submitCsv = () => {
-    if (!csvForm.file) {
-        alert('Pilih file CSV terlebih dahulu.');
-        return;
-    }
+    // Kembalikan return sederhana untuk mencegah submit paksa (misal via tombol Enter di keyboard)
+    if (!csvForm.file) return;
 
 
     csvForm.post(route('admin.libur.import'), {
@@ -48,10 +63,21 @@ const submitCsv = () => {
 };
 
 
-const hapusLibur = (id, keterangan) => {
-    if (confirm(`Hapus tanggal merah: ${keterangan}?`)) {
-        router.delete(route('admin.libur.destroy', id), {
-            preserveScroll: true
+const confirmHapus = (id, keterangan) => {
+    // Tampilkan modal konfirmasi custom, menggantikan confirm() bawaan browser
+    itemToDelete.value = { id, keterangan };
+    showConfirmModal.value = true;
+};
+
+
+const executeHapus = () => {
+    if (itemToDelete.value) {
+        router.delete(route('admin.libur.destroy', itemToDelete.value.id), {
+            preserveScroll: true,
+            onSuccess: () => {
+                showConfirmModal.value = false;
+                itemToDelete.value = null;
+            }
         });
     }
 };
@@ -88,28 +114,28 @@ const formatDate = (dateString) => {
                        
                         <form @submit.prevent="submit" class="space-y-4">
                             <div>
-                                <label class="block text-xs font-semibold text-slate-700 mb-1.5">Tanggal Libur <span class="text-red-500">*</span></label>
-                                <input v-model="form.tanggal" type="date" required class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
+                                <label for="tanggal-libur" class="block text-sm font-semibold text-slate-700 mb-1.5">Tanggal Libur <span class="text-red-500">*</span></label>
+                                <input id="tanggal-libur" name="tanggal" v-model="form.tanggal" type="date" required class="w-full min-h-[44px] text-base sm:text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
                                 <span v-if="form.errors.tanggal" class="text-xs text-red-500 mt-1">{{ form.errors.tanggal }}</span>
                             </div>
 
 
                             <div>
-                                <label class="block text-xs font-semibold text-slate-700 mb-1.5">Nama Peringatan / Keterangan <span class="text-red-500">*</span></label>
-                                <input v-model="form.keterangan" type="text" placeholder="Contoh: Hari Kemerdekaan RI" required class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
+                                <label for="keterangan-libur" class="block text-sm font-semibold text-slate-700 mb-1.5">Nama Peringatan / Keterangan <span class="text-red-500">*</span></label>
+                                <input id="keterangan-libur" name="keterangan" v-model="form.keterangan" type="text" placeholder="Contoh: Hari Kemerdekaan RI" required class="w-full min-h-[44px] text-base sm:text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
                             </div>
 
 
                             <div>
-                                <label class="block text-xs font-semibold text-slate-700 mb-1.5">Jenis Libur <span class="text-red-500">*</span></label>
-                                <select v-model="form.is_cuti_bersama" class="w-full text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
+                                <label for="jenis-libur" class="block text-sm font-semibold text-slate-700 mb-1.5">Jenis Libur <span class="text-red-500">*</span></label>
+                                <select id="jenis-libur" name="is_cuti_bersama" v-model="form.is_cuti_bersama" class="w-full min-h-[44px] text-base sm:text-sm border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-slate-50">
                                     <option :value="false">Libur Nasional (Tanggal Merah)</option>
                                     <option :value="true">Cuti Bersama</option>
                                 </select>
                             </div>
 
 
-                            <button type="submit" :disabled="form.processing" class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50 mt-2">
+                            <button type="submit" :disabled="form.processing" class="w-full min-h-[44px] px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50 mt-2">
                                 Simpan Tanggal
                             </button>
                         </form>
@@ -120,13 +146,14 @@ const formatDate = (dateString) => {
                         <h3 class="text-base font-bold text-slate-800 mb-4">Impor Hari Libur dari CSV</h3>
                         <form @submit.prevent="submitCsv" class="space-y-4">
                             <div>
-                                <label class="block text-xs font-semibold text-slate-700 mb-1.5">File CSV <span class="text-red-500">*</span></label>
+                                <label for="csv-file-input" class="block text-xs font-semibold text-slate-700 mb-1.5">File CSV <span class="text-red-500">*</span></label>
                                 <input
                                     id="csv-file-input"
+                                    name="file"
                                     type="file"
                                     accept=".csv,text/csv"
                                     @change="csvForm.file = $event.target.files[0]"
-                                    class="w-full text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-slate-100 file:text-slate-700 file:font-semibold hover:file:bg-slate-200"
+                                    class="w-full min-h-[44px] text-base sm:text-sm text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-slate-100 file:text-slate-700 file:font-semibold hover:file:bg-slate-200"
                                 >
                                 <p class="text-[11px] text-slate-500 mt-2">
                                     Format kolom: tanggal, keterangan, is_cuti_bersama
@@ -134,7 +161,11 @@ const formatDate = (dateString) => {
                             </div>
 
 
-                            <button type="submit" :disabled="csvForm.processing" class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50">
+                            <button
+                                type="submit"
+                                :disabled="!csvForm.file || csvForm.processing"
+                                class="w-full min-h-[44px] px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+                            >
                                 Impor CSV
                             </button>
                         </form>
@@ -148,7 +179,7 @@ const formatDate = (dateString) => {
                         <h3 class="text-base font-bold text-slate-800">Daftar Hari Libur Terdaftar</h3>
                     </div>
                    
-                    <div class="overflow-x-auto">
+                    <div class="hidden overflow-x-auto md:block">
                         <table class="min-w-full divide-y divide-slate-100">
                             <thead class="bg-slate-50/50">
                                 <tr>
@@ -176,7 +207,7 @@ const formatDate = (dateString) => {
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-center">
-                                        <button @click="hapusLibur(item.id, item.keterangan)" class="text-red-500 hover:text-red-700 p-1.5 hover:bg-red-50 rounded-lg transition">
+                                        <button @click="confirmHapus(item.id, item.keterangan)" class="text-red-500 hover:text-red-700 p-1.5 hover:bg-red-50 rounded-lg transition">
                                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
                                         </button>
                                     </td>
@@ -188,6 +219,47 @@ const formatDate = (dateString) => {
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+
+                    <div class="space-y-3 p-4 md:hidden">
+                        <article
+                            v-for="item in libur.data"
+                            :key="item.id"
+                            class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                        >
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <p class="text-sm font-semibold text-slate-800">
+                                        {{ formatDate(item.tanggal) }}
+                                    </p>
+                                    <p class="mt-1 break-words text-sm text-slate-600">
+                                        {{ item.keterangan }}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    @click="confirmHapus(item.id, item.keterangan)"
+                                    :aria-label="`Hapus hari libur ${item.keterangan}`"
+                                    class="inline-flex min-h-[40px] min-w-[40px] shrink-0 items-center justify-center rounded-lg p-2 text-red-500 transition hover:bg-red-50 hover:text-red-700"
+                                >
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <span
+                                class="mt-3 inline-flex rounded-md border px-2.5 py-1 text-xs font-bold"
+                                :class="!item.is_cuti_bersama ? 'border-red-100 bg-red-50 text-red-600' : 'border-blue-100 bg-blue-50 text-blue-600'"
+                            >
+                                {{ !item.is_cuti_bersama ? "Libur Nasional" : "Cuti Bersama" }}
+                            </span>
+                        </article>
+                        <p
+                            v-if="!libur.data || libur.data.length === 0"
+                            class="py-6 text-center text-sm text-slate-500"
+                        >
+                            Belum ada hari libur yang didaftarkan.
+                        </p>
                     </div>
 
 
@@ -218,7 +290,28 @@ const formatDate = (dateString) => {
             </div>
 
 
+            <!-- MODAL KONFIRMASI HAPUS -->
+            <div v-if="showConfirmModal" class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm transition-opacity p-4">
+                <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl transform transition-all text-center">
+                    <div class="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                    </div>
+                    <h3 class="text-lg font-bold text-slate-800 mb-2">Hapus Hari Libur?</h3>
+                    <p class="text-sm text-slate-500 mb-6">
+                        Apakah Anda yakin ingin menghapus <span class="font-bold text-slate-700">{{ itemToDelete?.keterangan }}</span>? Tindakan ini tidak dapat dibatalkan.
+                    </p>
+                    <div class="flex gap-3 w-full">
+                        <button @click="showConfirmModal = false" class="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-sm font-semibold transition">
+                            Batal
+                        </button>
+                        <button @click="executeHapus" class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold transition shadow-sm">
+                            Ya, Hapus
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+
         </div>
     </MainLayout>
 </template>
-

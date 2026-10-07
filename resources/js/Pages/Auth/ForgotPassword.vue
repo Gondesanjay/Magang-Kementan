@@ -23,12 +23,11 @@ const submit = () => {
 
 <template>
     <GuestLayout>
-        <Head title="Forgot Password" />
+        <Head title="Lupa Kata Sandi" />
 
         <div class="mb-4 text-sm text-gray-600">
-            Forgot your password? No problem. Just let us know your email
-            address and we will email you a password reset link that will allow
-            you to choose a new one.
+            Lupa kata sandi? Tidak masalah. Masukkan alamat email Anda dan kami
+            akan mengirimkan tautan untuk mengatur ulang kata sandi.
         </div>
 
         <div
@@ -40,10 +39,11 @@ const submit = () => {
 
         <form @submit.prevent="submit">
             <div>
-                <InputLabel for="email" value="Email" />
+                <InputLabel for="email" value="Alamat Email" />
 
                 <TextInput
                     id="email"
+                    name="email"
                     type="email"
                     class="mt-1 block w-full"
                     v-model="form.email"
@@ -60,7 +60,7 @@ const submit = () => {
                     :class="{ 'opacity-25': form.processing }"
                     :disabled="form.processing"
                 >
-                    Email Password Reset Link
+                    Kirim Tautan Atur Ulang Kata Sandi
                 </PrimaryButton>
             </div>
         </form>

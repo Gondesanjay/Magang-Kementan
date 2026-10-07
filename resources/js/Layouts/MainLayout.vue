@@ -1,24 +1,45 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { Link, usePage, router } from "@inertiajs/vue3";
-
 
 const page = usePage();
 const user = computed(() => page.props.auth.user);
-
 
 const isActive = (routeName) => {
     return route().current(routeName) || route().current(routeName + ".*");
 };
 
-
 const isProfileOpen = ref(false);
-const isSidebarOpen = ref(true);
+const isSidebarOpen = ref(true); // mode desktop (lebar / ringkas)
+const isMobileOpen = ref(false); // drawer di HP
 const isNotifOpen = ref(false);
 
+// Label menu tampil jika sidebar desktop terbuka ATAU drawer mobile terbuka
+const showLabel = computed(() => isSidebarOpen.value || isMobileOpen.value);
+
+// Tutup drawer otomatis setiap pindah halaman
+watch(
+    () => page.url,
+    () => {
+        isMobileOpen.value = false;
+    },
+);
+
+// Kunci scroll body saat drawer terbuka
+watch(isMobileOpen, (open) => {
+    document.body.style.overflow = open ? "hidden" : "";
+});
+
+onBeforeUnmount(() => {
+    document.body.style.overflow = "";
+});
+
+const closeDropdowns = () => {
+    isNotifOpen.value = false;
+    isProfileOpen.value = false;
+};
 
 const notifications = ref(page.props.notifikasis || []);
-
 
 watch(
     () => page.props.notifikasis,
@@ -28,14 +49,12 @@ watch(
     { deep: true },
 );
 
-
 // Menghitung jumlah notifikasi yang belum dibaca
 const unreadCount = computed(
     () => notifications.value.filter((n) => !n.is_read).length,
 );
 
-
-// Fungsi Tandai Semua Dibaca (Langsung menghapus semua dari tampilan)
+// Tandai semua dibaca (hanya menghilangkan titik hijau, notifikasi tetap tampil)
 const markAllAsRead = () => {
     router.post(
         route("notifications.readAll"),
@@ -43,15 +62,26 @@ const markAllAsRead = () => {
         {
             preserveScroll: true,
             onSuccess: () => {
-                // Mengosongkan array agar notifikasi langsung hilang semua
-                notifications.value = [];
+                notifications.value = notifications.value.map((n) => ({
+                    ...n,
+                    is_read: true,
+                }));
             },
         },
     );
 };
 
+// Hapus SEMUA notifikasi sekaligus
+const hapusSemuaNotifikasi = () => {
+    router.delete(route("notifications.destroyAll"), {
+        preserveScroll: true,
+        onSuccess: () => {
+            notifications.value = [];
+        },
+    });
+};
 
-// Fungsi Hapus Notifikasi per Item (Bisa diklik di seluruh bagian)
+// Hapus satu notifikasi
 const hapusNotifikasi = (id) => {
     router.delete(route("notifikasi.destroy", id), {
         preserveScroll: true,
@@ -63,12 +93,56 @@ const hapusNotifikasi = (id) => {
     });
 };
 
+// Klik item notifikasi: hapus dulu, lalu buka halaman tujuan (jika ada tautan)
+const klikNotifikasi = (notif) => {
+    router.delete(route("notifikasi.destroy", notif.id), {
+        preserveScroll: true,
+        onSuccess: () => {
+            notifications.value = notifications.value.filter(
+                (n) => n.id !== notif.id,
+            );
 
-// Helper terpusat untuk menentukan warna badge notifikasi berdasarkan isi pesan/judul,
-// menggantikan pengulangan v-if/v-else-if yang identik di banyak tempat.
+            if (notif.tautan) {
+                // Ambil path saja (aman meski tautan berisi host/port berbeda)
+                let path = notif.tautan;
+                try {
+                    const url = new URL(path, window.location.origin);
+                    path = url.pathname + url.search + url.hash;
+                } catch (e) {
+                    // sudah berupa path relatif
+                }
+                isNotifOpen.value = false;
+                router.visit(path);
+            }
+        },
+    });
+};
+
+// Jenis notifikasi dikenali dari JUDULNYA (lebih andal daripada isi pesan):
+//   'kedaluwarsa' -> pengajuan kedaluwarsa otomatis
+//   'pengingat'   -> pengingat ke atasan / Admin HR (pengajuan menggantung)
+//   'biasa'       -> semua notifikasi lain
+const jenisNotif = (notif) => {
+    const judul = (notif.judul || "").toLowerCase();
+    if (judul.includes("kedaluwarsa")) return "kedaluwarsa";
+    if (judul.includes("pengingat") || judul.includes("menggantung")) {
+        return "pengingat";
+    }
+    return "biasa";
+};
+
+// Warna badge notifikasi berdasarkan isi pesan/judul
 const badgeStyle = (notif) => {
     const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
 
+    // Dicek lebih dulu: kata "persetujuan" pada pesan pengingat mengandung
+    // "setuju" dan akan salah diberi warna hijau oleh aturan di bawah.
+    if (jenisNotif(notif) === "kedaluwarsa") {
+        return "text-zinc-700 bg-zinc-100 border-zinc-300";
+    }
+    if (jenisNotif(notif) === "pengingat") {
+        return "text-orange-700 bg-orange-50 border-orange-200";
+    }
 
     if (teks.includes("tolak") || teks.includes("batal")) {
         return "text-red-600 bg-red-50 border-red-200";
@@ -79,15 +153,16 @@ const badgeStyle = (notif) => {
     if (teks.includes("tangguh")) {
         return "text-amber-600 bg-amber-50 border-amber-200";
     }
+    if (teks.includes("saldo cuti diperbarui")) {
+        return "text-sky-700 bg-sky-50 border-sky-200";
+    }
     return "text-slate-600 bg-slate-50 border-slate-200";
 };
-
 
 const isIconTolak = (notif) => {
     const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
     return teks.includes("tolak") || teks.includes("batal");
 };
-
 
 const formatTanggal = (tanggal) => {
     return new Date(tanggal).toLocaleDateString("id-ID", {
@@ -96,7 +171,6 @@ const formatTanggal = (tanggal) => {
         year: "numeric",
     });
 };
-
 
 const formatJam = (tanggal) => {
     return new Date(tanggal)
@@ -107,34 +181,38 @@ const formatJam = (tanggal) => {
         .replace(".", ":");
 };
 
-
 // Label menu untuk route 'atasan.approval' dibuat dinamis sesuai role:
-// - Atasan (role 2,3,4,6) -> "Approval Cuti" (tugasnya menyetujui/menolak)
-// - Admin HR (role 5)     -> "Monitoring Cuti" (tugasnya memantau seluruh transaksi cuti)
-// Route dan halaman yang dituju TETAP SAMA ('atasan.approval'), hanya teksnya yang berbeda.
+// - Atasan (role 2,3,4,6) -> "Approval Cuti"
+// - Admin HR (role 5)     -> "Monitoring Cuti"
 const approvalMenuLabel = computed(() =>
     user.value.role_id === 5 ? "Monitoring Cuti" : "Approval Cuti",
 );
 </script>
-
 
 <template>
     <!-- BACKGROUND UTAMA GRADASI SOFT -->
     <div
         class="min-h-screen flex font-sans bg-gradient-to-br from-[#e0f2f1] via-[#f0f9ff] to-[#e0f2fe]"
     >
-        <!-- SIDEBAR PREMIUM GRADASI GELAP -->
+        <!-- BACKDROP DRAWER (HP) -->
+        <div
+            v-if="isMobileOpen"
+            class="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm md:hidden"
+            @click="isMobileOpen = false"
+        ></div>
+
+        <!-- SIDEBAR: drawer geser di HP, sidebar tetap di desktop -->
         <aside
             :class="[
-                'bg-gradient-to-b from-[#1e293b] via-[#0f172a] to-[#020617] border-r border-slate-700/50 flex-col transition-all duration-300 shadow-[4px_0_24px_rgba(0,0,0,0.15)] z-40 hidden md:flex text-white h-screen fixed top-0 left-0',
-                isSidebarOpen ? 'w-64' : 'w-20',
+                'bg-gradient-to-b from-[#1e293b] via-[#0f172a] to-[#020617] border-r border-slate-700/50 flex flex-col shadow-[4px_0_24px_rgba(0,0,0,0.15)] text-white fixed inset-y-0 left-0 w-64 z-50 md:z-40 transition-all duration-300',
+                isMobileOpen ? 'translate-x-0' : '-translate-x-full',
+                'md:translate-x-0',
+                isSidebarOpen ? 'md:w-64' : 'md:w-20',
             ]"
         >
             <div
-                class="h-20 flex items-center border-b border-slate-700/50 shrink-0 px-4 overflow-hidden"
-                :class="
-                    isSidebarOpen ? 'justify-start gap-3' : 'justify-center'
-                "
+                class="h-16 md:h-20 flex items-center border-b border-slate-700/50 shrink-0 px-4 overflow-hidden"
+                :class="showLabel ? 'justify-start gap-3' : 'justify-center'"
             >
                 <div
                     class="w-10 h-10 rounded-xl bg-white flex items-center justify-center p-1 shadow-sm shrink-0"
@@ -146,7 +224,7 @@ const approvalMenuLabel = computed(() =>
                     />
                 </div>
                 <div
-                    v-show="isSidebarOpen"
+                    v-show="showLabel"
                     class="transition-opacity duration-200 whitespace-nowrap"
                 >
                     <span
@@ -162,14 +240,33 @@ const approvalMenuLabel = computed(() =>
                         >Kementerian Pertanian</span
                     >
                 </div>
+                <!-- Tombol tutup drawer (HP) -->
+                <button
+                    class="ml-auto p-2 text-slate-400 hover:text-white md:hidden"
+                    @click="isMobileOpen = false"
+                    title="Tutup Menu"
+                >
+                    <svg
+                        class="w-5 h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                    >
+                        <path
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="2"
+                            d="M6 18L18 6M6 6l12 12"
+                        />
+                    </svg>
+                </button>
             </div>
-
 
             <nav
                 class="flex-1 overflow-y-auto py-6 px-3 space-y-1 custom-scrollbar"
             >
                 <p
-                    v-show="isSidebarOpen"
+                    v-show="showLabel"
                     class="px-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-2"
                 >
                     Main Menu
@@ -177,13 +274,13 @@ const approvalMenuLabel = computed(() =>
                 <!-- MENU AKTIF DENGAN GLOW EFFECT -->
                 <Link
                     :href="route('dashboard')"
-                    :title="!isSidebarOpen ? 'Dashboard' : ''"
+                    :title="!showLabel ? 'Beranda' : ''"
                     :class="[
                         'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
                         isActive('dashboard')
                             ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                             : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                        !isSidebarOpen ? 'justify-center' : '',
+                        !showLabel ? 'justify-center' : '',
                     ]"
                 >
                     <svg
@@ -199,29 +296,26 @@ const approvalMenuLabel = computed(() =>
                             d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
                         ></path>
                     </svg>
-                    <span v-show="isSidebarOpen" class="truncate"
-                        >Dashboard</span
-                    >
+                    <span v-show="showLabel" class="truncate">Beranda</span>
                 </Link>
-
 
                 <!-- Role 1,2,3,4,6 -> bisa mengajukan cuti -->
                 <div v-if="[1, 2, 3, 4, 6].includes(user.role_id)">
                     <p
-                        v-show="isSidebarOpen"
+                        v-show="showLabel"
                         class="px-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6"
                     >
                         Employee
                     </p>
                     <Link
                         :href="route('karyawan.ajukan')"
-                        :title="!isSidebarOpen ? 'Ajukan Cuti' : ''"
+                        :title="!showLabel ? 'Ajukan Cuti' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
                             isActive('karyawan.ajukan')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -237,19 +331,19 @@ const approvalMenuLabel = computed(() =>
                                 d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Ajukan Cuti</span
                         >
                     </Link>
                     <Link
                         :href="route('karyawan.riwayat')"
-                        :title="!isSidebarOpen ? 'Riwayat Pengajuan' : ''"
+                        :title="!showLabel ? 'Riwayat Pengajuan' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('karyawan.riwayat')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -265,19 +359,19 @@ const approvalMenuLabel = computed(() =>
                                 d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Riwayat Pengajuan</span
                         >
                     </Link>
                     <Link
                         :href="route('karyawan.kalender')"
-                        :title="!isSidebarOpen ? 'Status Tim' : ''"
+                        :title="!showLabel ? 'Status Tim' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('karyawan.kalender')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -293,37 +387,32 @@ const approvalMenuLabel = computed(() =>
                                 d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Status Tim</span
                         >
                     </Link>
                 </div>
 
-
                 <!-- Role 2,3,4,5,6 -> Approval, Role 6 saja -> Penangguhan -->
                 <div v-if="[2, 3, 4, 5, 6].includes(user.role_id)">
                     <p
-                        v-show="isSidebarOpen"
+                        v-show="showLabel"
                         class="px-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6"
                     >
                         Managerial
                     </p>
                     <!-- Label dinamis (route tetap 'atasan.approval'):
                          - Atasan (role 2,3,4,6) -> "Approval Cuti"
-                         - Admin HR (role 5)     -> "Monitoring Cuti"
-                         CATATAN: menu ini sudah mencakup role 5 (HR Admin) sejak awal,
-                         karena kondisi v-if di atas adalah [2,3,4,5,6]. Jadi HR Admin
-                         SEHARUSNYA sudah melihat menu ini juga di posisi yang sama
-                         dengan atasan L1-L4, terpisah dari menu grup "HR Admin" di bawah. -->
+                         - Admin HR (role 5)     -> "Monitoring Cuti" -->
                     <Link
                         :href="route('atasan.approval')"
-                        :title="!isSidebarOpen ? approvalMenuLabel : ''"
+                        :title="!showLabel ? approvalMenuLabel : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
                             isActive('atasan.approval')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -339,24 +428,22 @@ const approvalMenuLabel = computed(() =>
                                 d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate">{{
+                        <span v-show="showLabel" class="truncate">{{
                             approvalMenuLabel
                         }}</span>
                     </Link>
-                    <!-- Label: "Monitoring Cuti" (route tetap 'atasan.kuota').
-                         Sembunyikan untuk role 5 (HR Admin).
-                         Role 5 tetap punya "Rekap Kuota Detail" di blok HR Admin (admin.monitoring).
-                         Approval Cuti di atas tetap tampil untuk role 5. -->
+                    <!-- "Monitoring Cuti" (route 'atasan.kuota') disembunyikan untuk role 5.
+                         Role 5 punya "Rekap Kuota Detail" di blok HR Admin. -->
                     <Link
                         v-if="user.role_id !== 5"
                         :href="route('atasan.kuota')"
-                        :title="!isSidebarOpen ? 'Monitoring Cuti' : ''"
+                        :title="!showLabel ? 'Monitoring Cuti' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('atasan.kuota')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -378,20 +465,20 @@ const approvalMenuLabel = computed(() =>
                                 d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Monitoring Cuti</span
                         >
                     </Link>
                     <Link
                         v-if="user.role_id === 6"
                         :href="route('atasan.penangguhan')"
-                        :title="!isSidebarOpen ? 'Penangguhan Cuti' : ''"
+                        :title="!showLabel ? 'Penangguhan Cuti' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('atasan.penangguhan')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -407,38 +494,32 @@ const approvalMenuLabel = computed(() =>
                                 d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Penangguhan Cuti</span
                         >
                     </Link>
                 </div>
 
-
-                <!-- Role 5 -> HR Admin: gabungan lengkap dari kedua versi
-                     (Kelola Pegawai + Rekap Kuota Detail + Rekap Laporan + Kelola Hari Libur).
-                     Menu "Approval Cuti" (antrean approval) untuk role 5 TETAP ADA
-                     di blok "Managerial" di atas (route 'atasan.approval'), TIDAK
-                     dihapus atau digabung ke sini, supaya "Rekap Kuota Detail" (yang
-                     memang halaman berbeda: rekap saldo/kuota, bukan antrean approval)
-                     tetap utuh sebagai fitur terpisah. -->
+                <!-- Role 5 -> HR Admin (Kelola Pegawai, Rekap Kuota Detail,
+                     Rekap Laporan, Kelola Hari Libur). "Approval Cuti" untuk role 5
+                     tetap ada di blok Managerial di atas. -->
                 <div v-if="user.role_id === 5">
                     <p
-                        v-show="isSidebarOpen"
+                        v-show="showLabel"
                         class="px-3 text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 mt-6"
                     >
                         HR Admin
                     </p>
 
-
                     <Link
                         :href="route('admin.pegawai')"
-                        :title="!isSidebarOpen ? 'Kelola Pegawai' : ''"
+                        :title="!showLabel ? 'Kelola Pegawai' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300',
                             isActive('admin.pegawai')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -454,28 +535,23 @@ const approvalMenuLabel = computed(() =>
                                 d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Kelola Pegawai</span
                         >
                     </Link>
 
-
-                    <!-- Label: "Rekap Kuota Detail" (route tetap 'admin.monitoring').
-                         Fitur ini TIDAK diubah/dihapus - tetap route 'admin.monitoring'
-                         seperti sebelumnya, karena isinya rekap kuota/saldo, berbeda
-                         dari antrean approval di menu "Approval Cuti" pada blok Managerial. -->
+                    <!-- "Rekap Kuota Detail" (route 'admin.monitoring') -->
                     <Link
                         :href="route('admin.monitoring')"
-                        :title="!isSidebarOpen ? 'Rekap Kuota Detail' : ''"
+                        :title="!showLabel ? 'Rekap Kuota Detail' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('admin.monitoring')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
-                        <!-- Ikon Mata (Monitor) -->
                         <svg
                             class="w-5 h-5 shrink-0"
                             fill="none"
@@ -495,19 +571,19 @@ const approvalMenuLabel = computed(() =>
                                 d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Rekap Kuota Detail</span
                         >
                     </Link>
                     <Link
                         :href="route('admin.rekap')"
-                        :title="!isSidebarOpen ? 'Rekap Laporan' : ''"
+                        :title="!showLabel ? 'Rekap Laporan' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('admin.rekap')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -523,19 +599,19 @@ const approvalMenuLabel = computed(() =>
                                 d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Rekap Laporan</span
                         >
                     </Link>
                     <Link
                         :href="route('admin.libur')"
-                        :title="!isSidebarOpen ? 'Hari Libur' : ''"
+                        :title="!showLabel ? 'Hari Libur' : ''"
                         :class="[
                             'flex items-center gap-3 px-3 py-2.5 rounded-xl font-medium text-sm transition-all duration-300 mt-1',
                             isActive('admin.libur')
                                 ? 'bg-gradient-to-r from-green-500 to-green-600 text-white shadow-lg shadow-green-500/30 border border-green-400/20'
                                 : 'text-slate-400 hover:bg-slate-800/50 hover:text-white',
-                            !isSidebarOpen ? 'justify-center' : '',
+                            !showLabel ? 'justify-center' : '',
                         ]"
                     >
                         <svg
@@ -551,13 +627,12 @@ const approvalMenuLabel = computed(() =>
                                 d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2-2v12a2 2 0 002 2z"
                             ></path>
                         </svg>
-                        <span v-show="isSidebarOpen" class="truncate"
+                        <span v-show="showLabel" class="truncate"
                             >Kelola Hari Libur</span
                         >
                     </Link>
                 </div>
             </nav>
-
 
             <div
                 class="p-3 bg-[#020617]/50 border-t border-slate-800/50 shrink-0"
@@ -566,10 +641,10 @@ const approvalMenuLabel = computed(() =>
                     :href="route('logout')"
                     method="post"
                     as="button"
-                    :title="!isSidebarOpen ? 'Logout' : ''"
+                    :title="!showLabel ? 'Logout' : ''"
                     :class="[
                         'w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-800/60 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/50 rounded-xl text-sm font-medium transition-all duration-200',
-                        !isSidebarOpen ? 'px-2' : '',
+                        !showLabel ? 'px-2' : '',
                     ]"
                 >
                     <svg
@@ -585,27 +660,55 @@ const approvalMenuLabel = computed(() =>
                             d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
                         ></path>
                     </svg>
-                    <span v-show="isSidebarOpen" class="truncate">Logout</span>
+                    <span v-show="showLabel" class="truncate">Logout</span>
                 </Link>
             </div>
         </aside>
 
-
         <!-- KONTEN UTAMA -->
         <div
             :class="[
-                'flex-1 flex flex-col min-h-screen transition-all duration-300 relative',
+                'flex-1 min-w-0 flex flex-col min-h-screen transition-all duration-300 relative',
                 isSidebarOpen ? 'ml-0 md:ml-64' : 'ml-0 md:ml-20',
             ]"
         >
+            <!-- OVERLAY penutup dropdown (di luar header agar tidak terkena
+                 efek backdrop-blur yang membatasi elemen fixed) -->
+            <div
+                v-if="isNotifOpen || isProfileOpen"
+                class="fixed inset-0 z-20"
+                @click="closeDropdowns"
+            ></div>
+
             <!-- HEADER KACA (GLASSMORPHISM) -->
             <header
-                class="h-20 bg-white/70 backdrop-blur-xl border-b border-white/50 flex items-center justify-between px-6 md:px-8 z-30 sticky top-0 shadow-sm"
+                class="h-16 md:h-20 bg-white/70 backdrop-blur-xl border-b border-white/50 flex items-center justify-between px-4 sm:px-6 md:px-8 z-30 sticky top-0 shadow-sm"
             >
-                <div class="flex items-center gap-4">
+                <div class="flex items-center gap-3 md:gap-4 min-w-0">
+                    <!-- Tombol menu (HP) -->
+                    <button
+                        @click="isMobileOpen = true"
+                        class="md:hidden p-2.5 rounded-xl bg-white hover:bg-green-50 text-slate-700 shadow-sm border border-slate-100"
+                        title="Buka Menu"
+                    >
+                        <svg
+                            class="w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M4 6h16M4 12h16M4 18h16"
+                            />
+                        </svg>
+                    </button>
+                    <!-- Tombol buka/tutup sidebar (Desktop) -->
                     <button
                         @click="isSidebarOpen = !isSidebarOpen"
-                        class="p-2.5 rounded-xl bg-white hover:bg-green-50 text-slate-700 transition focus:outline-none focus:ring-2 focus:ring-green-500 shadow-sm border border-slate-100"
+                        class="hidden md:block p-2.5 rounded-xl bg-white hover:bg-green-50 text-slate-700 transition focus:outline-none focus:ring-2 focus:ring-green-500 shadow-sm border border-slate-100"
                         title="Buka / Tutup Sidebar"
                     >
                         <svg
@@ -619,9 +722,13 @@ const approvalMenuLabel = computed(() =>
                                 stroke-linejoin="round"
                                 stroke-width="2"
                                 d="M4 6h16M4 12h16M4 18h16"
-                            ></path>
+                            />
                         </svg>
                     </button>
+
+                    <span class="md:hidden font-bold text-slate-800 truncate">
+                        Agri<span class="text-green-600">Leave</span>
+                    </span>
                     <h2
                         class="text-xl font-extrabold text-slate-800 hidden md:block tracking-tight"
                     >
@@ -629,8 +736,7 @@ const approvalMenuLabel = computed(() =>
                     </h2>
                 </div>
 
-
-                <div class="flex items-center gap-6">
+                <div class="flex items-center gap-3 sm:gap-6">
                     <span
                         v-if="user.kelompok_substansi || user.tim_kerja"
                         class="text-xs font-semibold text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded-full hidden sm:inline-block shadow-sm"
@@ -638,8 +744,9 @@ const approvalMenuLabel = computed(() =>
                         {{ user.kelompok_substansi || user.tim_kerja }}
                     </span>
 
-
-                    <div class="relative">
+                    <!-- sm:relative -> di HP dropdown menempel ke header (lebar penuh),
+                         di layar >= sm menempel ke lonceng -->
+                    <div class="sm:relative">
                         <!-- Tombol Notifikasi -->
                         <button
                             @click="
@@ -661,14 +768,6 @@ const approvalMenuLabel = computed(() =>
                             </span>
                         </button>
 
-
-                        <div
-                            v-if="isNotifOpen"
-                            @click="isNotifOpen = false"
-                            class="fixed inset-0 z-40"
-                        ></div>
-
-
                         <!-- DROPDOWN NOTIFIKASI -->
                         <transition
                             enter-active-class="transition ease-out duration-200"
@@ -680,34 +779,80 @@ const approvalMenuLabel = computed(() =>
                         >
                             <div
                                 v-if="isNotifOpen"
-                                class="absolute right-0 top-full mt-3 w-[340px] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/50 overflow-hidden z-50 text-left"
+                                class="absolute inset-x-3 top-full mt-2 sm:inset-x-auto sm:left-auto sm:right-0 sm:mt-3 sm:w-[340px] bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-white/50 overflow-hidden z-50 text-left"
                             >
                                 <!-- Header Dropdown -->
                                 <div
-                                    class="px-4 py-3.5 bg-slate-50/80 border-b border-slate-100/50 flex justify-between items-center"
+                                    class="px-3.5 py-2.5 sm:py-3 bg-slate-50/90 border-b border-slate-100/60 flex items-center justify-between gap-2"
                                 >
-                                    <div class="flex items-center gap-2">
+                                    <div
+                                        class="flex items-center gap-2 min-w-0"
+                                    >
                                         <div
-                                            class="w-2 h-2 rounded-full bg-green-500 animate-pulse"
+                                            class="w-2 h-2 rounded-full bg-green-500 animate-pulse shrink-0"
                                         ></div>
                                         <h3
-                                            class="font-bold text-sm text-slate-800 tracking-tight"
+                                            class="font-bold text-sm text-slate-800 tracking-tight truncate"
                                         >
-                                            Notifikasi Pengajuan
+                                            Notifikasi
                                         </h3>
+                                        <span
+                                            v-if="unreadCount > 0"
+                                            class="inline-flex items-center justify-center min-w-[1.15rem] h-[1.15rem] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none shrink-0"
+                                        >
+                                            {{ unreadCount }}
+                                        </span>
                                     </div>
-                                    <button
-                                        @click="markAllAsRead"
-                                        class="text-[10px] text-green-600 font-extrabold px-2 py-0.5 tracking-wide hover:underline transition cursor-pointer"
+                                    <div
+                                        v-if="notifications.length > 0"
+                                        class="flex items-center gap-1.5 shrink-0"
                                     >
-                                        Tandai semua dibaca
-                                    </button>
+                                        <button
+                                            type="button"
+                                            @click="markAllAsRead"
+                                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold text-emerald-700 bg-white border border-emerald-200/80 hover:bg-emerald-50 transition cursor-pointer whitespace-nowrap"
+                                        >
+                                            <svg
+                                                class="w-3 h-3 shrink-0"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2.5"
+                                                    d="M5 13l4 4L19 7"
+                                                ></path>
+                                            </svg>
+                                            Tandai dibaca
+                                        </button>
+                                        <button
+                                            type="button"
+                                            @click="hapusSemuaNotifikasi"
+                                            class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold text-red-600 bg-white border border-red-200/80 hover:bg-red-50 transition cursor-pointer whitespace-nowrap"
+                                        >
+                                            <svg
+                                                class="w-3 h-3 shrink-0"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2.5"
+                                                    d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                                ></path>
+                                            </svg>
+                                            Hapus
+                                        </button>
+                                    </div>
                                 </div>
-
 
                                 <!-- Daftar Item Notifikasi -->
                                 <div
-                                    class="max-h-72 overflow-y-auto divide-y divide-slate-50"
+                                    class="max-h-[45vh] sm:max-h-72 overflow-y-auto divide-y divide-slate-50"
                                 >
                                     <template
                                         v-if="
@@ -719,8 +864,8 @@ const approvalMenuLabel = computed(() =>
                                         <div
                                             v-for="notif in notifications"
                                             :key="notif.id"
-                                            @click="hapusNotifikasi(notif.id)"
-                                            class="p-4 hover:bg-slate-50 transition-all duration-150 flex items-start gap-3.5 group cursor-pointer"
+                                            @click="klikNotifikasi(notif)"
+                                            class="p-3 sm:p-4 hover:bg-slate-50 transition-all duration-150 flex items-start gap-3 sm:gap-3.5 group cursor-pointer"
                                             :class="{
                                                 'bg-white': !notif.is_read,
                                                 'bg-slate-50/30 opacity-80':
@@ -732,7 +877,51 @@ const approvalMenuLabel = computed(() =>
                                                 class="shrink-0 transition-transform group-hover:scale-110 mt-1"
                                             >
                                                 <div
-                                                    v-if="isIconTolak(notif)"
+                                                    v-if="
+                                                        jenisNotif(notif) ===
+                                                        'kedaluwarsa'
+                                                    "
+                                                    class="bg-zinc-100 text-zinc-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2.5"
+                                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                                        ></path>
+                                                    </svg>
+                                                </div>
+                                                <div
+                                                    v-else-if="
+                                                        jenisNotif(notif) ===
+                                                        'pengingat'
+                                                    "
+                                                    class="bg-orange-50 text-orange-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2.5"
+                                                            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+                                                        ></path>
+                                                    </svg>
+                                                </div>
+                                                <div
+                                                    v-else-if="
+                                                        isIconTolak(notif)
+                                                    "
                                                     class="bg-red-50 text-red-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
                                                 >
                                                     <svg
@@ -769,7 +958,6 @@ const approvalMenuLabel = computed(() =>
                                                 </div>
                                             </div>
 
-
                                             <!-- Konten Kanan -->
                                             <div class="flex-1 min-w-0 pr-2">
                                                 <p
@@ -778,13 +966,12 @@ const approvalMenuLabel = computed(() =>
                                                     {{ notif.judul }}
                                                 </p>
 
-
-                                                <!-- Badge status pengajuan (warna ditentukan via badgeStyle) -->
+                                                <!-- Badge status (warna via badgeStyle) -->
                                                 <div
                                                     class="mt-2 flex flex-wrap items-center gap-2.5"
                                                 >
                                                     <span
-                                                        class="inline-block px-3 py-1 text-[11px] font-medium border rounded-full leading-none"
+                                                        class="inline-block max-w-full px-2.5 py-1 sm:px-3 sm:py-1.5 text-[11px] font-medium border rounded-2xl leading-relaxed"
                                                         :class="
                                                             badgeStyle(notif)
                                                         "
@@ -792,7 +979,6 @@ const approvalMenuLabel = computed(() =>
                                                         {{ notif.pesan }}
                                                     </span>
                                                 </div>
-
 
                                                 <!-- Format Tanggal dan Jam -->
                                                 <p
@@ -830,7 +1016,6 @@ const approvalMenuLabel = computed(() =>
                                         </div>
                                     </template>
 
-
                                     <!-- Kondisi Kosong -->
                                     <div
                                         v-else
@@ -853,10 +1038,9 @@ const approvalMenuLabel = computed(() =>
                                     </div>
                                 </div>
 
-
                                 <!-- Footer Dropdown -->
                                 <div
-                                    class="p-3 bg-white border-t border-slate-100 text-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)] relative z-10"
+                                    class="p-2 sm:p-3 bg-white border-t border-slate-100 text-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)] relative z-10"
                                 >
                                     <Link
                                         :href="route('karyawan.riwayat')"
@@ -870,9 +1054,7 @@ const approvalMenuLabel = computed(() =>
                         </transition>
                     </div>
 
-
-                    <div class="h-6 w-px bg-slate-200"></div>
-
+                    <div class="h-6 w-px bg-slate-200 hidden sm:block"></div>
 
                     <div class="relative">
                         <button
@@ -895,7 +1077,7 @@ const approvalMenuLabel = computed(() =>
                                             ? `/storage/${user.foto_profil}`
                                             : `/storage/${user.profile_photo_path}`
                                     "
-                                    alt="Profile"
+                                    alt="Profil"
                                     class="w-full h-full object-cover"
                                 />
                                 <span v-else>{{ user.nama.charAt(0) }}</span>
@@ -928,14 +1110,6 @@ const approvalMenuLabel = computed(() =>
                             </svg>
                         </button>
 
-
-                        <div
-                            v-if="isProfileOpen"
-                            @click="isProfileOpen = false"
-                            class="fixed inset-0 z-40"
-                        ></div>
-
-
                         <transition
                             enter-active-class="transition ease-out duration-100"
                             enter-from-class="transform opacity-0 scale-95"
@@ -946,7 +1120,7 @@ const approvalMenuLabel = computed(() =>
                         >
                             <div
                                 v-if="isProfileOpen"
-                                class="absolute right-0 mt-2 w-56 bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-white/50 py-2 z-50"
+                                class="absolute right-0 mt-2 w-56 max-w-[calc(100vw-1.5rem)] bg-white/95 backdrop-blur-md rounded-2xl shadow-xl border border-white/50 py-2 z-50"
                             >
                                 <div
                                     class="px-4 py-3 border-b border-slate-50 lg:hidden"
@@ -1026,18 +1200,18 @@ const approvalMenuLabel = computed(() =>
                 </div>
             </header>
 
-
-            <!-- AREA KONTEN (TRANSFOMASI TRANSPARAN) -->
-            <main class="flex-1 p-6 md:p-8 overflow-y-auto relative z-10">
+            <!-- AREA KONTEN -->
+            <main
+                class="flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto relative z-10"
+            >
                 <transition name="fade" mode="out-in">
                     <slot />
                 </transition>
             </main>
 
-
             <!-- FOOTER BAWAH KACA -->
             <footer
-                class="border-t border-slate-200/50 py-4 text-center text-[11px] font-medium text-slate-500 shrink-0 bg-white/40 backdrop-blur-sm relative z-10"
+                class="border-t border-slate-200/50 py-4 px-4 text-center text-[11px] font-medium text-slate-500 shrink-0 bg-white/40 backdrop-blur-sm relative z-10"
             >
                 &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro
                 Organisasi dan SDM Aparatur.
@@ -1045,7 +1219,6 @@ const approvalMenuLabel = computed(() =>
         </div>
     </div>
 </template>
-
 
 <style>
 /* Animasi Transisi Halaman */
@@ -1060,7 +1233,6 @@ const approvalMenuLabel = computed(() =>
     opacity: 0;
     transform: translateY(15px);
 }
-
 
 /* Kustomisasi Scrollbar Khusus Sidebar */
 .custom-scrollbar::-webkit-scrollbar {
@@ -1077,6 +1249,3 @@ const approvalMenuLabel = computed(() =>
     background: #475569;
 }
 </style>
-
-
-

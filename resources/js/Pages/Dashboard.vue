@@ -1,7 +1,8 @@
 <script setup>
 import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, usePage, Link, router } from "@inertiajs/vue3";
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
+import { useTahunFilter } from "@/composables/useTahunFilter";
 
 const props = defineProps({
     stats: Object,
@@ -19,6 +20,14 @@ const props = defineProps({
         default: () => [],
     },
     chartDataPribadi: {
+        type: Array,
+        default: () => [],
+    },
+    cutiDisetujuiChart: {
+        type: Array,
+        default: () => [],
+    },
+    cutiDisetujuiPribadiChart: {
         type: Array,
         default: () => [],
     },
@@ -42,13 +51,14 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    // BARU: tahun yang sudah punya baris saldo (untuk validasi modal Revisi).
+    tahun_saldo_tersedia: {
+        type: Array,
+        default: null,
+    },
 });
 
 const getLihatSemuaHref = () => {
-    if (user.value.role_id === 5) {
-        return route("admin.rekap");
-    }
-
     if (user.value.role_id === 1) {
         return route("karyawan.riwayat");
     }
@@ -65,15 +75,22 @@ const user = computed(() => page.props.auth.user);
 
 const isAdminHR = computed(() => user.value.role_id === 5);
 
-// Default tampilan: "tim" (Tim / Bawahan) — bukan "pribadi"
 const activeTab = ref("tim");
 
 const selectedKelompokSubstansi = ref(props.filter?.kelompok_substansi ?? null);
 
+const daftarTahunFilter = useTahunFilter();
+const selectedTahun = ref(
+    props.filter?.tahun || new Date().getFullYear().toString(),
+);
+
 const applyKelompokSubstansiFilter = () => {
     router.get(
         route("dashboard"),
-        { kelompok_substansi: selectedKelompokSubstansi.value },
+        {
+            kelompok_substansi: selectedKelompokSubstansi.value,
+            tahun: selectedTahun.value,
+        },
         {
             preserveState: true,
             preserveScroll: true,
@@ -81,7 +98,11 @@ const applyKelompokSubstansiFilter = () => {
                 "stats",
                 "recentCuti",
                 "cutiDisetujuiData",
+                "cutiDisetujuiPribadi",
+                "cutiDisetujuiChart",
+                "cutiDisetujuiPribadiChart",
                 "chartDataBackend",
+                "chartDataPribadi",
                 "anggotaTim",
                 "timCutiHariIni",
                 "filter",
@@ -106,6 +127,65 @@ const displayedRecentCuti = computed(() => {
     return props.recentCuti;
 });
 
+// Urutan aktivitas: menunggu aksi saya → baru diproses saya → sisanya.
+// levelForRole: role 2→L1, 3→L2, 4→L3, 6→L4; null = tanpa wewenang approval.
+const levelForRole = computed(() => {
+    const map = { 2: 1, 3: 2, 4: 3, 6: 4 };
+    return map[user.value.role_id] ?? null;
+});
+
+// Jendela "baru diproses": 24 jam
+const WINDOW_BARU_DIPROSES_MS = 24 * 60 * 60 * 1000;
+
+const isMenungguAksiSaya = (item) => {
+    if (!levelForRole.value || !item) return false;
+    return item.status === `menunggu_l${levelForRole.value}`;
+};
+
+const isBaruDiprosesSaya = (item) => {
+    if (!levelForRole.value || !item) return false;
+
+    const logs = getApprovalLogs(item);
+    const myLog = logs.find((log) => {
+        const sameLevel = Number(log.level_approval) === levelForRole.value;
+        const approverId = log.approver?.id ?? log.approver_id ?? null;
+        const sameApprover =
+            approverId !== null &&
+            String(approverId) === String(user.value?.id);
+        return sameLevel && sameApprover;
+    });
+
+    if (!myLog) return false;
+
+    if (!item.updated_at) return true;
+
+    const updatedAt = new Date(item.updated_at).getTime();
+    if (Number.isNaN(updatedAt)) return true;
+
+    return Date.now() - updatedAt <= WINDOW_BARU_DIPROSES_MS;
+};
+
+// Urut ulang aktivitas (sumber data tetap displayedRecentCuti)
+const sortedDisplayedRecentCuti = computed(() => {
+    const list = displayedRecentCuti.value || [];
+    if (!levelForRole.value) return list;
+
+    const priorityOf = (item) => {
+        if (isMenungguAksiSaya(item)) return 0;
+        if (isBaruDiprosesSaya(item)) return 1;
+        return 2;
+    };
+
+    return [...list].sort((a, b) => {
+        const diff = priorityOf(a) - priorityOf(b);
+        if (diff !== 0) return diff;
+
+        const timeA = new Date(a.updated_at || a.tanggal_mulai || 0).getTime();
+        const timeB = new Date(b.updated_at || b.tanggal_mulai || 0).getTime();
+        return timeB - timeA;
+    });
+});
+
 const activeChartIndex = ref(null);
 const toggleChartTooltip = (index) => {
     activeChartIndex.value = activeChartIndex.value === index ? null : index;
@@ -121,22 +201,7 @@ const formatDate = (dateString) => {
     }).format(date);
 };
 
-// ================================================================
-// LABEL STATUS "MENUNGGU": setiap status menunggu approval menampilkan
-// kode level persetujuannya — (L1), (L2), (L3), (L4) — di belakang
-// nama jabatan. Teks label TIDAK diubah.
-//
-// PEMBARUAN WARNA (Boss request): class warna badge disamakan PERSIS
-// dengan badge status di halaman Riwayat Pengajuan (RiwayatPengajuan.vue):
-//   - menunggu (L1-L4)          : bg-amber-100   text-amber-800   border-amber-300
-//   - disetujui                 : bg-emerald-100 text-emerald-800 border-emerald-300
-//   - ditolak                   : bg-rose-100    text-rose-800    border-rose-300
-//   - ditangguhkan (dan yang    : bg-slate-200   text-slate-700   border-slate-300
-//     dibatalkan_ditangguhkan)    (silver/abu, BUKAN merah/oranye)
-//   - dibatalkan_reguler        : bg-gray-200    text-gray-800    border-gray-300
-//   - lainnya / tanpa status    : bg-gray-200    text-gray-600    border-gray-300
-// Hanya class warna yang berubah; teks & struktur fungsi tetap sama.
-// ================================================================
+// Badge status — warna diselaraskan dengan RiwayatPengajuan.vue
 const formatStatus = (status) => {
     switch (status) {
         case "menunggu_l1":
@@ -183,6 +248,11 @@ const formatStatus = (status) => {
             return {
                 text: "Ditangguhkan",
                 class: "bg-slate-200 text-slate-700 border border-slate-300",
+            };
+        case "kedaluwarsa":
+            return {
+                text: "Kedaluwarsa",
+                class: "bg-zinc-200 text-zinc-700 border border-zinc-300",
             };
         default:
             return {
@@ -233,10 +303,7 @@ const sisaCutiTersedia = computed(() => {
     return sisaHakBerjalan.value + saldoBawaanEligible.value;
 });
 
-// ================================================================
-// ALIAS: nama variabel alternatif yang mengacu pada computed yang
-// SAMA persis — tidak ada logika baru, tidak ada duplikasi kalkulasi.
-// ================================================================
+// Alias (nilai sama dengan computed di atas)
 const jatahCutiBerjalan = sisaHakBerjalan;
 const totalCutiTersedia = sisaCutiTersedia;
 
@@ -389,10 +456,10 @@ const chartData = computed(() => {
     let sourceChart = [];
 
     if (isPribadiMode) {
-        sourceCuti = props.cutiDisetujuiPribadi || [];
+        sourceCuti = props.cutiDisetujuiPribadiChart || [];
         sourceChart = props.chartDataPribadi || [];
     } else {
-        sourceCuti = props.cutiDisetujuiData || [];
+        sourceCuti = props.cutiDisetujuiChart || [];
         sourceChart = props.chartDataBackend || [];
     }
 
@@ -400,7 +467,11 @@ const chartData = computed(() => {
         sourceCuti.forEach((cuti) => {
             if (cuti.status !== "disetujui") return;
 
-            const monthIndex = new Date(cuti.tanggal_mulai).getMonth();
+            const tglMulai = new Date(cuti.tanggal_mulai);
+
+            if (tglMulai.getFullYear() !== Number(selectedTahun.value)) return;
+
+            const monthIndex = tglMulai.getMonth();
             if (monthIndex < 0 || monthIndex > 11) return;
 
             const jenis = (cuti.jenis_cuti || "cuti tahunan").toLowerCase();
@@ -525,6 +596,83 @@ const donutGradient = computed(() => {
     return `conic-gradient(${parts.join(", ")})`;
 });
 
+// Donut interaktif: hover/tap segmen → tampilkan jumlah hari
+const hoveredDonutSegment = ref(null);
+
+const donutSegments = computed(() => {
+    const d = distribusiCuti.value;
+    if (!d || d.total === 0) return [];
+
+    const items = [
+        {
+            key: "tahunan",
+            label: "Tahunan",
+            color: "#34d399",
+            percent: d.percentTahunan,
+            hari: d.tahunan,
+        },
+        {
+            key: "melahirkan",
+            label: "Melahirkan",
+            color: "#f472b6",
+            percent: d.percentMelahirkan,
+            hari: d.melahirkan,
+        },
+        {
+            key: "penting",
+            label: "Penting",
+            color: "#fb923c",
+            percent: d.percentPenting,
+            hari: d.alasan_penting,
+        },
+        {
+            key: "besar",
+            label: "Besar",
+            color: "#60a5fa",
+            percent: d.percentBesar,
+            hari: d.besar,
+        },
+    ].filter((item) => item.percent > 0);
+
+    let cumulative = 0;
+    return items.map((item) => {
+        const start = cumulative;
+        cumulative += item.percent;
+        return { ...item, start, end: cumulative };
+    });
+});
+
+const setHoveredDonutSegment = (segment) => {
+    hoveredDonutSegment.value = segment;
+};
+
+const clearHoveredDonutSegment = () => {
+    hoveredDonutSegment.value = null;
+};
+
+// Toggle tooltip donut (untuk touch / klik)
+const toggleDonutSegment = (segment) => {
+    hoveredDonutSegment.value =
+        hoveredDonutSegment.value?.key === segment.key ? null : segment;
+};
+
+// Posisi tooltip di tengah busur segmen donut
+const donutTooltipStyle = computed(() => {
+    const segment = hoveredDonutSegment.value;
+    if (!segment) return {};
+
+    const midPercent = segment.start + segment.percent / 2;
+    const angleRad = (midPercent / 100) * 2 * Math.PI;
+    const radius = 50; // px, jarak titik tooltip dari titik tengah donut
+    const x = Math.sin(angleRad) * radius;
+    const y = -Math.cos(angleRad) * radius;
+
+    return {
+        left: `calc(50% + ${x}px)`,
+        top: `calc(50% + ${y}px)`,
+    };
+});
+
 const upcomingHolidays = computed(() => {
     const todayStr = new Date().toISOString().split("T")[0];
     if (!props.hariLiburs) return [];
@@ -642,6 +790,48 @@ const formRevisi = ref({
     tanggal_mulai: "",
     tanggal_selesai: "",
 });
+
+// ================= SALDO TAHUN BELUM ADA (MODAL REVISI) =================
+// Tahun PERTAMA dalam rentang tanggal revisi yang saldonya belum dibuat
+// Admin HR (khusus Cuti Tahunan). Peringatan dini saja; backend
+// (CutiController::revisi) tetap penjaga akhir.
+const revisiError = ref("");
+
+const tahunTanpaSaldoRevisi = computed(() => {
+    if (!Array.isArray(props.tahun_saldo_tersedia)) return null;
+
+    const jenis = (
+        detailModal.value.data?.jenis_cuti || "Cuti Tahunan"
+    ).toLowerCase();
+    if (!jenis.includes("tahunan")) return null;
+
+    const { tanggal_mulai, tanggal_selesai } = formRevisi.value;
+    if (!tanggal_mulai || !tanggal_selesai) return null;
+    if (tanggal_mulai > tanggal_selesai) return null;
+
+    const awal = parseInt(tanggal_mulai.slice(0, 4), 10);
+    const akhir = parseInt(tanggal_selesai.slice(0, 4), 10);
+    if (isNaN(awal) || isNaN(akhir)) return null;
+
+    for (let t = awal; t <= akhir; t++) {
+        if (!props.tahun_saldo_tersedia.includes(t)) return t;
+    }
+    return null;
+});
+
+// Hapus pesan error server tiap kali modal/tanggal berubah.
+watch(
+    () => [
+        detailModal.value.show,
+        modeRevisi.value,
+        formRevisi.value.tanggal_mulai,
+        formRevisi.value.tanggal_selesai,
+    ],
+    () => {
+        revisiError.value = "";
+    },
+);
+// ================= END SALDO TAHUN BELUM ADA (MODAL REVISI) =================
 
 const isStatusBisaDirevisi = (item) => {
     return (
@@ -780,7 +970,10 @@ const isInvalidWeekendOnly = computed(() => {
 
 const submitRevisi = () => {
     if (isInvalidWeekendOnly.value || jumlahHariKerja.value === 0) return;
+    if (tahunTanpaSaldoRevisi.value !== null) return;
     if (!detailModal.value.data?.id) return;
+
+    revisiError.value = "";
 
     router.post(
         route("karyawan.cuti.revisi", detailModal.value.data.id),
@@ -789,6 +982,14 @@ const submitRevisi = () => {
             preserveScroll: true,
             onSuccess: () => {
                 closeDetailModal();
+            },
+            // Error validasi dari server (mis. saldo tahun belum ada)
+            // ditampilkan di dalam modal, modal TIDAK ditutup.
+            onError: (errors) => {
+                revisiError.value =
+                    errors.tanggal_mulai ||
+                    errors.tanggal_selesai ||
+                    "Revisi gagal diproses.";
             },
         },
     );
@@ -826,31 +1027,20 @@ const onLeaveTeamMembers = computed(() => {
     return selectedDateForModal.value.onLeave;
 });
 
-// ================================================================
-// MODAL KONFIRMASI PERSETUJUAN & PENOLAKAN CUTI (custom, bukan
-// window.confirm() / window.prompt() bawaan browser lagi).
-//
-// approveModal & rejectModal menyimpan item cuti yang sedang diproses
-// supaya modal bisa menampilkan ringkasan (Karyawan / Jenis Cuti /
-// Tanggal) sebelum pengguna benar-benar mengonfirmasi aksinya — sesuai
-// referensi tampilan popup "Setujui Pengajuan Cuti" dan
-// "Alasan Penolakan Cuti".
-//
-// Fungsi approveCuti(id) & rejectCuti(id) TETAP DIPERTAHANKAN (nama &
-// signature sama) agar tidak menghapus/merusak pemanggilan yang sudah
-// ada di template (mis. tombol "Setuju" / "Tolak" pada Detail Modal),
-// hanya isinya diganti supaya membuka modal custom ini.
-// ================================================================
-const approveModal = ref({ show: false, item: null });
+// Modal konfirmasi setuju / tolak (pengganti window.confirm & prompt)
+const approveModal = ref({ show: false, item: null, processing: false });
 const openApproveModal = (item) => {
-    approveModal.value = { show: true, item };
+    approveModal.value = { show: true, item, processing: false };
 };
 const closeApproveModal = () => {
-    approveModal.value = { show: false, item: null };
+    approveModal.value = { show: false, item: null, processing: false };
 };
 const confirmApproveCuti = () => {
+    if (approveModal.value.processing) return; // guard: sudah diproses, abaikan klik berikutnya
     const item = approveModal.value.item;
     if (!item?.id) return;
+
+    approveModal.value.processing = true;
 
     router.post(
         route("atasan.approval.approve", item.id),
@@ -862,21 +1052,29 @@ const confirmApproveCuti = () => {
                 closeApproveModal();
                 closeDetailModal();
             },
+            onFinish: () => {
+                // Selalu dijalankan (baik sukses maupun error) supaya modal
+                // tidak "terkunci" processing jika request gagal.
+                approveModal.value.processing = false;
+            },
         },
     );
 };
 
-const rejectModal = ref({ show: false, item: null, alasan: "" });
+// [FIX DOUBLE-SUBMIT] Sama seperti approveModal: "processing" mencegah
+// klik ganda pada tombol "Kirim Penolakan" mengirim dua request sekaligus.
+const rejectModal = ref({ show: false, item: null, alasan: "", processing: false });
 const rejectError = ref(false);
 const openRejectModal = (item) => {
-    rejectModal.value = { show: true, item, alasan: "" };
+    rejectModal.value = { show: true, item, alasan: "", processing: false };
     rejectError.value = false;
 };
 const closeRejectModal = () => {
-    rejectModal.value = { show: false, item: null, alasan: "" };
+    rejectModal.value = { show: false, item: null, alasan: "", processing: false };
     rejectError.value = false;
 };
 const confirmRejectCuti = () => {
+    if (rejectModal.value.processing) return; // guard: sudah diproses, abaikan klik berikutnya
     const item = rejectModal.value.item;
     if (!item?.id) return;
 
@@ -886,6 +1084,7 @@ const confirmRejectCuti = () => {
         return;
     }
     rejectError.value = false;
+    rejectModal.value.processing = true;
 
     router.post(
         route("atasan.approval.reject", item.id),
@@ -897,16 +1096,14 @@ const confirmRejectCuti = () => {
                 closeRejectModal();
                 closeDetailModal();
             },
+            onFinish: () => {
+                rejectModal.value.processing = false;
+            },
         },
     );
 };
 
-// approveCuti(id) / rejectCuti(id): dipanggil dari tombol "Setuju" /
-// "Tolak" pada Detail Modal dengan hanya membawa id. Di sini kita coba
-// ambil data lengkap item dari detailModal (jika id-nya cocok) supaya
-// modal konfirmasi bisa menampilkan ringkasan pengajuan; jika tidak
-// ditemukan, tetap fallback ke objek minimal { id } agar aksi tetap
-// bisa diproses tanpa error.
+// Cari item di recentCuti lalu buka modal setuju/tolak
 const approveCuti = (id) => {
     const item =
         detailModal.value.data && detailModal.value.data.id === id
@@ -923,20 +1120,20 @@ const rejectCuti = (id) => {
 };
 
 const getNamaAtasanPemroses = (item) => {
-    if (!item) return "Kepala Biro Perencanaan";
+    if (!item) return "Atasan";
 
-    if (
-        item.status === "ditangguhkan" ||
-        item.status === "dibatalkan_ditangguhkan"
-    ) {
-        return "Kepala Biro Perencanaan";
-    }
+    const logs = item.approval_logs || item.approvalLogs || [];
+    const logPemroses = [...logs]
+        .reverse()
+        .find(
+            (l) =>
+                l.keputusan === "tangguh" ||
+                l.keputusan === "tolak" ||
+                l.keputusan === "setuju",
+        );
+    if (logPemroses?.approver?.nama) return logPemroses.approver.nama;
 
     return (
-        item.dibatalkan_oleh?.nama ||
-        item.dibatalkanOleh?.nama ||
-        item.ditangguhkan_oleh?.nama ||
-        item.ditangguhkanOleh?.nama ||
         item.atasan_l4?.nama ||
         item.atasanL4?.nama ||
         item.atasan_l3?.nama ||
@@ -952,7 +1149,7 @@ const getNamaAtasanPemroses = (item) => {
             4: "Kepala Biro Perencanaan",
             6: "Kepala Biro Perencanaan",
         }[item.level_saat_ini] ||
-        "Kepala Biro Perencanaan"
+        "Atasan"
     );
 };
 
@@ -985,15 +1182,7 @@ const getCatatanAtasan = (item) => {
     return responses[item?.status] || "Diproses tanpa catatan tambahan.";
 };
 
-// ------------------------------------------------------------------
-// KHUSUS PEMBATALAN MANDIRI OLEH PEMOHON (status "dibatalkan_reguler"):
-// helper di bawah ini KHUSUS dipakai untuk kasus dibatalkan_reguler,
-// terpisah dari getNamaAtasanPemroses / getCatatanAtasan (yang TIDAK
-// diubah dan tetap dipakai untuk kasus ditolak / ditangguhkan).
-//
-// getNamaPembatal: nama pihak yang membatalkan (relasi dibatalkan_oleh),
-// fallback ke nama pegawai pemilik pengajuan, lalu teks generik "Pemohon".
-// ------------------------------------------------------------------
+// Pembatalan mandiri (dibatalkan_reguler): tampilkan catatan pemohon
 const getNamaPembatal = (item) => {
     return (
         item?.dibatalkan_oleh?.nama ||
@@ -1003,10 +1192,7 @@ const getNamaPembatal = (item) => {
     );
 };
 
-// getCatatanPembatalanReguler: catatan/alasan pembatalan mandiri. Dicoba
-// dulu dari keterangan (format "alasan awal | catatan"), lalu field
-// alasan_pembatalan / catatan_pembatalan, dan fallback terakhir kalimat
-// default yang menegaskan ini pembatalan mandiri oleh pemohon.
+// Ambil catatan pembatalan mandiri dari keterangan / field khusus
 const getCatatanPembatalanReguler = (item) => {
     if (item?.keterangan && item.keterangan.includes("|")) {
         return item.keterangan
@@ -1032,13 +1218,7 @@ const isStatusDitangguhkan = (item) =>
     item?.status === "ditangguhkan" ||
     item?.status === "dibatalkan_ditangguhkan";
 
-// ================================================================
-// Status "dibatalkan_reguler" berarti pengajuan DIBATALKAN SENDIRI oleh
-// pemohon/pegawai, BUKAN karena ditolak/ditangguhkan oleh atasan.
-// Dipisah lewat helper isStatusDibatalkanReguler supaya template bisa
-// menampilkan label & narasi yang sesuai. isStatusDibatalkanAtauDitangguhkan
-// TETAP DIPERTAHANKAN sebagai penanda umum "box catatan ini perlu tampil".
-// ================================================================
+// dibatalkan_reguler = dibatalkan sendiri oleh pemohon
 const isStatusDibatalkanReguler = (item) =>
     item?.status === "dibatalkan_reguler" || item?.status === "dibatalkan";
 
@@ -1085,12 +1265,7 @@ const getApprovalLevelLabel = (level) =>
         4: "L4 - Kepala Biro Perencanaan",
     })[level] || `Level ${level}`;
 
-// ================================================================
-// LABEL LEVEL SINGKAT UNTUK BADGE MODAL DETAIL CUTI
-// (mis. "MENUNGGU L3") — dipakai khusus untuk badge status pada
-// header modal Detail Cuti. Tidak mengubah fungsi status lain
-// (formatStatus tetap dipakai di tabel Riwayat, dsb).
-// ================================================================
+// Label level singkat untuk badge modal detail (mis. MENUNGGU L3)
 const getStatusBadgeLabelSingkat = (status) => {
     if (!status) return "STATUS";
 
@@ -1104,63 +1279,18 @@ const getStatusBadgeLabelSingkat = (status) => {
         ditangguhkan: "DITANGGUHKAN",
         dibatalkan_ditangguhkan: "DITANGGUHKAN",
         dibatalkan_reguler: "DIBATALKAN",
+        kedaluwarsa: "KEDALUWARSA",
     };
 
     return levelMap[status] || status.replace(/_/g, " ").toUpperCase();
 };
 
-// ================================================================
-// [PERBAIKAN] CATATAN / RESPON ATASAN — SEKARANG DINAMIS (L1/L2/L3/L4)
-// SEBELUMNYA: blok ini HARDCODE hanya menampilkan L3 & L4 (`for (const
-// level of [3, 4])` di getCatatanAtasanList), dengan asumsi lama bahwa
-// staf SELALU lewat L1 lalu skip ke L3. Begitu logic backend
-// (CutiController::tentukanLevelAwalCuti()) diperbaiki untuk kadang
-// mulai dari L2 (staf tanpa tim_kerja tapi kelompoknya punya L2) atau
-// bahkan langsung L3 (unit tanpa L1 & L2 sama sekali), tampilan ini jadi
-// tidak sinkron: status bisa bilang "MENUNGGU L2" tapi baris L2 tidak
-// pernah dirender sama sekali (lihat screenshot kasus TATI KOMARAWATI).
-//
-// PERBAIKAN: getLevelAwalUntukItem() menentukan level PERTAMA yang
-// dilalui pengajuan ini secara dinamis per-item (bukan tebakan global),
-// dengan urutan prioritas:
-//   1. Kalau sudah ada approval_log di level 1 atau 2 -> itu levelnya
-//      (sumber kebenaran paling akurat, karena mencatat apa yang BENAR-
-//      BENAR terjadi pada pengajuan ini).
-//   2. Kalau belum ada log sama sekali (masih menunggu di level
-//      pertamanya), baca dari status saat ini ('menunggu_lX').
-//   3. Kalau status sudah lewat L1/L2 tanpa log di level itu (mis.
-//      'menunggu_l3' dst tanpa log level 1/2) -> pengajuan ini memang
-//      tidak pernah melalui L1 maupun L2.
-//
-// Dengan begitu daftar level yang dirender (levelsToShow) otomatis
-// menyesuaikan skenario staf mana pun: [1,3,4], [2,3,4], [3,4], atau
-// bahkan [4] saja (kalau yang mengajukan sendiri adalah L3/Kasubag TU).
-// Blok "Catatan / Respon Atasan" menampilkan baris-baris ini dengan
-// nama/jabatan pejabat dan status ("Disetujui" / "Ditolak" / "Menunggu
-// Persetujuan"), SELALU ditampilkan sejak awal pengajuan (selama status
-// bukan ditolak):
-//   - Level SUDAH diproses (ada approval_log): tampilkan nama pejabat
-//     yang memutuskan + status sesuai keputusan.
-//   - Level BELUM diproses: tetap tampilkan nama pejabat (dari data
-//     yang tersedia / nama pejabat tetap) dengan status
-//     "Menunggu Persetujuan".
-// ================================================================
+// Catatan / respon atasan per level (L1–L4), dinamis sesuai rantai approval
 const LEVEL_JABATAN_MAP = {
     1: "Ketua Tim Kerja",
     2: "Ketua Kelompok Substansi",
     3: "Kasubag TU",
     4: "Kepala Biro Perencanaan",
-};
-
-// ------------------------------------------------------------------
-// NAMA PEJABAT TETAP: jabatan di level tertinggi hanya diisi SATU orang
-// untuk seluruh instansi. Dipakai sebagai fallback terakhir supaya baris
-// "Menunggu Persetujuan" tetap menampilkan nama pejabatnya, bukan "-".
-// Kalau jabatan berganti orang, cukup ubah nilai di map ini.
-// ------------------------------------------------------------------
-const NAMA_PEJABAT_TETAP = {
-    3: "Ignatius Agus Hendarto, S.E., M.M.",
-    4: "Seta Rukmalasari Agustina, S.P., M.M.A., M.Sc.",
 };
 
 // Nama pejabat yang DITUGASKAN di level tertentu (untuk baris yang masih
@@ -1177,9 +1307,8 @@ const getNamaPejabatLevel = (item, level) => {
         item?.[`nama_atasan_l${level}`] ||
         item?.pegawai?.[`atasan_l${level}`]?.nama ||
         item?.pegawai?.[`atasanL${level}`]?.nama ||
-        (level === 1 ? item?.pegawai?.nama_l1 : null) ||
-        (level === 2 ? item?.pegawai?.nama_l2 : null) ||
-        NAMA_PEJABAT_TETAP[level] ||
+        item?.pegawai?.[`nama_l${level}`] ||
+        LEVEL_JABATAN_MAP[level] ||
         "-"
     );
 };
@@ -1206,10 +1335,7 @@ const getLevelAwalUntukItem = (item) => {
     return null;
 };
 
-// Daftar level yang harus dirender di blok "Catatan / Respon Atasan",
-// mengikuti rantai baku: L1/L2 (salah satu saja, tergantung level awal)
-// -> L3 -> L4. Kalau level awalnya sudah L3 atau L4, level sebelumnya
-// tidak pernah dilalui sehingga tidak ikut ditampilkan.
+// Level untuk blok Catatan / Respon Atasan
 const getLevelsToShowUntukItem = (item) => {
     const levelAwal = getLevelAwalUntukItem(item);
     if (levelAwal === null) return [3, 4]; // fallback aman
@@ -1221,17 +1347,7 @@ const getLevelsToShowUntukItem = (item) => {
 const getCatatanAtasanList = (item) => {
     if (!item) return [];
 
-    // ----------------------------------------------------------------
-    // PEMBARUAN: status "ditolak" TIDAK LAGI di-skip di sini. Sebelumnya
-    // fungsi ini langsung return [] untuk status ditolak, sehingga modal
-    // hanya menampilkan satu baris catatan ringkas (fallback getCatatanAtasan)
-    // dan kehilangan konteks "sampai level mana pengajuan ini diproses".
-    // Sekarang status ditolak tetap dihitung melalui alur yang sama
-    // dengan status lain (approvals / approval_logs), supaya modal
-    // menampilkan daftar level lengkap — persis seperti pada kasus
-    // ditangguhkan / dibatalkan_ditangguhkan — sesuai referensi tampilan
-    // yang diminta. Tidak ada logika lain di bawah ini yang diubah.
-    // ----------------------------------------------------------------
+    // Sertakan juga status ditolak agar catatan penolak tetap tampil
     const levelsToShow = getLevelsToShowUntukItem(item);
 
     // 1) Jika backend sudah mengirim struktur approvals siap pakai.
@@ -1294,13 +1410,7 @@ const getCatatanAtasanList = (item) => {
                 catatan: log.catatan || null,
             });
         } else {
-            // Belum ada log untuk level ini — baik karena pengajuan baru
-            // diajukan (masih di L1/L2) maupun levelnya sedang berjalan
-            // tapi belum diputuskan, ATAU karena pengajuan sudah berhenti
-            // di level sebelumnya (misal ditolak di L3, sehingga L4 belum
-            // pernah diproses): tetap tampilkan barisnya dengan status
-            // "Menunggu Persetujuan" beserta nama pejabatnya, supaya user
-            // bisa melihat pejabat yang seharusnya memproses di level itu.
+            // Belum ada log di level ini
             hasil.push({
                 key: level,
                 level,
@@ -1313,10 +1423,7 @@ const getCatatanAtasanList = (item) => {
         }
     }
 
-    // Daftar level di levelsToShow (bisa [1,3,4], [2,3,4], [3,4], atau [4])
-    // selalu dikembalikan untuk semua status (termasuk ditolak,
-    // ditangguhkan, dibatalkan_ditangguhkan, dibatalkan_reguler,
-    // disetujui, dan status menunggu).
+    // Kembalikan semua level di levelsToShow (termasuk ditolak)
     return hasil;
 };
 </script>
@@ -1338,7 +1445,7 @@ const getCatatanAtasanList = (item) => {
                     class="absolute inset-0 bg-gradient-to-r from-emerald-950/90 via-emerald-900/55 to-transparent"
                 ></div>
                 <div
-                    class="relative max-w-2xl px-5 py-10 pr-32 md:px-8 md:py-14 md:pr-8"
+                    class="relative max-w-2xl px-5 pt-8 pb-4 md:px-8 md:py-14"
                 >
                     <p
                         class="text-[10px] font-extrabold uppercase tracking-[0.2em] text-emerald-200"
@@ -1369,7 +1476,7 @@ const getCatatanAtasanList = (item) => {
                 </div>
                 <div
                     v-if="[1, 2, 3, 4, 6].includes(user.role_id)"
-                    class="absolute right-5 top-1/2 -translate-y-1/2 md:right-16"
+                    class="relative px-5 pb-8 md:absolute md:right-16 md:top-1/2 md:-translate-y-1/2 md:p-0"
                 >
                     <!-- TOMBOL "AJUKAN CUTI" — desain TIMBUL (3D) modern:
                          - bentuk pill (rounded-full) dengan gradasi putih -> hijau muda
@@ -1380,7 +1487,7 @@ const getCatatanAtasanList = (item) => {
                          Hanya tampilan yang berubah, link & aksi tetap sama. -->
                     <Link
                         :href="route('karyawan.ajukan')"
-                        class="group relative inline-flex items-center gap-3 overflow-hidden rounded-full border-2 border-white bg-gradient-to-b from-white via-emerald-50 to-emerald-200 py-3 pl-3 pr-7 text-[13px] font-black uppercase tracking-wider text-emerald-950 shadow-[inset_0_2px_2px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(16,185,129,0.35),0_0_0_4px_rgba(255,255,255,0.22),0_7px_0_#10b981,0_16px_28px_rgba(2,44,34,0.55),0_0_36px_rgba(110,231,183,0.55)] transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[inset_0_2px_2px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(16,185,129,0.35),0_0_0_5px_rgba(255,255,255,0.3),0_9px_0_#10b981,0_20px_34px_rgba(2,44,34,0.55),0_0_48px_rgba(110,231,183,0.8)] active:translate-y-[5px] active:shadow-[inset_0_2px_3px_rgba(6,78,59,0.25),0_0_0_4px_rgba(255,255,255,0.22),0_2px_0_#10b981,0_6px_12px_rgba(2,44,34,0.4),0_0_28px_rgba(110,231,183,0.5)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+                        class="group relative inline-flex items-center gap-3 overflow-hidden rounded-full border-2 border-white bg-gradient-to-b from-white via-emerald-50 to-emerald-200 py-2.5 pl-2.5 pr-5 text-xs md:py-3 md:pl-3 md:pr-7 md:text-[13px] font-black uppercase tracking-wider text-emerald-950 shadow-[inset_0_2px_2px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(16,185,129,0.35),0_0_0_4px_rgba(255,255,255,0.22),0_7px_0_#10b981,0_16px_28px_rgba(2,44,34,0.55),0_0_36px_rgba(110,231,183,0.55)] transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[inset_0_2px_2px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(16,185,129,0.35),0_0_0_5px_rgba(255,255,255,0.3),0_9px_0_#10b981,0_20px_34px_rgba(2,44,34,0.55),0_0_48px_rgba(110,231,183,0.8)] active:translate-y-[5px] active:shadow-[inset_0_2px_3px_rgba(6,78,59,0.25),0_0_0_4px_rgba(255,255,255,0.22),0_2px_0_#10b981,0_6px_12px_rgba(2,44,34,0.4),0_0_28px_rgba(110,231,183,0.5)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
                     >
                         <!-- kilau glossy di sisi atas tombol -->
                         <span
@@ -1414,7 +1521,7 @@ const getCatatanAtasanList = (item) => {
 
             <div
                 v-if="[2, 3, 4, 6].includes(user.role_id)"
-                class="flex items-center justify-between bg-white border border-slate-100 rounded-2xl px-4 py-3 shadow-sm"
+                class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-white border border-slate-100 rounded-2xl px-4 py-3 shadow-sm"
             >
                 <div>
                     <h2 class="text-sm font-extrabold text-slate-800">
@@ -1429,7 +1536,8 @@ const getCatatanAtasanList = (item) => {
                     </p>
                 </div>
                 <div
-                    class="bg-slate-50 p-1 rounded-xl inline-flex border border-slate-100"
+                    class="bg-slate-50 p-1 rounded-xl flex w-full sm:w-auto sm:inline-flex border border-slate-100"
+                    
                 >
                     <!-- Urutan tombol dibalik: Tim / Bawahan di kiri, Pribadi di kanan -->
                     <button
@@ -1439,7 +1547,7 @@ const getCatatanAtasanList = (item) => {
                                 ? 'bg-white shadow-sm text-blue-700'
                                 : 'text-slate-500 hover:text-slate-700'
                         "
-                        class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                        class="flex-1 sm:flex-none justify-center whitespace-nowrap px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
                         <img
                             src="/images/icon-tim.png"
@@ -1456,7 +1564,7 @@ const getCatatanAtasanList = (item) => {
                                 ? 'bg-white shadow-sm text-brand-700'
                                 : 'text-slate-500 hover:text-slate-700'
                         "
-                        class="px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                        class="flex-1 sm:flex-none justify-center whitespace-nowrap px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
                         <img
                             src="/images/icon-pribadi.png"
@@ -1478,7 +1586,7 @@ const getCatatanAtasanList = (item) => {
             >
                 <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
                     <div
-                        class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col h-[180px] hover:shadow-md transition-all"
+                        class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col min-h-[180px] hover:shadow-md transition-all"
                     >
                         <h3
                             class="text-[11px] font-bold text-slate-800 tracking-wider uppercase"
@@ -1518,7 +1626,7 @@ const getCatatanAtasanList = (item) => {
                     </div>
 
                     <div
-                        class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col h-[180px] hover:shadow-md transition-all"
+                        class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 flex flex-col min-h-[180px] hover:shadow-md transition-all"
                     >
                         <h3
                             class="text-[11px] font-bold text-slate-800 tracking-wider uppercase"
@@ -1544,6 +1652,13 @@ const getCatatanAtasanList = (item) => {
                                 >
                                     Khusus cuti tahunan
                                 </p>
+                                <p
+                                    v-if="stats.ada_koreksi"
+                                    class="mt-1.5 inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-700"
+                                    title="Angka ini telah disesuaikan oleh Admin SDM"
+                                >
+                                    ✎ Disesuaikan Admin SDM
+                                </p>
                             </div>
                             <div class="shrink-0">
                                 <img
@@ -1552,6 +1667,15 @@ const getCatatanAtasanList = (item) => {
                                     class="w-16 h-16 object-contain"
                                 />
                             </div>
+                        </div>
+                        <div
+                            v-if="stats.ada_koreksi"
+                            class="mt-2 pt-2 border-t border-slate-100"
+                        >
+                            <p class="text-[10px] text-slate-400 font-medium">
+                                Menurut riwayat sistem: {{ stats.cuti_terpakai_sistem }} hari.
+                                Ada penyesuaian {{ stats.selisih_koreksi > 0 ? "+" : "" }}{{ stats.selisih_koreksi }} hari dari Admin SDM.
+                            </p>
                         </div>
                     </div>
 
@@ -1563,7 +1687,7 @@ const getCatatanAtasanList = (item) => {
                         aria-label="Buka rincian saldo cuti bawaan"
                         @keydown.enter="openSaldoCutiModal"
                         @keydown.space.prevent="openSaldoCutiModal"
-                        class="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden h-[180px] cursor-pointer hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-orange-300"
+                        class="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden min-h-[180px] cursor-pointer hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-orange-300"
                     >
                         <div class="p-4 pb-2 flex-1 flex flex-col">
                             <div class="flex justify-between items-center mb-3">
@@ -1832,7 +1956,60 @@ const getCatatanAtasanList = (item) => {
                     </Link>
                 </div>
 
-                <div class="overflow-x-auto">
+                <!-- DAFTAR KARTU (khusus HP) -->
+                <div class="md:hidden divide-y divide-slate-100">
+                    <div
+                        v-for="item in sortedDisplayedRecentCuti"
+                        :key="'m-' + item.id"
+                        class="p-4 space-y-2 cursor-pointer active:bg-slate-50"
+                        @click="openDetailModal(item)"
+                    >
+                        <div class="flex items-start justify-between gap-2">
+                            <p
+                                v-if="user.role_id !== 1"
+                                class="text-sm font-bold text-slate-800 min-w-0"
+                            >
+                                {{ item.pegawai?.nama ?? "-" }}
+                            </p>
+                            <span
+                                class="ml-auto shrink-0 px-2 py-0.5 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg text-[10px] font-bold"
+                            >
+                                {{ item.jenis_cuti ?? "Cuti Tahunan" }}
+                            </span>
+                        </div>
+                        <p class="text-xs text-slate-600 font-semibold">
+                            {{ formatDate(item.tanggal_mulai) }} -
+                            {{ formatDate(item.tanggal_selesai) }}
+                            &middot; {{ item.jumlah_hari }} Hari
+                        </p>
+                        <div class="flex items-center justify-between gap-2" @click.stop>
+                            <span
+                                class="px-2.5 py-1 inline-flex text-[10px] font-extrabold rounded-lg uppercase tracking-wider"
+                                :class="formatStatus(item.status).class"
+                            >
+                                {{ formatStatus(item.status).text }}
+                            </span>
+                            <button
+                                type="button"
+                                @click.prevent="openDetailModal(item)"
+                                class="shrink-0 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-[10px] font-extrabold uppercase tracking-widest transition shadow-sm"
+                            >
+                                DETAIL
+                            </button>
+                        </div>
+                    </div>
+                    <div
+                        v-if="
+                            !sortedDisplayedRecentCuti ||
+                            sortedDisplayedRecentCuti.length === 0
+                        "
+                        class="px-5 py-10 text-center text-slate-400 text-sm font-semibold"
+                    >
+                        Belum ada aktivitas pengajuan cuti.
+                    </div>
+                </div>
+
+                <div class="hidden md:block overflow-x-auto">
                     <table class="min-w-full">
                         <thead>
                             <tr class="border-b border-slate-50 bg-slate-50/50">
@@ -1876,7 +2053,7 @@ const getCatatanAtasanList = (item) => {
                         </thead>
                         <tbody class="divide-y divide-slate-50">
                             <tr
-                                v-for="item in displayedRecentCuti"
+                                v-for="item in sortedDisplayedRecentCuti"
                                 :key="item.id"
                                 class="hover:bg-slate-50/60 transition-colors cursor-pointer"
                                 @click="openDetailModal(item)"
@@ -1941,8 +2118,8 @@ const getCatatanAtasanList = (item) => {
                             </tr>
                             <tr
                                 v-if="
-                                    !displayedRecentCuti ||
-                                    displayedRecentCuti.length === 0
+                                    !sortedDisplayedRecentCuti ||
+                                    sortedDisplayedRecentCuti.length === 0
                                 "
                             >
                                 <td
@@ -1963,7 +2140,7 @@ const getCatatanAtasanList = (item) => {
                 <div
                     class="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm lg:col-span-2"
                 >
-                    <div class="flex justify-between items-start mb-5">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start mb-5">
                         <div>
                             <h3 class="text-sm font-extrabold text-slate-800">
                                 {{
@@ -1978,14 +2155,17 @@ const getCatatanAtasanList = (item) => {
                                 Jumlah hari cuti per bulan, per jenis.
                             </p>
                         </div>
-                        <div class="flex items-center gap-2">
+                        <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                             <select
-                                v-if="[4, 5, 6].includes(user.role_id)"
+                                v-if="[4, 5, 6].includes(user.role_id) && (isAdminHR || activeTab === 'tim')"
+                                id="filter-kelompok-dashboard"
+                                name="kelompok_substansi"
+                                aria-label="Filter kelompok substansi"
                                 v-model="selectedKelompokSubstansi"
                                 @change="applyKelompokSubstansiFilter"
-                                class="text-[11px] font-bold border border-slate-200 rounded-lg text-slate-600 focus:ring-brand-500 focus:border-brand-500 py-1.5 pl-3 pr-8 bg-white cursor-pointer"
+                                class="text-[11px] font-bold border border-slate-200 rounded-lg text-slate-600 focus:ring-brand-500 focus:border-brand-500 py-1.5 pl-3 pr-8 bg-white cursor-pointer w-full sm:w-auto"
                             >
-                                <option :value="null">Semua Divisi</option>
+                                <option :value="null">Semua Kelompok Substansi</option>
                                 <option
                                     v-for="kelompok in listKelompokSubstansi"
                                     :key="kelompok"
@@ -1995,15 +2175,21 @@ const getCatatanAtasanList = (item) => {
                                 </option>
                             </select>
                             <select
-                                class="text-[11px] font-bold border border-slate-200 rounded-lg text-slate-600 focus:ring-brand-500 focus:border-brand-500 py-1.5 pl-3 pr-8 bg-white cursor-pointer"
-                            >
-                                <option :value="currentYear">
-                                    Tahun {{ currentYear }}
-                                </option>
-                                <option :value="currentYear - 1">
-                                    Tahun {{ currentYear - 1 }}
-                                </option>
-                            </select>
+    id="filter-tahun-dashboard"
+    name="tahun"
+    aria-label="Filter tahun"
+    v-model="selectedTahun"
+    @change="applyKelompokSubstansiFilter"
+    class="text-[11px] font-bold border border-slate-200 rounded-lg text-slate-600 focus:ring-brand-500 focus:border-brand-500 py-1.5 pl-3 pr-8 bg-white cursor-pointer w-full sm:w-auto"
+>
+    <option
+        v-for="tahun in daftarTahunFilter"
+        :key="tahun"
+        :value="tahun.toString()"
+    >
+        Tahun {{ tahun }}
+    </option>
+</select>
                         </div>
                     </div>
 
@@ -2147,7 +2333,14 @@ const getCatatanAtasanList = (item) => {
                                 </div>
                             </div>
 
-                            <!-- Label Bulan (jarak mt-2, sejajar per kolom dengan bar) -->
+                            <p
+                                v-if="distribusiCuti.total === 0"
+                                class="text-center text-[11px] font-medium text-slate-400 mt-2"
+                            >
+                                Belum ada cuti yang disetujui pada tahun {{ selectedTahun }}.
+                            </p>
+
+                            <!-- Label bulan -->
                             <div
                                 class="flex items-start justify-between gap-1 sm:gap-1.5 mt-2"
                             >
@@ -2213,12 +2406,112 @@ const getCatatanAtasanList = (item) => {
                             >
                                 Distribusi
                             </p>
+
+                            <!-- ================================================
+                                 DONUT CHART "DISTRIBUSI JENIS CUTI" — INTERAKTIF
+                                 conic-gradient (donutGradient) TETAP DIPERTAHANKAN
+                                 sebagai lapisan visual dasar (tidak dihapus). Di
+                                 atasnya ditambahkan lapisan <svg> transparan berisi
+                                 4 <circle> (satu per jenis cuti) yang bisa di-hover
+                                 ATAU di-tap (untuk HP/tablet tanpa event hover).
+
+                                 - Tengah donut: SELALU menampilkan PERSENTASE
+                                   TERTINGGI (distribusiCuti.percentDominant /
+                                   labelDominant), TIDAK berubah sama sekali saat
+                                   hover/tap — sesuai permintaan Boss.
+                                 - Saat salah satu segmen di-hover/tap: hanya
+                                   sebuah pop-up kecil muncul di atas donut berisi
+                                   ANGKA JUMLAH HARI saja (tanpa label/persen),
+                                   supaya ringkas — mis. cukup "1".
+
+                                 [FIX HOVER] Struktur SVG dipecah jadi 2 lapis
+                                 <circle> per segmen:
+                                   1) Lapisan VISUAL — warna busur asli, fill="none"
+                                      (bukan "transparent"), pointer-events="none"
+                                      supaya TIDAK ikut menangkap event mouse sama
+                                      sekali. Tampilan tetap identik seperti semula.
+                                   2) Lapisan HIT-AREA — tidak terlihat
+                                      (stroke-opacity="0"), stroke lebih tebal
+                                      (10 vs 4) supaya area hover/klik lebih lega,
+                                      dan pointer-events="stroke" eksplisit supaya
+                                      HANYA busur miliknya sendiri yang responsif
+                                      (bukan seluruh piringan lingkaran).
+                                 Sebelumnya "fill=transparent" pada satu lapisan
+                                 circle bisa membuat seluruh piringan (bukan cuma
+                                 busurnya) ikut menangkap event di sebagian
+                                 browser, sehingga segmen paling atas (besar)
+                                 kadang "mencuri" hover dari segmen lain — itulah
+                                 penyebab pop-up terasa pindah-pindah.
+                                 ================================================ -->
                             <div
-                                class="relative w-28 h-28 rounded-full flex items-center justify-center"
-                                :style="{ background: donutGradient }"
+                                class="relative w-28 h-28 flex items-center justify-center"
                             >
+                                <!-- Lingkaran dasar (fallback visual + warna identik
+                                     dengan sebelumnya) -->
                                 <div
-                                    class="absolute w-[68px] h-[68px] rounded-full bg-white flex flex-col items-center justify-center shadow-sm ring-1 ring-slate-100"
+                                    class="absolute inset-0 rounded-full"
+                                    :style="{ background: donutGradient }"
+                                ></div>
+
+                                <!-- Lapisan SVG untuk interaksi hover/tap per-segmen.
+                                     Berisi 2 layer circle per segmen: visual (tidak
+                                     menangkap event) dan hit-area (menangkap event,
+                                     tidak terlihat). -->
+                                <svg
+                                    viewBox="0 0 36 36"
+                                    class="absolute inset-0 w-full h-full -rotate-90"
+                                    @mouseleave="clearHoveredDonutSegment"
+                                >
+                                    <!-- Layer 1: VISUAL — warna asli, tidak menangkap event -->
+                                    <circle
+                                        v-for="segment in donutSegments"
+                                        :key="`visual-${segment.key}`"
+                                        cx="18"
+                                        cy="18"
+                                        r="15.915"
+                                        fill="none"
+                                        :stroke="segment.color"
+                                        stroke-width="4"
+                                        :stroke-dasharray="`${segment.percent} ${100 - segment.percent}`"
+                                        :stroke-dashoffset="-segment.start"
+                                        pointer-events="none"
+                                        class="transition-opacity duration-150"
+                                        :class="{
+                                            'opacity-40':
+                                                hoveredDonutSegment &&
+                                                hoveredDonutSegment.key !==
+                                                    segment.key,
+                                        }"
+                                    />
+
+                                    <!-- Layer 2: HIT-AREA — tak terlihat, stroke lebih
+                                         tebal, hanya busur milik segmen ini yang
+                                         responsif terhadap hover/klik. -->
+                                    <circle
+                                        v-for="segment in donutSegments"
+                                        :key="`hit-${segment.key}`"
+                                        cx="18"
+                                        cy="18"
+                                        r="15.915"
+                                        fill="none"
+                                        stroke="#000000"
+                                        stroke-opacity="0"
+                                        stroke-width="10"
+                                        :stroke-dasharray="`${segment.percent} ${100 - segment.percent}`"
+                                        :stroke-dashoffset="-segment.start"
+                                        pointer-events="stroke"
+                                        class="cursor-pointer"
+                                        @mouseenter="
+                                            setHoveredDonutSegment(segment)
+                                        "
+                                        @click="toggleDonutSegment(segment)"
+                                    />
+                                </svg>
+
+                                <!-- Tengah donut: TETAP persentase dominan, tidak
+                                     ikut berubah saat hover/tap. -->
+                                <div
+                                    class="absolute w-[68px] h-[68px] rounded-full bg-white flex flex-col items-center justify-center shadow-sm ring-1 ring-slate-100 pointer-events-none"
                                 >
                                     <span
                                         class="text-lg font-black text-slate-800 leading-none"
@@ -2233,7 +2526,29 @@ const getCatatanAtasanList = (item) => {
                                         }}</span
                                     >
                                 </div>
+
+                                <!-- Pop-up ringkas — posisinya SEKARANG dinamis,
+                                     mengikuti titik tengah busur warna yang
+                                     sedang di-hover/tap (donutTooltipStyle),
+                                     bukan selalu nongol di atas donut. Isinya
+                                     tetap hanya angka jumlah hari, tanpa
+                                     keterangan tambahan. -->
+                                <div
+                                    v-if="hoveredDonutSegment"
+                                    class="absolute -translate-x-1/2 -translate-y-1/2 bg-slate-800 text-white py-1 px-2.5 rounded-lg shadow-xl pointer-events-none flex items-center gap-1.5 text-xs font-black z-50 transition-all duration-150"
+                                    :style="donutTooltipStyle"
+                                >
+                                    <span
+                                        class="w-2 h-2 rounded-full shrink-0"
+                                        :style="{
+                                            backgroundColor:
+                                                hoveredDonutSegment.color,
+                                        }"
+                                    ></span>
+                                    {{ hoveredDonutSegment.hari }}
+                                </div>
                             </div>
+
                             <p
                                 class="text-[11px] font-extrabold text-slate-700 mt-3"
                             >
@@ -2241,7 +2556,34 @@ const getCatatanAtasanList = (item) => {
                             </p>
                             <div class="mt-2 space-y-1 w-full">
                                 <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5"
+                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
+                                    :class="
+                                        hoveredDonutSegment &&
+                                        hoveredDonutSegment.key === 'tahunan'
+                                            ? 'bg-emerald-50'
+                                            : ''
+                                    "
+                                    @mouseenter="
+                                        donutSegments.find(
+                                            (s) => s.key === 'tahunan',
+                                        ) &&
+                                            setHoveredDonutSegment(
+                                                donutSegments.find(
+                                                    (s) => s.key === 'tahunan',
+                                                ),
+                                            )
+                                    "
+                                    @mouseleave="clearHoveredDonutSegment"
+                                    @click="
+                                        donutSegments.find(
+                                            (s) => s.key === 'tahunan',
+                                        ) &&
+                                            toggleDonutSegment(
+                                                donutSegments.find(
+                                                    (s) => s.key === 'tahunan',
+                                                ),
+                                            )
+                                    "
                                 >
                                     <span
                                         class="flex items-center gap-1.5 font-semibold text-slate-500"
@@ -2258,7 +2600,37 @@ const getCatatanAtasanList = (item) => {
                                     >
                                 </div>
                                 <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5"
+                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
+                                    :class="
+                                        hoveredDonutSegment &&
+                                        hoveredDonutSegment.key ===
+                                            'melahirkan'
+                                            ? 'bg-pink-50'
+                                            : ''
+                                    "
+                                    @mouseenter="
+                                        donutSegments.find(
+                                            (s) => s.key === 'melahirkan',
+                                        ) &&
+                                            setHoveredDonutSegment(
+                                                donutSegments.find(
+                                                    (s) =>
+                                                        s.key === 'melahirkan',
+                                                ),
+                                            )
+                                    "
+                                    @mouseleave="clearHoveredDonutSegment"
+                                    @click="
+                                        donutSegments.find(
+                                            (s) => s.key === 'melahirkan',
+                                        ) &&
+                                            toggleDonutSegment(
+                                                donutSegments.find(
+                                                    (s) =>
+                                                        s.key === 'melahirkan',
+                                                ),
+                                            )
+                                    "
                                 >
                                     <span
                                         class="flex items-center gap-1.5 font-semibold text-slate-500"
@@ -2275,7 +2647,34 @@ const getCatatanAtasanList = (item) => {
                                     >
                                 </div>
                                 <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5"
+                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
+                                    :class="
+                                        hoveredDonutSegment &&
+                                        hoveredDonutSegment.key === 'penting'
+                                            ? 'bg-orange-50'
+                                            : ''
+                                    "
+                                    @mouseenter="
+                                        donutSegments.find(
+                                            (s) => s.key === 'penting',
+                                        ) &&
+                                            setHoveredDonutSegment(
+                                                donutSegments.find(
+                                                    (s) => s.key === 'penting',
+                                                ),
+                                            )
+                                    "
+                                    @mouseleave="clearHoveredDonutSegment"
+                                    @click="
+                                        donutSegments.find(
+                                            (s) => s.key === 'penting',
+                                        ) &&
+                                            toggleDonutSegment(
+                                                donutSegments.find(
+                                                    (s) => s.key === 'penting',
+                                                ),
+                                            )
+                                    "
                                 >
                                     <span
                                         class="flex items-center gap-1.5 font-semibold text-slate-500"
@@ -2292,7 +2691,34 @@ const getCatatanAtasanList = (item) => {
                                     >
                                 </div>
                                 <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5"
+                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
+                                    :class="
+                                        hoveredDonutSegment &&
+                                        hoveredDonutSegment.key === 'besar'
+                                            ? 'bg-blue-50'
+                                            : ''
+                                    "
+                                    @mouseenter="
+                                        donutSegments.find(
+                                            (s) => s.key === 'besar',
+                                        ) &&
+                                            setHoveredDonutSegment(
+                                                donutSegments.find(
+                                                    (s) => s.key === 'besar',
+                                                ),
+                                            )
+                                    "
+                                    @mouseleave="clearHoveredDonutSegment"
+                                    @click="
+                                        donutSegments.find(
+                                            (s) => s.key === 'besar',
+                                        ) &&
+                                            toggleDonutSegment(
+                                                donutSegments.find(
+                                                    (s) => s.key === 'besar',
+                                                ),
+                                            )
+                                    "
                                 >
                                     <span
                                         class="flex items-center gap-1.5 font-semibold text-slate-500"
@@ -2524,11 +2950,11 @@ const getCatatanAtasanList = (item) => {
     <Teleport to="body">
         <div
             v-if="detailModal.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeDetailModal"
         >
             <div
-                class="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden transform animate-in zoom-in duration-200"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-h-[90dvh] max-w-lg w-full shadow-2xl border border-slate-100 overflow-y-auto transform animate-in zoom-in duration-200"
             >
                 <div
                     class="p-5 max-h-[70vh] overflow-y-auto custom-scrollbar"
@@ -2590,6 +3016,8 @@ const getCatatanAtasanList = (item) => {
                                         'ditangguhkan' ||
                                     detailModal.data.status ===
                                         'dibatalkan_ditangguhkan',
+                                'bg-zinc-200 text-zinc-700':
+                                    detailModal.data.status === 'kedaluwarsa',
                                 'bg-slate-100 text-slate-600':
                                     detailModal.data.status?.includes(
                                         'dibatalkan',
@@ -2675,6 +3103,26 @@ const getCatatanAtasanList = (item) => {
                                     detailModal.data.jenis_cuti ??
                                     "Cuti Tahunan"
                                 }}
+                            </div>
+                        </div>
+
+                        <!-- BARU: Anak ke-berapa, hanya tampil untuk Cuti Melahirkan.
+                             Sejajar dengan baris lain (label col-span-4, nilai col-span-8).
+                             RINCIAN SISA CUTI di bawahnya tetap dipertahankan. -->
+                        <div
+                            v-if="
+                                detailModal.data.jenis_cuti
+                                    ?.toLowerCase()
+                                    .includes('melahirkan') &&
+                                detailModal.data.anak_ke
+                            "
+                            class="grid grid-cols-12 gap-2"
+                        >
+                            <div class="col-span-4 text-slate-500 font-medium">
+                                Anak ke berapa
+                            </div>
+                            <div class="col-span-8 text-slate-800 font-semibold">
+                                {{ detailModal.data.anak_ke }}
                             </div>
                         </div>
 
@@ -2984,7 +3432,7 @@ const getCatatanAtasanList = (item) => {
                                         }}</span>
                                     </p>
                                     <p
-                                        class="mt-0.5 text-xs font-medium"
+                                        class="mt-0.5 break-words text-xs font-medium"
                                         :class="entry.statusColorClass"
                                     >
                                         {{ entry.catatan || entry.statusText }}
@@ -3002,7 +3450,7 @@ const getCatatanAtasanList = (item) => {
                                 }}</span>
                             </p>
                             <p
-                                class="text-sm font-medium italic text-orange-700"
+                                class="break-words text-sm font-medium italic text-orange-700"
                             >
                                 "{{ getCatatanAtasan(detailModal.data) }}"
                             </p>
@@ -3037,7 +3485,7 @@ const getCatatanAtasanList = (item) => {
                                         }}</span>
                                     </p>
                                     <p
-                                        class="mt-0.5 text-xs font-medium"
+                                        class="mt-0.5 break-words text-xs font-medium"
                                         :class="entry.statusColorClass"
                                     >
                                         {{ entry.catatan || entry.statusText }}
@@ -3071,7 +3519,7 @@ const getCatatanAtasanList = (item) => {
                                     }}</span>
                                 </p>
                                 <p
-                                    class="mt-0.5 text-xs font-medium"
+                                    class="mt-0.5 break-words text-xs font-medium"
                                     :class="entry.statusColorClass"
                                 >
                                     {{ entry.catatan || entry.statusText }}
@@ -3126,7 +3574,7 @@ const getCatatanAtasanList = (item) => {
                                 }}</span>
                             </p>
                             <p
-                                class="text-sm font-medium italic"
+                                class="break-words text-sm font-medium italic"
                                 :class="
                                     detailModal.data.status === 'disetujui'
                                         ? 'text-emerald-600'
@@ -3147,29 +3595,35 @@ const getCatatanAtasanList = (item) => {
                         >
                             Form Pengajuan Ulang Tanggal Cuti
                         </h4>
-                        <div class="grid grid-cols-2 gap-3">
+                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
                             <div>
                                 <label
+                                    for="tanggal-mulai-revisi"
                                     class="block text-[10px] font-bold text-slate-600 mb-1"
                                     >Tanggal Mulai Baru *</label
                                 >
                                 <input
+                                    id="tanggal-mulai-revisi"
+                                    name="tanggal_mulai"
                                     type="date"
                                     v-model="formRevisi.tanggal_mulai"
                                     :min="minDate"
-                                    class="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-amber-500 focus:border-amber-500"
+                                    class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
                                 />
                             </div>
                             <div>
                                 <label
+                                    for="tanggal-selesai-revisi"
                                     class="block text-[10px] font-bold text-slate-600 mb-1"
                                     >Tanggal Selesai Baru *</label
                                 >
                                 <input
+                                    id="tanggal-selesai-revisi"
+                                    name="tanggal_selesai"
                                     type="date"
                                     v-model="formRevisi.tanggal_selesai"
                                     :min="formRevisi.tanggal_mulai || minDate"
-                                    class="w-full px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs focus:ring-amber-500 focus:border-amber-500"
+                                    class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
                                 />
                             </div>
                         </div>
@@ -3225,6 +3679,39 @@ const getCatatanAtasanList = (item) => {
                                 ></span
                             >
                         </div>
+                        <div
+                            v-if="tahunTanpaSaldoRevisi !== null"
+                            class="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5"
+                        >
+                            <svg
+                                class="w-4 h-4 text-red-500 mt-0.5 shrink-0"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                                ></path>
+                            </svg>
+                            <p class="text-xs text-red-700 leading-relaxed">
+                                <span class="font-semibold"
+                                    >Saldo cuti tahun
+                                    {{ tahunTanpaSaldoRevisi }} belum
+                                    tersedia.</span
+                                >
+                                Cuti Tahunan untuk tahun tersebut baru bisa
+                                diajukan setelah Admin SDM membuat saldonya.
+                            </p>
+                        </div>
+                        <p
+                            v-if="revisiError"
+                            class="text-[11px] font-bold text-red-500"
+                        >
+                            {{ revisiError }}
+                        </p>
                         <p
                             v-if="isInvalidWeekendOnly"
                             class="text-[11px] font-bold text-red-500"
@@ -3258,7 +3745,7 @@ const getCatatanAtasanList = (item) => {
                         </button>
                     </div>
 
-                    <div class="flex items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
                         <button
                             type="button"
                             @click="closeDetailModal"
@@ -3272,7 +3759,9 @@ const getCatatanAtasanList = (item) => {
                             type="button"
                             @click="submitRevisi"
                             :disabled="
-                                isInvalidWeekendOnly || jumlahHariKerja === 0
+                                isInvalidWeekendOnly ||
+                                jumlahHariKerja === 0 ||
+                                tahunTanpaSaldoRevisi !== null
                             "
                             class="px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-bold transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                         >
@@ -3318,11 +3807,11 @@ const getCatatanAtasanList = (item) => {
     <Teleport to="body">
         <div
             v-if="showTeamModal"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="showTeamModal = false"
         >
             <div
-                class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90dvh]"
             >
                 <div
                     class="p-4 border-b border-slate-100 flex items-start gap-3 shrink-0 bg-slate-50/60"
@@ -3479,11 +3968,11 @@ const getCatatanAtasanList = (item) => {
     <Teleport to="body">
         <div
             v-if="approvedModal.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="approvedModal.show = false"
         >
             <div
-                class="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90dvh]"
             >
                 <div
                     class="p-4 border-b border-slate-100 bg-emerald-50/50 flex items-center justify-between shrink-0"
@@ -3594,11 +4083,11 @@ const getCatatanAtasanList = (item) => {
     <Teleport to="body">
         <div
             v-if="suspendData.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeSuspendModal"
         >
             <div
-                class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-h-[90dvh] max-w-md w-full shadow-2xl border border-slate-100 overflow-y-auto"
             >
                 <div
                     class="p-4 border-b border-slate-100 bg-orange-50/50 flex items-center gap-3"
@@ -3629,14 +4118,17 @@ const getCatatanAtasanList = (item) => {
                 </div>
                 <div class="p-5">
                     <label
+                        for="alasan-penangguhan-dashboard"
                         class="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide"
                         >Alasan Penangguhan
                         <span class="text-red-500">*</span></label
                     >
                     <textarea
+                        id="alasan-penangguhan-dashboard"
+                        name="alasan"
                         v-model="suspendData.alasan"
                         rows="4"
-                        class="w-full text-sm font-medium border-slate-200 rounded-xl focus:ring-orange-500 focus:border-orange-500"
+                        class="w-full min-h-[88px] text-base sm:text-sm font-medium border-slate-200 rounded-xl focus:ring-orange-500 focus:border-orange-500"
                         placeholder="Contoh: Rapat mendadak dengan Kementan pada hari H."
                     ></textarea>
                 </div>
@@ -3665,11 +4157,11 @@ const getCatatanAtasanList = (item) => {
     <Teleport to="body">
         <div
             v-if="showSaldoCutiModal"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="showSaldoCutiModal = false"
         >
             <div
-                class="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90dvh]"
             >
                 <div
                     class="p-4 border-b border-slate-100 flex items-start gap-3 shrink-0 bg-slate-50/60"
@@ -3881,11 +4373,11 @@ const getCatatanAtasanList = (item) => {
     <Teleport to="body">
         <div
             v-if="showOnLeaveModal"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="showOnLeaveModal = false"
         >
             <div
-                class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90dvh]"
             >
                 <div
                     class="p-4 border-b border-slate-100 flex items-start gap-3 shrink-0 bg-slate-50/60"
@@ -3993,22 +4485,15 @@ const getCatatanAtasanList = (item) => {
         </div>
     </Teleport>
 
-    <!-- ================================================================
-         MODAL KUSTOM "SETUJUI PENGAJUAN CUTI" — menggantikan window.confirm()
-         bawaan browser. Muncul saat tombol "Setuju" pada Detail Modal
-         diklik. Menampilkan ringkasan KARYAWAN / JENIS CUTI / TANGGAL,
-         serta catatan bahwa saldo akan dipotong otomatis (khusus jenis
-         Cuti Tahunan). Tombol "Ya, Setujui" memanggil confirmApproveCuti()
-         yang mengirim request approve seperti semula.
-    ================================================================ -->
+    <!-- Modal Setujui Pengajuan Cuti -->
     <Teleport to="body">
         <div
             v-if="approveModal.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeApproveModal"
         >
             <div
-                class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-h-[90dvh] max-w-md w-full shadow-2xl border border-slate-100 overflow-y-auto"
             >
                 <div
                     class="p-5 border-b border-slate-100 flex items-start justify-between gap-3 bg-emerald-50/60"
@@ -4134,39 +4619,33 @@ const getCatatanAtasanList = (item) => {
                     <button
                         type="button"
                         @click="closeApproveModal"
-                        class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold transition cursor-pointer"
+                        :disabled="approveModal.processing"
+                        class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Batal
                     </button>
                     <button
                         type="button"
                         @click="confirmApproveCuti"
-                        class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-md shadow-emerald-600/30 cursor-pointer"
+                        :disabled="approveModal.processing"
+                        class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-md shadow-emerald-600/30 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                        Ya, Setujui
+                        {{ approveModal.processing ? "Memproses..." : "Ya, Setujui" }}
                     </button>
                 </div>
             </div>
         </div>
     </Teleport>
 
-    <!-- ================================================================
-         MODAL KUSTOM "ALASAN PENOLAKAN CUTI" — menggantikan window.prompt()
-         bawaan browser. Menampilkan ringkasan pengajuan yang sama seperti
-         modal Setujui, ditambah textarea alasan penolakan.
-         Alasan PENOLAKAN WAJIB DIISI: jika kosong, tampilkan validasi
-         inline (border merah + pesan "Alasan penolakan wajib diisi.")
-         tanpa mengirim request. Tombol "Kirim Penolakan" memanggil
-         confirmRejectCuti().
-    ================================================================ -->
+    <!-- Modal Alasan Penolakan Cuti -->
     <Teleport to="body">
         <div
             v-if="rejectModal.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeRejectModal"
         >
             <div
-                class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-h-[90dvh] max-w-md w-full shadow-2xl border border-slate-100 overflow-y-auto"
             >
                 <div
                     class="p-5 border-b border-slate-100 flex items-start justify-between gap-3 bg-red-50/60"
@@ -4275,6 +4754,7 @@ const getCatatanAtasanList = (item) => {
 
                     <div>
                         <label
+                            for="alasan-penolakan-dashboard"
                             class="block text-[11px] font-extrabold uppercase tracking-wider mb-1.5"
                             :class="
                                 rejectError
@@ -4286,10 +4766,12 @@ const getCatatanAtasanList = (item) => {
                             <span class="text-red-500">*</span>
                         </label>
                         <textarea
+                            id="alasan-penolakan-dashboard"
+                            name="alasan"
                             v-model="rejectModal.alasan"
                             rows="4"
                             :class="[
-                                'w-full text-sm font-medium rounded-xl focus:outline-none transition',
+                                'w-full min-h-[88px] text-base sm:text-sm font-medium rounded-xl focus:outline-none transition',
                                 rejectError
                                     ? 'border-2 border-red-500 focus:ring-red-500 focus:border-red-500 bg-red-50/30'
                                     : 'border border-slate-200 focus:ring-red-500 focus:border-red-500',
@@ -4323,16 +4805,18 @@ const getCatatanAtasanList = (item) => {
                     <button
                         type="button"
                         @click="closeRejectModal"
-                        class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold transition cursor-pointer"
+                        :disabled="rejectModal.processing"
+                        class="px-4 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         Batal
                     </button>
                     <button
                         type="button"
                         @click="confirmRejectCuti"
-                        class="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-md shadow-red-600/30 cursor-pointer"
+                        :disabled="rejectModal.processing"
+                        class="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-md shadow-red-600/30 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                        Kirim Penolakan
+                        {{ rejectModal.processing ? "Mengirim..." : "Kirim Penolakan" }}
                     </button>
                 </div>
             </div>

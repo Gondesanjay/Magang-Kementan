@@ -200,15 +200,16 @@ const resetFilter = () => {
 };
 
 const statusLabels = {
-    menunggu_l1: "Menunggu Bapak Ketua Tim Kerja (L1)",
-    menunggu_l2: "Menunggu Bapak Ketua Kelompok Substansi (L2)",
-    menunggu_l3: "Menunggu Ignatius Agus Hendarto (L3)",
-    menunggu_l4: "Menunggu Seta Rukmalasari Agustina (L4)",
+    menunggu_l1: "Menunggu Ketua Tim Kerja (L1)",
+    menunggu_l2: "Menunggu Ketua Kelompok Substansi (L2)",
+    menunggu_l3: "Menunggu Kasubag TU (L3)",
+    menunggu_l4: "Menunggu Kepala Biro Perencanaan (L4)",
     disetujui: "Disetujui",
     ditolak: "Ditolak",
     ditangguhkan: "Ditangguhkan",
     dibatalkan_reguler: "Dibatalkan (Reguler)",
     dibatalkan_ditangguhkan: "Ditangguhkan",
+    kedaluwarsa: "Kedaluwarsa",
 };
 
 const getStatusLabel = (st) => {
@@ -244,6 +245,7 @@ const statusLabelsSingkat = {
     ditangguhkan: "DITANGGUHKAN",
     dibatalkan_reguler: "DIBATALKAN",
     dibatalkan_ditangguhkan: "DITANGGUHKAN",
+    kedaluwarsa: "KEDALUWARSA",
 };
 
 const getEffectiveStatusLabelSingkatTahap = (item) => {
@@ -404,6 +406,15 @@ const closeDetailModal = () => {
     detailModal.value.data = null;
 };
 
+// Lampiran disimpan di disk 'public' (CutiController::store) sebagai path
+// relatif, mis. "lampiran-cuti/abc.pdf". Agar bisa dibuka di browser, path
+// itu harus diawali "/storage/". URL yang sudah lengkap dibiarkan apa adanya.
+const getLampiranUrl = (path) => {
+    if (!path) return "";
+    if (/^(https?:)?\/\//.test(path) || path.startsWith("/")) return path;
+    return `/storage/${path}`;
+};
+
 const getAlasanBersih = (text) => {
     if (!text || text === "-") return "-";
     if (text.includes("|") || text.includes("[DITANGGUHKAN")) {
@@ -457,13 +468,8 @@ const getNamaPemberiCatatan = (text) => {
 };
 
 // ================= PERBAIKAN: NAMA L1/L2 DINAMIS + RUTE APPROVAL SESUAI TIM KERJA =================
-// levelsDefinition dipertahankan sebagai fallback "peta jabatan" untuk L1-L4.
-// KHUSUS L3 & L4, nama sudah tetap (jabatan struktural tunggal se-Biro).
-// KHUSUS L1 & L2, nama di sini HANYA fallback generik — nama ASLI diambil
-// dinamis lewat getLevelDisplayName() di bawah, dari data `atasan_l1_nama`
-// & `atasan_l2_nama` yang dikirim Controller (MonitoringCutiController::index()),
-// karena L1/L2 berbeda-beda orang tergantung Tim Kerja/Kelompok Substansi
-// pegawai yang mengajukan cuti.
+// levelsDefinition menyediakan fallback jabatan untuk L1-L4. Nama pejabat
+// diutamakan dari field yang dikirim Controller sesuai pengajuan.
 const levelsDefinition = [
     {
         key: 1,
@@ -478,47 +484,41 @@ const levelsDefinition = [
     {
         key: 3,
         jabatan: "L3 - Kasubag TU",
-        nama: "Ignatius Agus Hendarto, S.E., M.M.",
+        nama: "Kasubag TU",
     },
     {
         key: 4,
         jabatan: "L4 - Kepala Biro Perencanaan",
-        nama: "Seta Rukmalasari Agustina, S.P., M.M.A., M.Sc.",
+        nama: "Kepala Biro Perencanaan",
     },
 ];
 
 // Mengambil nama tampilan untuk satu level approval (1-4) pada satu item
-// pengajuan (`data`). Untuk L1 & L2 diutamakan nama ASLI dari backend
-// (`atasan_l1_nama` / `atasan_l2_nama`); kalau backend belum mengirim nilai
-// itu (mis. data lama / belum di-deploy ulang), jatuh ke teks generik di
-// levelsDefinition supaya tidak pernah tampil kosong.
+// pengajuan (`data`). Kalau backend belum mengirim nilai, jatuh ke jabatan.
 const getLevelDisplayName = (levelKey, data) => {
-    if (levelKey === 1) {
-        return (
-            data?.atasan_l1_nama ||
-            levelsDefinition.find((l) => l.key === 1)?.nama
-        );
-    }
-    if (levelKey === 2) {
-        return (
-            data?.atasan_l2_nama ||
-            levelsDefinition.find((l) => l.key === 2)?.nama
-        );
-    }
-    return levelsDefinition.find((l) => l.key === levelKey)?.nama || "-";
+    return (
+        data?.[`atasan_l${levelKey}_nama`] ||
+        levelsDefinition.find((l) => l.key === levelKey)?.nama ||
+        "-"
+    );
 };
 
 // getApprovalRoute(pegawai) menerima objek pegawai (bukan cuma role_id).
-// Untuk staf biasa dicek dulu apakah dia punya Tim Kerja:
-//   - Punya Tim Kerja      -> rute [L1, L3, L4]
-//   - TIDAK punya Tim Kerja -> rute [L2, L3, L4]
-// (staf tanpa Tim Kerja langsung berada di bawah Ketua Kelompok Substansi,
-// tanpa Ketua Tim Kerja di antaranya — status pengajuannya dimulai dari
-// 'menunggu_l2', bukan 'menunggu_l1', sesuai alur di
-// MonitoringCutiController::process()).
+// Disamakan dengan logika Dashboard (Catatan / Respon Atasan) &
+// CutiController::tentukanLevelAwalCuti():
+//   - Role L4 (6)              -> []  (disetujui otomatis, tanpa rute)
+//   - Role L3 (4)              -> [L4]
+//   - Role L2 (3)              -> [L3, L4]
+//   - Role L1 (2)              -> [L2, L3, L4]
+//   - Staf Subbagian Tata Usaha -> [L3, L4]  (tanpa L1 & L2)
+//   - Staf TANPA Tim Kerja      -> [L2, L3, L4]
+//   - Staf DENGAN Tim Kerja     -> [L1, L3, L4]  (lompat L2)
 const getApprovalRoute = (pegawai) => {
     const roleId = pegawai?.role_id ?? 1;
     switch (roleId) {
+        case 6:
+            // Kepala Biro (L4): disetujui otomatis, tanpa rute approval.
+            return [];
         case 4:
             return [levelsDefinition[3]];
         case 3:
@@ -530,11 +530,31 @@ const getApprovalRoute = (pegawai) => {
                 levelsDefinition[3],
             ];
         default: {
+            // Deteksi Subbagian Tata Usaha (unit tanpa L1 & L2).
+            // Cocokkan beberapa bentuk string yang umum dipakai di DB.
+            const kelompok = (
+                pegawai?.kelompok_substansi ??
+                pegawai?.departemen ??
+                ""
+            )
+                .toString()
+                .trim()
+                .toLowerCase();
+            const isSubbagianTataUsaha =
+                kelompok.includes("subbagian tata usaha") ||
+                kelompok.includes("tata usaha") ||
+                kelompok === "tata_usaha";
+
+            if (isSubbagianTataUsaha) {
+                // Staf Subbagian: langsung L3 -> L4 (sama seperti Dashboard).
+                return [levelsDefinition[2], levelsDefinition[3]];
+            }
+
             const timKerja = (pegawai?.tim_kerja ?? "").toString().trim();
             const tanpaTimKerja = timKerja === "" || timKerja === "-";
 
             if (tanpaTimKerja) {
-                // Staf tanpa Tim Kerja: tidak ada L1, langsung L2 -> L3 -> L4.
+                // Staf tanpa Tim Kerja (bukan Subbagian): L2 -> L3 -> L4.
                 return [
                     levelsDefinition[1],
                     levelsDefinition[2],
@@ -644,6 +664,7 @@ const getStatusBadgeLabelSingkat = (item) => {
         ditangguhkan: "DITANGGUHKAN",
         dibatalkan_ditangguhkan: "DITANGGUHKAN",
         dibatalkan_reguler: "DIBATALKAN",
+        kedaluwarsa: "KEDALUWARSA",
     };
 
     return levelMap[st] || st.replace(/_/g, " ").toUpperCase();
@@ -655,6 +676,12 @@ const getStatusBadgeLabelSingkat = (item) => {
 // L1/L2/L3/L4 yang memang berlaku untuk pegawai itu semuanya tampil (tidak
 // lagi selalu dibuang ke hanya L3/L4).
 const filteredApprovalTimeline = computed(() => approvalTimeline.value);
+
+// [BARU] Pemohon Kepala Biro (L4) tidak punya rantai approval: pengajuannya
+// disetujui otomatis oleh sistem (lihat CutiController::setujuiOtomatisKabiro).
+const isPemohonKabiro = computed(
+    () => Number(detailModal.value.data?.pegawai?.role_id) === 6,
+);
 
 const detailModalApprove = () => {
     if (!detailModal.value.data) return;
@@ -824,10 +851,13 @@ const riwayatDibatalkan = computed(() =>
                         </svg>
                     </div>
                     <input
+                        id="cari-antrean-cuti"
+                        name="cari"
                         v-model="search"
                         type="text"
+                        aria-label="Cari nama atau NIP pegawai"
                         placeholder="Cari nama, NIP..."
-                        class="pl-10 border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-sm w-full"
+                        class="min-h-[44px] pl-10 border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm w-full"
                     />
                 </div>
 
@@ -850,8 +880,11 @@ const riwayatDibatalkan = computed(() =>
                         />
                     </svg>
                     <select
+                        id="filter-tim-kerja"
+                        name="tim_kerja"
                         v-model="timKerja"
-                        class="border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-600 w-full truncate"
+                        aria-label="Filter tim kerja"
+                        class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm text-gray-600 w-full truncate"
                     >
                         <option value="">Semua Tim Kerja</option>
                         <!-- Support Array String atau Array Object {value, label} dari Controller -->
@@ -884,8 +917,11 @@ const riwayatDibatalkan = computed(() =>
                         />
                     </svg>
                     <select
+                        id="filter-kelompok-monitoring"
+                        name="kelompok"
                         v-model="kelompok"
-                        class="border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-600 w-full truncate"
+                        aria-label="Filter kelompok substansi"
+                        class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm text-gray-600 w-full truncate"
                     >
                         <option value="">Semua Kelompok</option>
                         <option
@@ -900,8 +936,11 @@ const riwayatDibatalkan = computed(() =>
                 </div>
 
                 <select
+                    id="filter-jenis-cuti-monitoring"
+                    name="jenis_cuti"
                     v-model="jenisCuti"
-                    class="border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-sm text-gray-600 w-full sm:w-auto shrink-0"
+                    aria-label="Filter jenis cuti"
+                    class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm text-gray-600 w-full sm:w-auto shrink-0"
                 >
                     <option value="Semua Jenis Cuti">Semua Jenis Cuti</option>
                     <option value="Cuti Tahunan">Cuti Tahunan</option>
@@ -913,8 +952,11 @@ const riwayatDibatalkan = computed(() =>
                 </select>
 
                 <select
+                    id="filter-status-monitoring"
+                    name="status"
                     v-model="status"
-                    class="border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-sm text-gray-600 w-full sm:w-auto shrink-0"
+                    aria-label="Filter status pengajuan"
+                    class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm text-gray-600 w-full sm:w-auto shrink-0"
                 >
                     <option value="">Semua Status</option>
                     <option value="menunggu_l1">Menunggu L1</option>
@@ -927,6 +969,7 @@ const riwayatDibatalkan = computed(() =>
                     <option value="dibatalkan_reguler">
                         Dibatalkan (Reguler)
                     </option>
+                    <option value="kedaluwarsa">Kedaluwarsa</option>
                 </select>
 
                 <!-- BADGE TIM KERJA (Khusus L1 — tanpa dropdown) -->
@@ -984,7 +1027,7 @@ const riwayatDibatalkan = computed(() =>
 
             <!-- TABEL -->
             <div class="w-full min-w-0">
-                <div class="overflow-x-auto rounded-lg border border-gray-200">
+            <div class="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
                     <table class="min-w-full divide-y divide-gray-200">
                         <thead class="bg-gray-50">
                             <tr>
@@ -1078,6 +1121,9 @@ const riwayatDibatalkan = computed(() =>
                                             'bg-rose-100 text-rose-800 border-rose-300':
                                                 getEffectiveStatus(item) ===
                                                 'ditolak',
+                                            'bg-slate-100 text-slate-600 border-slate-300':
+                                                getEffectiveStatus(item) ===
+                                                'kedaluwarsa',
                                             'bg-gray-200 text-gray-800 border-gray-300':
                                                 getEffectiveStatus(item) ===
                                                     'ditangguhkan' ||
@@ -1191,6 +1237,84 @@ const riwayatDibatalkan = computed(() =>
                         </tbody>
                     </table>
                 </div>
+            <div class="space-y-3 md:hidden">
+                <article
+                    v-for="item in antreanTampil"
+                    :key="item.id"
+                    class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                >
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <h3 class="break-words text-sm font-semibold text-gray-900">
+                                {{ item.pegawai.nama }}
+                            </h3>
+                            <p class="mt-1 break-words text-xs text-gray-500">
+                                {{ item.pegawai.departemen }}
+                            </p>
+                        </div>
+                        <span class="shrink-0 rounded-md border border-blue-300 bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">
+                            {{ getEffectiveStatusLabelSingkatTahap(item) }}
+                        </span>
+                    </div>
+                    <dl class="mt-3 space-y-2 text-sm">
+                        <div class="flex justify-between gap-3">
+                            <dt class="text-gray-500">Jenis cuti</dt>
+                            <dd class="text-right font-medium text-gray-800">{{ item.jenis_cuti }}</dd>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                            <dt class="text-gray-500">Tanggal</dt>
+                            <dd class="text-right text-gray-800">
+                                {{ formatDate(item.tanggal_mulai) }} s/d {{ formatDate(item.tanggal_selesai) }}
+                            </dd>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                            <dt class="text-gray-500">Durasi</dt>
+                            <dd class="font-medium text-gray-800">{{ getDurasi(item) }} hari</dd>
+                        </div>
+                    </dl>
+                    <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                        <button
+                            type="button"
+                            @click="bukaDetailModal(item)"
+                            class="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700"
+                        >
+                            Lihat detail
+                        </button>
+                        <template v-if="!isReadOnly">
+                            <button
+                                type="button"
+                                @click="processApproval(item.id, 'approve')"
+                                :disabled="!canApprove(item)"
+                                class="min-h-[44px] rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Setujui
+                            </button>
+                            <button
+                                type="button"
+                                @click="processApproval(item.id, 'reject')"
+                                :disabled="!canApprove(item)"
+                                class="min-h-[44px] rounded-lg bg-red-600 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Tolak
+                            </button>
+                        </template>
+                    </div>
+                </article>
+                <div
+                    v-if="antreanTampil.length === 0"
+                    class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
+                >
+                    Saat ini tidak ada antrean pengajuan cuti yang memerlukan persetujuan Anda.
+                    <button
+                        v-if="adaFilterAktif"
+                        type="button"
+                        @click="resetFilter"
+                        class="ml-1 font-semibold text-green-700 underline"
+                    >
+                        Atur ulang filter
+                    </button>
+                </div>
+            </div>
             </div>
 
             <div
@@ -1229,11 +1353,11 @@ const riwayatDibatalkan = computed(() =>
     <Teleport to="body">
         <div
             v-if="detailModal.show"
-            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeDetailModal"
         >
             <div
-                class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden mx-4"
+                class="bg-white rounded-t-2xl shadow-xl w-full max-w-lg max-h-[90dvh] flex flex-col overflow-hidden sm:rounded-2xl"
             >
                 <div
                     class="shrink-0 bg-white flex justify-between items-start gap-3 px-6 py-4 border-b border-gray-100"
@@ -1282,6 +1406,8 @@ const riwayatDibatalkan = computed(() =>
                                 getEffectiveStatus(detailModal.data) ===
                                 'ditolak',
                             'bg-slate-100 text-slate-600':
+                                getEffectiveStatus(detailModal.data) ===
+                                    'kedaluwarsa' ||
                                 getEffectiveStatus(detailModal.data) ===
                                     'ditangguhkan' ||
                                 getEffectiveStatus(detailModal.data)?.includes(
@@ -1350,6 +1476,24 @@ const riwayatDibatalkan = computed(() =>
                         </div>
                     </div>
 
+                    <!-- BARU: Anak ke berapa, hanya tampil untuk Cuti Melahirkan -->
+                    <div
+                        v-if="
+                            detailModal.data.jenis_cuti
+                                ?.toLowerCase()
+                                .includes('melahirkan') &&
+                            detailModal.data.anak_ke
+                        "
+                        class="grid grid-cols-12 gap-2"
+                    >
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Anak ke berapa
+                        </div>
+                        <div class="col-span-8 text-slate-800 font-semibold">
+                            {{ detailModal.data.anak_ke }}
+                        </div>
+                    </div>
+
                     <div
                         v-if="
                             detailModal.data.jenis_cuti
@@ -1363,27 +1507,16 @@ const riwayatDibatalkan = computed(() =>
                         </div>
                         <div class="col-span-8">
                             <span class="font-extrabold text-amber-800 block">
-                                {{
-                                    detailModal.data.pegawai
-                                        ?.sisa_cuti_tersedia ?? 0
-                                }}
+                                {{ detailModal.data.pegawai?.total_cuti_tersedia ?? detailModal.data.pegawai?.sisa_cuti_tersedia ?? 0 }}
                                 Hari Total
                             </span>
                             <span
                                 class="font-normal text-amber-600/80 text-xs block mt-0.5"
                             >
                                 (Tahun Ini:
-                                {{
-                                    (detailModal.data.pegawai
-                                        ?.sisa_cuti_tersedia ?? 0) -
-                                    (detailModal.data.pegawai
-                                        ?.sisa_tahun_lalu ?? 0)
-                                }}
+                            {{ detailModal.data.pegawai?.sisa_hak_tahun_berjalan ?? 0 }}
                                 hari | Saldo Bawaan:
-                                {{
-                                    detailModal.data.pegawai?.sisa_tahun_lalu ??
-                                    0
-                                }}
+                                    {{ detailModal.data.pegawai?.saldo_bawaan_eligible ?? 0 }}
                                 hari)
                             </span>
                         </div>
@@ -1426,18 +1559,14 @@ const riwayatDibatalkan = computed(() =>
                         </div>
                     </div>
 
+                    <!-- Nomor telepon diisi pegawai saat mengajukan cuti dan
+                         tersimpan di pengajuan (kolom `no_telp`). -->
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Nomor Telepon
                         </div>
                         <div class="col-span-8 text-slate-800 font-semibold">
-                            {{
-                                detailModal.data.pegawai?.no_telepon ??
-                                detailModal.data.pegawai?.telepon ??
-                                detailModal.data.pegawai?.no_hp ??
-                                detailModal.data.pegawai?.phone ??
-                                "-"
-                            }}
+                            {{ detailModal.data.no_telp || "-" }}
                         </div>
                     </div>
 
@@ -1448,7 +1577,7 @@ const riwayatDibatalkan = computed(() =>
                         <div class="col-span-8">
                             <a
                                 v-if="detailModal.data.lampiran"
-                                :href="detailModal.data.lampiran"
+                                :href="getLampiranUrl(detailModal.data.lampiran)"
                                 target="_blank"
                                 rel="noopener"
                                 class="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-600 hover:bg-emerald-100 rounded-xl text-xs font-medium transition-colors"
@@ -1529,12 +1658,18 @@ const riwayatDibatalkan = computed(() =>
                                 "{{ pemrosesDitangguhkan.catatan }}"
                             </p>
 
+                            <!-- [DIUBAH] v-if="riwayatDitangguhkan.length": untuk pemohon
+                                 Kepala Biro rutenya kosong, jadi judul & daftar disembunyikan. -->
                             <h5
+                                v-if="riwayatDitangguhkan.length"
                                 class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mt-3 pt-3 mb-2 border-t border-slate-200"
                             >
                                 Riwayat Persetujuan Atasan
                             </h5>
-                            <div class="space-y-2">
+                            <div
+                                v-if="riwayatDitangguhkan.length"
+                                class="space-y-2"
+                            >
                                 <div
                                     v-for="level in riwayatDitangguhkan"
                                     :key="level.key"
@@ -1593,12 +1728,18 @@ const riwayatDibatalkan = computed(() =>
                                 selesai."
                             </p>
 
+                            <!-- [DIUBAH] v-if="riwayatDibatalkan.length": untuk pemohon
+                                 Kepala Biro rutenya kosong, jadi judul & daftar disembunyikan. -->
                             <h5
+                                v-if="riwayatDibatalkan.length"
                                 class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mt-4 mb-2"
                             >
                                 Progres Persetujuan Sebelum Dibatalkan
                             </h5>
-                            <div class="space-y-2">
+                            <div
+                                v-if="riwayatDibatalkan.length"
+                                class="space-y-2"
+                            >
                                 <div
                                     v-for="level in riwayatDibatalkan"
                                     :key="level.key"
@@ -1672,7 +1813,24 @@ const riwayatDibatalkan = computed(() =>
                                 Catatan / Respon Atasan
                             </h4>
 
-                            <div class="space-y-2">
+                            <!-- [BARU] Pemohon Kepala Biro (L4): tidak ada rantai approval,
+                                 cukup satu baris keterangan persetujuan otomatis. -->
+                            <div
+                                v-if="isPemohonKabiro"
+                                class="bg-white rounded-lg border border-slate-100 px-3 py-2.5 flex flex-col shadow-sm"
+                            >
+                                <span class="text-xs text-gray-500 mb-1">
+                                    L4 - Kepala Biro Perencanaan:
+                                    <span class="font-semibold text-gray-800">{{
+                                        detailModal.data.pegawai?.nama
+                                    }}</span>
+                                </span>
+                                <span class="text-xs font-bold text-emerald-700">
+                                    Disetujui otomatis (pemohon adalah Kepala
+                                    Biro)
+                                </span>
+                            </div>
+                            <div v-else class="space-y-2">
                                 <div
                                     v-for="level in filteredApprovalTimeline"
                                     :key="level.key"
@@ -1739,11 +1897,11 @@ const riwayatDibatalkan = computed(() =>
     <Teleport to="body">
         <div
             v-if="rejectModal.show"
-            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeRejectModal"
         >
             <div
-                class="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden transform transition-all"
+                class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto transform transition-all"
             >
                 <div
                     class="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-rose-50/50"
@@ -1910,11 +2068,11 @@ const riwayatDibatalkan = computed(() =>
     <Teleport to="body">
         <div
             v-if="approveModal.show"
-            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeApproveModal"
         >
             <div
-                class="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden transform transition-all"
+                class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto transform transition-all"
             >
                 <div
                     class="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-emerald-50/50"

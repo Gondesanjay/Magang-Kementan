@@ -11,12 +11,64 @@ use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
 use Carbon\Carbon;
 
+// ================= PERBAIKAN (L4 / KEPALA BIRO DISETUJUI OTOMATIS) =================
+// Semua query yang memuat relasi 'approvalLogs' sekarang memakai
+// 'approvalLogs.approver' (eager load). Tanpa ini, nama pejabat pada modal
+// Detail Cuti (Dashboard.vue) bisa tampil "-" untuk log persetujuan otomatis
+// Kepala Biro, karena Dashboard.vue membaca nama dari log.approver?.nama.
+// ================= END PERBAIKAN =================
 class DashboardController extends Controller
 {
+    /**
+     * [BARU] SATU-SATUNYA tempat perhitungan saldo cuti untuk dashboard.
+     * Rumus disamakan dengan RekapKuotaDetailController::hitungKuota()
+     * (halaman admin):
+     *   bawaan eligible = 12 jika sisa (tahun-2) & sisa (tahun-1) sama-sama 12,
+     *                     selain itu min(6, sisa tahun-1)
+     *   total tersedia  = (kuota + bawaan eligible) - terpakai
+     * Dipakai oleh cabang karyawan, cabang atasan, dan attachSaldoInfoKePegawai().
+     */
+    private function hitungSaldoPegawai(int $pegawaiId, int $tahun, ?SaldoCuti $saldo = null): array
+    {
+        $saldo ??= SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
+        $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun - 1)->first();
+
+        $kuota            = (int) ($saldo->kuota_tahunan ?? 12);
+        $sisaTahunLalu    = (int) ($saldo->carry_forward_normal ?? 0);
+        $sisaDuaTahunLalu = (int) ($saldoTahunLalu->carry_forward_normal ?? 0);
+
+        // Ikut koreksi_saldo Admin HR (NULL = ikut sistem).
+        $terpakai = SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
+
+        $bawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
+            ? 12
+            : min(6, $sisaTahunLalu);
+
+        $sisaKuotaTahunIni = max($kuota - $terpakai, 0);
+        $totalTersedia     = max(($kuota + $bawaanEligible) - $terpakai, 0);
+
+        return [
+            'sisa_cuti'                => $totalTersedia,
+            'kuota_tahunan'            => $kuota,
+            'sisa_kuota_tahun_ini'     => $sisaKuotaTahunIni,
+            'carry_forward_normal'     => $sisaTahunLalu,
+            'sisa_cuti_dua_tahun_lalu' => $sisaDuaTahunLalu,
+            'saldo_bawaan_eligible'    => $bawaanEligible,
+            'cuti_terpakai'            => $terpakai,
+            'total_cuti_tersedia'      => $totalTersedia,
+            'saldo_tahunan'            => [
+                ['tahun' => $tahun - 2, 'nilai' => $sisaDuaTahunLalu],
+                ['tahun' => $tahun - 1, 'nilai' => $sisaTahunLalu],
+                ['tahun' => $tahun,     'nilai' => $sisaKuotaTahunIni],
+            ],
+        ];
+    }
+
     /**
      * Menempelkan info saldo cuti tahunan milik PEGAWAI PEMILIK PENGAJUAN
      * (bukan Auth::user()) ke setiap item collection, agar modal detail
      * menampilkan saldo yang benar.
+     * [DIUBAH] Sekarang memakai hitungSaldoPegawai() agar rumus tidak menyimpang.
      */
     private function attachSaldoInfoKePegawai($collection, int $tahun): void
     {
@@ -29,36 +81,16 @@ class DashboardController extends Controller
             }
 
             if (!isset($cache[$pegawai->id])) {
-                $saldo = SaldoCuti::where('pegawai_id', $pegawai->id)
-                    ->where('tahun', $tahun)
-                    ->first();
-                $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawai->id)
-                    ->where('tahun', $tahun - 1)
-                    ->first();
-
-                $kuotaTahunan = $saldo->kuota_tahunan ?? ($pegawai->jatah_cuti ?? 12);
-                $sisaTahunLalu = $saldo->carry_forward_normal ?? 0;
-                $sisaDuaTahunLalu = $saldoTahunLalu?->carry_forward_normal ?? 0;
-
-                $cutiTerpakai = PengajuanCuti::where('pegawai_id', $pegawai->id)
-                    ->where('jenis_cuti', 'Cuti Tahunan')
-                    ->where('status', 'disetujui')
-                    ->whereYear('tanggal_mulai', $tahun)
-                    ->sum('jumlah_hari');
-
-                $sisaHakTahunBerjalan = max($kuotaTahunan - $cutiTerpakai, 0);
-                $saldoBawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
-                    ? 12
-                    : min(6, $sisaTahunLalu);
+                $s = $this->hitungSaldoPegawai((int) $pegawai->id, $tahun);
 
                 $cache[$pegawai->id] = [
-                    'kuota_tahunan'            => $kuotaTahunan,
-                    'sisa_tahun_lalu'          => $sisaTahunLalu,
-                    'sisa_dua_tahun_lalu'      => $sisaDuaTahunLalu,
-                    'sisa_hak_tahun_berjalan'  => $sisaHakTahunBerjalan,
-                    'saldo_bawaan_eligible'    => $saldoBawaanEligible,
-                    'cuti_terpakai'            => $cutiTerpakai,
-                    'total_cuti_tersedia'      => $sisaHakTahunBerjalan + $saldoBawaanEligible,
+                    'kuota_tahunan'            => $s['kuota_tahunan'],
+                    'sisa_tahun_lalu'          => $s['carry_forward_normal'],
+                    'sisa_dua_tahun_lalu'      => $s['sisa_cuti_dua_tahun_lalu'],
+                    'sisa_hak_tahun_berjalan'  => $s['sisa_kuota_tahun_ini'],
+                    'saldo_bawaan_eligible'    => $s['saldo_bawaan_eligible'],
+                    'cuti_terpakai'            => $s['cuti_terpakai'],
+                    'total_cuti_tersedia'      => $s['total_cuti_tersedia'],
                 ];
             }
 
@@ -82,6 +114,13 @@ class DashboardController extends Controller
     private function attachNamaApproverL1L2KePegawai($collection): void
     {
         static $cache = [];
+        static $namaL3 = false;
+        static $namaL4 = false;
+
+        if ($namaL3 === false) {
+            $namaL3 = $this->namaPejabatAktif(4) ?? 'Kasubag TU';
+            $namaL4 = $this->namaPejabatAktif(6) ?? 'Kepala Biro Perencanaan';
+        }
 
         foreach ($collection as $item) {
             $pegawai = $item->pegawai ?? null;
@@ -98,7 +137,17 @@ class DashboardController extends Controller
 
             $pegawai->nama_l1 = $cache[$pegawai->id]['nama_l1'];
             $pegawai->nama_l2 = $cache[$pegawai->id]['nama_l2'];
+            $pegawai->nama_l3 = $namaL3;
+            $pegawai->nama_l4 = $namaL4;
         }
+    }
+
+    private function namaPejabatAktif(int $roleId): ?string
+    {
+        return Pegawai::where('role_id', $roleId)
+            ->where(fn($q) => $q->where('status_aktif', 'Aktif')->orWhereNull('status_aktif'))
+            ->orderBy('id')
+            ->value('nama');
     }
 
     public function index(Request $request)
@@ -106,6 +155,19 @@ class DashboardController extends Controller
         /** @var \App\Models\Pegawai $user */
         $user = Auth::user();
         $tahun = date('Y');
+
+        // Tahun khusus CHART & DONUT (dipilih lewat dropdown di dashboard).
+        // $tahun di atas TIDAK diubah karena dipakai kartu saldo/kuota/statistik
+        // yang memang harus selalu tahun berjalan.
+        $tahunChart = (int) $request->query('tahun', $tahun);
+        if ($tahunChart < (int) $tahun - 2 || $tahunChart > (int) $tahun + 1) {
+            $tahunChart = (int) $tahun;
+        }
+
+        // Diinisialisasi di luar if/elseif supaya bisa dipakai query chart
+        // di bagian bawah (untuk role 1 nilainya tetap null).
+        $wilayahField = null;
+        $wilayahValue = null;
 
         $stats               = [];
         $recentCuti          = [];
@@ -133,49 +195,35 @@ class DashboardController extends Controller
         // DASHBOARD KARYAWAN (role 1)
         // =====================================================================
         if ($user->role_id === 1) {
-            $saldo            = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun)->first();
-            $saldoTahunLalu   = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun - 1)->first();
-            $saldoDuaTahunLalu = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun - 2)->first();
+            $saldo = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun)->first();
 
-            $kuotaTahunan     = $saldo ? $saldo->kuota_tahunan : 0;
-            $sisaTahunLalu    = $saldo ? $saldo->carry_forward_normal : 0;
-            $sisaDuaTahunLalu = $saldoTahunLalu?->carry_forward_normal
-                ?? $saldoDuaTahunLalu?->carry_forward_normal
-                ?? 0;
+            // [DIUBAH] Seluruh perhitungan saldo lewat hitungSaldoPegawai()
+            // (rumus sama dengan halaman admin).
+            $saldoStats   = $this->hitungSaldoPegawai($user->id, (int) $tahun, $saldo);
+            $cutiTerpakai = $saldoStats['cuti_terpakai'];
 
-            $cutiTerpakai = PengajuanCuti::where('pegawai_id', $user->id)
+            // Info koreksi Admin HR, untuk label di kartu "Cuti Terpakai".
+            $cutiTerpakaiSistem = (int) PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
                 ->sum('jumlah_hari');
 
-            $saldoBawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
-                ? 12
-                : min(6, $sisaTahunLalu);
+            // Label hanya tampil kalau koreksi benar-benar BERBEDA dari hitungan sistem.
+            $adaKoreksi = $saldo
+                && $saldo->koreksi_saldo !== null
+                && (int) $saldo->koreksi_saldo !== $cutiTerpakaiSistem;
 
-            $sisaKuotaTahunIni = max($kuotaTahunan - $cutiTerpakai, 0);
-            $totalTersedia     = $sisaKuotaTahunIni + $saldoBawaanEligible;
-
-            $stats = [
-                'sisa_cuti'                 => $totalTersedia,
-                'kuota_tahunan'             => $kuotaTahunan,
-                'sisa_kuota_tahun_ini'      => $sisaKuotaTahunIni,
-                'carry_forward_normal'      => $sisaTahunLalu,
-                'sisa_cuti_dua_tahun_lalu'  => $sisaDuaTahunLalu,
-                'saldo_bawaan_eligible'     => $saldoBawaanEligible,
-                'cuti_terpakai'             => $cutiTerpakai,
-                'total_cuti_tersedia'       => $totalTersedia,
-                'saldo_tahunan'             => [
-                    ['tahun' => $tahun - 2, 'nilai' => $sisaDuaTahunLalu],
-                    ['tahun' => $tahun - 1, 'nilai' => $sisaTahunLalu],
-                    ['tahun' => $tahun,     'nilai' => $sisaKuotaTahunIni],
-                ],
+            $stats = array_merge($saldoStats, [
+                'ada_koreksi'          => $adaKoreksi,
+                'cuti_terpakai_sistem' => $cutiTerpakaiSistem,
+                'selisih_koreksi'      => $cutiTerpakai - $cutiTerpakaiSistem,
                 'total_pengajuan' => PengajuanCuti::where('pegawai_id', $user->id)->count(),
                 'menunggu'        => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'like', 'menunggu%')->count(),
                 'disetujui'       => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'disetujui')->count(),
-            ];
+            ]);
 
-            $recentCuti = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $recentCuti = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                 ->where('pegawai_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->take(5)
@@ -183,7 +231,7 @@ class DashboardController extends Controller
 
             $recentCutiPribadi = $recentCuti;
 
-            $allCutiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $allCutiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                 ->where('pegawai_id', $user->id)
                 ->where('status', 'disetujui')
                 ->whereYear('tanggal_mulai', $tahun)
@@ -256,27 +304,14 @@ class DashboardController extends Controller
                 );
             }
 
-            $kuotaTahunanAtasan     = $saldoAtasan?->kuota_tahunan ?? 12;
-            $sisaTahunLaluAtasan    = $saldoAtasan?->carry_forward_normal ?? 0;
-            $cutiTerpakaiAtasan     = $saldoAtasan
-                ? PengajuanCuti::where('pegawai_id', $user->id)
-                ->where('jenis_cuti', 'Cuti Tahunan')
-                ->where('status', 'disetujui')
-                ->whereYear('tanggal_mulai', $tahun)
-                ->sum('jumlah_hari')
-                : 0;
+            // [DIUBAH] Perhitungan saldo atasan lewat method bersama, sehingga
+            // field sisa_cuti_dua_tahun_lalu, saldo_bawaan_eligible, dan
+            // saldo_tahunan ikut terkirim dan rumusnya sama dengan admin.
+            $saldoStats = $this->hitungSaldoPegawai($user->id, (int) $tahun, $saldoAtasan);
 
-            $totalTersediaAtasan    = ($kuotaTahunanAtasan + $sisaTahunLaluAtasan) - $cutiTerpakaiAtasan;
-            $sisaKuotaTahunIniAtasan = max($kuotaTahunanAtasan - $cutiTerpakaiAtasan, 0);
-
-            $stats = [
-                'kuota_tahunan'        => $kuotaTahunanAtasan,
-                'sisa_kuota_tahun_ini' => $sisaKuotaTahunIniAtasan,
-                'carry_forward_normal' => $sisaTahunLaluAtasan,
-                'cuti_terpakai'        => $cutiTerpakaiAtasan,
-                'total_cuti_tersedia'  => $totalTersediaAtasan,
-                'total_antrean'        => $antreanQuery->count(),
-                'cuti_tim_bulan_ini'   => PengajuanCuti::when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
+            $stats = array_merge($saldoStats, [
+                'total_antrean'      => $antreanQuery->count(),
+                'cuti_tim_bulan_ini' => PengajuanCuti::when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                         $q->where($wilayahField, $wilayahValue);
                     });
@@ -290,11 +325,11 @@ class DashboardController extends Controller
                     ->whereMonth('tanggal_mulai', date('m'))
                     ->whereYear('tanggal_mulai', $tahun)
                     ->count(),
-                'total_anggota_tim' => $anggotaTimQuery->count(),
-            ];
+                'total_anggota_tim'  => $anggotaTimQuery->count(),
+            ]);
 
             // --- Recent Cuti (tabel atasan) ---
-            $recentCuti = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $recentCuti = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                         $q->where($wilayahField, $wilayahValue);
@@ -312,9 +347,9 @@ class DashboardController extends Controller
                 ->take(5)
                 ->get();
 
-            // --- Cuti Disetujui TIM (chart + tabel) ---
+            // --- Cuti Disetujui TIM (kartu, kalender, dll — tahun berjalan) ---
             // Exclude cuti milik atasan sendiri agar tidak dobel dengan data pribadi
-            $allCutiDisetujui = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $allCutiDisetujui = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue, $user) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue, $user) {
                         $q->where($wilayahField, $wilayahValue)
@@ -331,7 +366,7 @@ class DashboardController extends Controller
                 ->get();
 
             // --- Tim cuti hari ini ---
-            $timCutiHariIni = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+            $timCutiHariIni = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
                     $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
                         $q->where($wilayahField, $wilayahValue);
@@ -348,21 +383,15 @@ class DashboardController extends Controller
                 ->get();
 
             // --- Data cuti Pribadi untuk Atasan (role 2,3,4,6) ---
+            // Chart dihitung di bagian "DATA CHART" di bawah (mengikuti tahun terpilih).
             if (in_array($user->role_id, [2, 3, 4, 6], true)) {
-                $cutiPribadiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                $cutiPribadiDisetujui = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                     ->where('pegawai_id', $user->id)
                     ->where('status', 'disetujui')
                     ->whereYear('tanggal_mulai', $tahun)
                     ->get();
 
-                foreach ($cutiPribadiDisetujui as $cuti) {
-                    $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
-                    if ($monthIndex >= 0 && $monthIndex <= 11) {
-                        $chartDataPribadi[$monthIndex] += $cuti->jumlah_hari;
-                    }
-                }
-
-                $recentCutiPribadi = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs'])
+                $recentCutiPribadi = PengajuanCuti::with(['atasanL1', 'atasanL2', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
                     ->where('pegawai_id', $user->id)
                     ->orderBy('created_at', 'desc')
                     ->take(5)
@@ -370,17 +399,56 @@ class DashboardController extends Controller
             }
         }
 
-        // Chart TIM
-        foreach ($allCutiDisetujui as $cuti) {
-            $monthIndex = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
-            if ($monthIndex >= 0 && $monthIndex <= 11) {
-                $chartDataBackend[$monthIndex] += $cuti->jumlah_hari;
-            }
+        // =====================================================================
+        // DATA CHART & DONUT — mengikuti tahun terpilih ($tahunChart)
+        // Terpisah dari widget lain (kartu, kalender) yang tetap tahun berjalan.
+        // =====================================================================
+        if ($user->role_id === 1) {
+            $cutiChartPribadi = PengajuanCuti::where('pegawai_id', $user->id)
+                ->where('status', 'disetujui')
+                ->whereYear('tanggal_mulai', $tahunChart)
+                ->get();
+            $cutiChartTim = $cutiChartPribadi;
+        } else {
+            $cutiChartTim = PengajuanCuti::with('pegawai')
+                ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue, $user) {
+                    $query->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue, $user) {
+                        $q->where($wilayahField, $wilayahValue)
+                            ->where('id', '!=', $user->id);
+                    });
+                })
+                ->when($kelompokSubstansiFilter, function ($query) use ($kelompokSubstansiFilter) {
+                    $query->whereHas('pegawai', function ($q) use ($kelompokSubstansiFilter) {
+                        $q->where('kelompok_substansi', $kelompokSubstansiFilter);
+                    });
+                })
+                ->where('status', 'disetujui')
+                ->whereYear('tanggal_mulai', $tahunChart)
+                ->get();
+
+            $cutiChartPribadi = in_array($user->role_id, [2, 3, 4, 6], true)
+                ? PengajuanCuti::where('pegawai_id', $user->id)
+                ->where('status', 'disetujui')
+                ->whereYear('tanggal_mulai', $tahunChart)
+                ->get()
+                : collect();
         }
 
-        // Role 1: chart pribadi = chart utama
-        if ($user->role_id === 1) {
-            $chartDataPribadi = $chartDataBackend;
+        // Hitung total hari per bulan dari nol
+        $chartDataBackend = array_fill(0, 12, 0);
+        $chartDataPribadi = array_fill(0, 12, 0);
+
+        foreach ($cutiChartTim as $cuti) {
+            $i = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
+            if ($i >= 0 && $i <= 11) {
+                $chartDataBackend[$i] += $cuti->jumlah_hari;
+            }
+        }
+        foreach ($cutiChartPribadi as $cuti) {
+            $i = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
+            if ($i >= 0 && $i <= 11) {
+                $chartDataPribadi[$i] += $cuti->jumlah_hari;
+            }
         }
 
         // Daftar opsi Filter Divisi
@@ -391,11 +459,11 @@ class DashboardController extends Controller
             ->pluck('kelompok_substansi');
 
         // Tempel saldo + nama approver L1/L2 ke semua collection yang dikirim ke modal
-        $this->attachSaldoInfoKePegawai($recentCuti, $tahun);
-        $this->attachSaldoInfoKePegawai($recentCutiPribadi, $tahun);
-        $this->attachSaldoInfoKePegawai($allCutiDisetujui, $tahun);
-        $this->attachSaldoInfoKePegawai($cutiPribadiDisetujui, $tahun);
-        $this->attachSaldoInfoKePegawai($timCutiHariIni, $tahun);
+        $this->attachSaldoInfoKePegawai($recentCuti, (int) $tahun);
+        $this->attachSaldoInfoKePegawai($recentCutiPribadi, (int) $tahun);
+        $this->attachSaldoInfoKePegawai($allCutiDisetujui, (int) $tahun);
+        $this->attachSaldoInfoKePegawai($cutiPribadiDisetujui, (int) $tahun);
+        $this->attachSaldoInfoKePegawai($timCutiHariIni, (int) $tahun);
 
         $this->attachNamaApproverL1L2KePegawai($recentCuti);
         $this->attachNamaApproverL1L2KePegawai($recentCutiPribadi);
@@ -404,20 +472,32 @@ class DashboardController extends Controller
         $this->attachNamaApproverL1L2KePegawai($timCutiHariIni);
 
         return Inertia::render('Dashboard', [
-            'stats'                 => $stats,
-            'recentCuti'            => $recentCuti,
-            'cutiDisetujuiData'      => $allCutiDisetujui,
-            'cutiDisetujuiPribadi'   => $cutiPribadiDisetujui,
-            'chartDataBackend'      => $chartDataBackend,
-            'chartDataPribadi'      => $chartDataPribadi,
-            'hariLiburs'            => $hariLiburs,
-            'anggotaTim'            => $anggotaTim,
-            'timCutiHariIni'        => $timCutiHariIni,
-            'isAdminHR'             => $isAdminHR,
-            'recentCutiPribadi'     => $recentCutiPribadi,
-            'listKelompokSubstansi' => $listKelompokSubstansi,
-            'filter'                => [
+            'stats'                     => $stats,
+            'recentCuti'                => $recentCuti,
+            'cutiDisetujuiData'         => $allCutiDisetujui,
+            'cutiDisetujuiPribadi'      => $cutiPribadiDisetujui,
+            'cutiDisetujuiChart'        => $cutiChartTim,
+            'cutiDisetujuiPribadiChart' => $cutiChartPribadi,
+            'chartDataBackend'          => $chartDataBackend,
+            'chartDataPribadi'          => $chartDataPribadi,
+            'hariLiburs'                => $hariLiburs,
+            'anggotaTim'                => $anggotaTim,
+            'timCutiHariIni'            => $timCutiHariIni,
+            'isAdminHR'                 => $isAdminHR,
+            'recentCutiPribadi'         => $recentCutiPribadi,
+            'listKelompokSubstansi'     => $listKelompokSubstansi,
+            // Tahun yang saldonya sudah dibuat Admin HR untuk user yang login.
+            // Dipakai modal Revisi Tanggal Cuti untuk menolak Cuti Tahunan yang
+            // menyentuh tahun tanpa saldo (mis. 2027 sebelum Generate Saldo).
+            'tahun_saldo_tersedia'      => SaldoCuti::where('pegawai_id', $user->id)
+                ->pluck('tahun')
+                ->map(fn($t) => (int) $t)
+                ->unique()
+                ->values()
+                ->all(),
+            'filter'                    => [
                 'kelompok_substansi' => $kelompokSubstansiFilter,
+                'tahun'              => (string) $tahunChart,
             ],
         ]);
     }

@@ -8,6 +8,10 @@ class SaldoCuti extends Model
 {
     protected $guarded = ['id'];
 
+    protected $casts = [
+        'koreksi_saldo' => 'integer', // nullable: NULL tetap NULL, tidak jadi 0
+    ];
+
     /**
      * Hitung estimasi sisa cuti yang bisa dibawa ke tahun depan (Carry Forward).
      * Maksimal 6 hari.
@@ -16,5 +20,36 @@ class SaldoCuti extends Model
     {
         // Pastikan tidak minus, lalu ambil nilai terkecil antara sisa cuti dan 6
         return min(max($sisaCutiTahunBerjalan, 0), 6);
+    }
+
+    /**
+     * Cuti Tahunan terpakai EFEKTIF untuk satu pegawai & tahun.
+     * koreksi_saldo NULL  -> ikut hitungan sistem (SUM pengajuan disetujui)
+     * koreksi_saldo 0..n  -> angka koreksi Admin HR dipakai apa adanya (termasuk 0)
+     */
+    public static function terpakaiEfektif(int $pegawaiId, int $tahun, ?self $saldo = null): int
+    {
+        $saldo ??= static::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
+
+        if ($saldo && $saldo->koreksi_saldo !== null) {
+            return max(0, (int) $saldo->koreksi_saldo);
+        }
+
+        return (int) PengajuanCuti::where('pegawai_id', $pegawaiId)
+            ->where('jenis_cuti', 'Cuti Tahunan')
+            ->where('status', 'disetujui')
+            ->whereYear('tanggal_mulai', $tahun)
+            ->sum('jumlah_hari');
+    }
+
+    /**
+     * Apakah baris saldo untuk pegawai & tahun ini sudah dibuat
+     * (lewat Generate, tambah pegawai, atau impor pegawai)?
+     * Dipakai CutiController untuk menolak pengajuan Cuti Tahunan pada
+     * tahun yang saldonya belum disiapkan Admin HR.
+     */
+    public static function tersediaUntukTahun(int $pegawaiId, int $tahun): bool
+    {
+        return static::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->exists();
     }
 }

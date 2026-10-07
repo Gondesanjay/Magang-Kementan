@@ -85,9 +85,8 @@
 
         /* PERBAIKAN KERAPIAN FORMAT: font-size nama penandatangan diperkecil
            lagi ke 10pt (dari semula 11pt) karena nama yang lebih panjang
-           bergelar (mis. "Seta Rukmalasari Agustina, S.P., M.M.A., M.Sc.")
-           masih terpotong jadi dua baris di 11pt. Ukuran 10pt dipastikan
-           cukup untuk memuat nama terpanjang dalam satu baris di lebar
+           bergelar masih terpotong jadi dua baris di 11pt. Ukuran 10pt dipastikan
+           cukup untuk memuat nama panjang dalam satu baris di lebar
            kolom tanda tangan (50% halaman), sekaligus tetap proporsional
            dengan teks jabatan di atasnya. */
         .signature-name {
@@ -128,9 +127,9 @@
                 <td>{{ $pegawai->jabatan ?? '-' }}</td>
             </tr>
             <tr>
-                <td>Unit Kerja</td>
+                <td>Kelompok Substansi</td>
                 <td>:</td>
-                <td>{{ $pegawai->departemen ?? '-' }}</td>
+                <td>{{ $pegawai->kelompok_substansi ?: ((int) $pegawai->role_id === 6 ? 'Biro Perencanaan' : '-') }}</td>
             </tr>
             <tr>
                 <td>Jenis Cuti</td>
@@ -163,13 +162,21 @@
     </div>
 
 
-    <!-- Tarik data L3 dan L4 langsung dari database untuk semua pengajuan -->
-    @php
-    $kasubag = \App\Models\Pegawai::where('jabatan', 'Kepala Subbagian Tata Usaha')->first();
-    $kabiro = \App\Models\Pegawai::where('jabatan', 'Kepala Biro Perencanaan')->first();
-    @endphp
+    @if(!empty($pemohonKabiro))
+    {{-- Pemohon = Kepala Biro (L4): tanpa blok tanda tangan L3/L4 --}}
+    <div style="margin-top: 50px; text-align: right;">
+        <div style="display: inline-block; text-align: center;">
+            Jakarta, {{ \Carbon\Carbon::now()->locale('id')->translatedFormat('d F Y') }}<br>
+            Kepala Biro Perencanaan
+            <div class="signature-name">{{ $pegawai->nama }}</div>
+            NIP. {{ $pegawai->nip ?? '-' }}
+        </div>
+    </div>
 
-
+    <p style="margin-top: 30px; font-size: 10pt; font-style: italic;">
+        Cuti ini disetujui otomatis oleh sistem karena pemohon adalah Kepala Biro Perencanaan selaku pejabat yang berwenang memberikan cuti.
+    </p>
+    @else
     <table class="signature-table">
         <tr>
             <!-- Kolom Kiri: Atasan Langsung (L3 - Kasubag TU) -->
@@ -192,14 +199,13 @@
                 </div>
 
 
-                <!-- PERBAIKAN: strtoupper() dihapus supaya nama tampil apa
-                     adanya (Title Case) sesuai data di database, bukan
-                     dipaksa huruf kapital semua. Fallback string statis juga
-                     disesuaikan formatnya. -->
+                <!-- Nama dan NIP diambil dari data pejabat aktif bila tersedia. -->
                 <div class="signature-name">
-                    {{ $kasubag ? $kasubag->nama : 'Ignatius Agus Hendarto, S.E., M.M.' }}
+                    {{ $kasubag ? $kasubag->nama : '(Kasubag TU belum ditentukan)' }}
                 </div>
-                NIP. {{ $kasubag ? $kasubag->nip : '777666555' }}
+                @if($kasubag)
+                NIP. {{ $kasubag->nip }}
+                @endif
             </td>
 
 
@@ -225,18 +231,20 @@
                 </div>
 
 
-                <!-- PERBAIKAN: strtoupper() dihapus, sama seperti kolom kiri -->
+                <!-- Nama dan NIP diambil dari data pejabat aktif bila tersedia. -->
                 <div class="signature-name">
-                    {{ $kabiro ? $kabiro->nama : 'Seta Rukmalasari Agustina, S.P., M.M.A., M.Sc.' }}
+                    {{ $kabiro ? $kabiro->nama : '(Kepala Biro belum ditentukan)' }}
                 </div>
-                NIP. {{ $kabiro ? $kabiro->nip : '666555444' }}
+                @if($kabiro)
+                NIP. {{ $kabiro->nip }}
+                @endif
             </td>
         </tr>
     </table>
+    @endif
 
 
 </body>
 
 
 </html>
-

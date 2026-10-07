@@ -11,6 +11,9 @@ const props = defineProps({
     listTimKerja: Array, // Dipakai untuk filter L2
     userRoleId: Number, // 1=Staff, 2=L1, 3=L2, 4=L3, 6=L4
     userTimKerja: String, // Nama tim kerja user (dipakai untuk badge info L1)
+    // ID pegawai yang sedang login, dikirim dari controller. Dipakai
+    // untuk menandai entri milik sendiri dengan "(Anda)".
+    userPegawaiId: Number,
 });
 
 const currentDate = ref(new Date());
@@ -82,8 +85,6 @@ const filterOptions = computed(() => {
 });
 
 // Membaca parameter URL agar pilihan tidak kereset saat halaman dimuat ulang.
-// Jika tidak ada parameter, defaultnya "Semua Tim Kerja" / "Semua Kelompok"
-// tergantung level user.
 const getInitialFilter = () => {
     if (typeof window !== "undefined") {
         const params = new URLSearchParams(window.location.search);
@@ -99,8 +100,6 @@ const selectedFilter = ref(initialFilterFromUrl ?? filterAllLabel.value);
 const applyFilter = () => {
     router.get(
         window.location.pathname,
-        // Jika memilih "Semua ...", parameter dihapus (undefined) dari URL
-        // agar bersih
         {
             filter:
                 selectedFilter.value === filterAllLabel.value
@@ -141,16 +140,14 @@ const nextMonth = () => {
 const calendarDays = computed(() => {
     const year = currentDate.value.getFullYear();
     const month = currentDate.value.getMonth();
-    // index 0 = Sunday, 1 = Monday, dll. Kita sesuaikan agar Senin jadi awal minggu (1)
+    // index 0 = Sunday, 1 = Monday, dll. Senin jadi awal minggu
     let firstDayIndex = new Date(year, month, 1).getDay();
-    firstDayIndex = firstDayIndex === 0 ? 6 : firstDayIndex - 1; // Konversi ke format Senin=0, Minggu=6
+    firstDayIndex = firstDayIndex === 0 ? 6 : firstDayIndex - 1;
     const totalDays = new Date(year, month + 1, 0).getDate();
     let days = [];
-    // Kotak kosong di awal bulan
     for (let i = 0; i < firstDayIndex; i++) {
         days.push({ dateString: null, dayNum: null, isCurrentMonth: false });
     }
-    // Tanggal asli di bulan berjalan
     for (let i = 1; i <= totalDays; i++) {
         const formattedMonth = String(month + 1).padStart(2, "0");
         const formattedDay = String(i).padStart(2, "0");
@@ -168,15 +165,30 @@ const getHolidayName = (dateStr) => {
     return holidayList.value[dateStr] || null;
 };
 
-// Filter cuti diperbarui agar dapat menyaring secara lokal (fallback),
-// mengikuti mode filter yang aktif sesuai level user (L1/L2/L3&L4)
+// ================= PENANDA "(ANDA)" & FILTER STATUS =================
+// Entri milik user yang sedang login ditandai "(Anda)".
+//
+// Aturan tampil di kalender:
+//   - disetujui                                        -> tampil untuk semua orang
+//   - menunggu_l1..l4 / ditolak / dibatalkan / dll.    -> TIDAK tampil
+// Catatan: filter ini lapisan kedua. Pembatasan utama ada di
+// CutiController::teamCalendar(), yang juga hanya mengirim pengajuan
+// berstatus 'disetujui'.
+const isMilikSaya = (item) => {
+    if (!props.userPegawaiId) return false;
+    const idPegawai = item?.pegawai_id ?? item?.pegawai?.id;
+    return Number(idPegawai) === Number(props.userPegawaiId);
+};
+// Data lama tanpa field status dianggap sudah disetujui (perilaku sebelumnya).
+const isDisetujui = (item) => !item?.status || item.status === "disetujui";
+const bolehTampil = (item) => isDisetujui(item);
+// ================= END PENANDA =================
+
+// Filter cuti: menyaring status yang boleh tampil, lalu filter lokal
+// (fallback) sesuai mode filter yang aktif.
 const getCutiOnDate = (dateStr) => {
     if (!dateStr) return [];
-    let filteredCuti = props.cutiTim || [];
-    // Filter lokal (fallback) jika backend mengirimkan seluruh data tanpa
-    // difilter terlebih dahulu. Hanya berlaku untuk mode yang punya dropdown
-    // (L2 & L3/L4) — L1 dan Staff tidak melakukan filter tambahan di sini
-    // karena scope datanya sudah ditentukan oleh backend.
+    let filteredCuti = (props.cutiTim || []).filter(bolehTampil);
     if (
         showFilterDropdown.value &&
         selectedFilter.value !== filterAllLabel.value &&
@@ -196,19 +208,35 @@ const getCutiOnDate = (dateStr) => {
     });
 };
 
-// ================= OPSI D: RINGKAS DAFTAR NAMA DI GRID KALENDER =================
-// Supaya kotak tanggal tidak "meluber" saat banyak pegawai cuti dalam satu
-// hari, grid hanya menampilkan beberapa nama teratas dan sisanya diringkas
-// jadi badge "+X lainnya" yang tetap bisa diklik untuk buka modal detail.
+// ================= OPSI D: RINGKAS DAFTAR NAMA DI GRID KALENDER (DESKTOP) =================
+// Entri milik sendiri diurutkan paling atas supaya tidak pernah tersembunyi
+// di balik badge "+X lainnya".
 const MAX_NAMA_DI_GRID = 3;
 const getCutiRingkasDiGrid = (dateStr) => {
-    return getCutiOnDate(dateStr).slice(0, MAX_NAMA_DI_GRID);
+    return [...getCutiOnDate(dateStr)]
+        .sort((a, b) => Number(isMilikSaya(b)) - Number(isMilikSaya(a)))
+        .slice(0, MAX_NAMA_DI_GRID);
 };
 const getSisaCutiDiGrid = (dateStr) => {
     const total = getCutiOnDate(dateStr).length;
     return total > MAX_NAMA_DI_GRID ? total - MAX_NAMA_DI_GRID : 0;
 };
 // ================= END OPSI D =================
+
+// ================= INDIKATOR TITIK (HP) =================
+// Di layar kecil nama tidak muat di dalam sel, jadi cukup titik berwarna
+// per jenis cuti. Detail lengkap tampil di pop up saat tanggal diketuk.
+const MAX_TITIK_DI_GRID = 4;
+const getCutiTitikDiGrid = (dateStr) => {
+    return [...getCutiOnDate(dateStr)]
+        .sort((a, b) => Number(isMilikSaya(b)) - Number(isMilikSaya(a)))
+        .slice(0, MAX_TITIK_DI_GRID);
+};
+const getSisaTitikDiGrid = (dateStr) => {
+    const total = getCutiOnDate(dateStr).length;
+    return total > MAX_TITIK_DI_GRID ? total - MAX_TITIK_DI_GRID : 0;
+};
+// ================= END INDIKATOR TITIK =================
 
 const getJenisCuti = (cuti) => (cuti?.jenis_cuti || "Cuti Tahunan").trim();
 const getCutiColor = (cuti) => {
@@ -244,6 +272,12 @@ const getCutiColor = (cuti) => {
             };
     }
 };
+
+// Kelas tambahan untuk chip di grid kalender:
+//  - milik sendiri : ring hijau tegas supaya cepat ditemukan
+const getChipExtraClass = (cuti) => [
+    isMilikSaya(cuti) ? "ring-2 ring-green-500 ring-offset-1" : "",
+];
 
 // ================= FORMAT TANGGAL & DURASI (UNTUK POP UP) =================
 const parseTanggal = (dateStr) => {
@@ -306,8 +340,6 @@ const getInisial = (nama) => {
 const selectedDateData = ref(null);
 
 // ================= OPSI A: SEARCH NAMA DI DALAM MODAL =================
-// Membantu ketika satu tanggal punya banyak pegawai cuti — user tinggal
-// ketik nama untuk cari, tanpa perlu scroll manual satu-satu.
 const searchModal = ref("");
 const searchInputRef = ref(null);
 const filteredModalList = computed(() => {
@@ -321,11 +353,6 @@ const filteredModalList = computed(() => {
 // ================= END OPSI A =================
 
 // ================= OPSI B: GROUPING PER JENIS CUTI =================
-// Mengelompokkan daftar pegawai (hasil filter search di atas) berdasarkan
-// jenis cutinya, supaya atasan bisa cepat scan "siapa saja yang Cuti Besar"
-// dsb tanpa perlu membaca satu-satu dari daftar campur. Urutan grup
-// mengikuti urutan legenda di bawah kalender (Tahunan, Melahirkan, Besar,
-// Alasan Penting), bukan alfabetis atau urutan kemunculan data.
 const URUTAN_JENIS_CUTI = [
     "Cuti Tahunan",
     "Cuti Melahirkan",
@@ -341,8 +368,6 @@ const groupedModalList = computed(() => {
         }
         groups[jenis].push(item);
     });
-    // Urutkan sesuai URUTAN_JENIS_CUTI dulu, jenis lain (di luar 4 standar,
-    // kalau ada) ditaruh di akhir mengikuti urutan kemunculan.
     const urutanTerpakai = [
         ...URUTAN_JENIS_CUTI,
         ...Object.keys(groups).filter((j) => !URUTAN_JENIS_CUTI.includes(j)),
@@ -366,18 +391,26 @@ const openModal = (day) => {
         selectedDateData.value = {
             date: day.dateString,
             holiday: holidayName,
-            list: [...listCuti].sort((a, b) =>
-                (a.pegawai?.nama || "").localeCompare(
+            // Milik sendiri paling atas, sisanya urut nama
+            list: [...listCuti].sort((a, b) => {
+                const selisihMilik =
+                    Number(isMilikSaya(b)) - Number(isMilikSaya(a));
+                if (selisihMilik !== 0) return selisihMilik;
+                return (a.pegawai?.nama || "").localeCompare(
                     b.pegawai?.nama || "",
                     "id",
-                ),
-            ),
+                );
+            }),
         };
-        // Fokus otomatis ke kotak pencarian saat modal terbuka, supaya user
-        // bisa langsung ketik tanpa perlu klik dulu (hanya berguna kalau
-        // daftarnya cukup panjang, tapi tidak mengganggu kalau sedikit).
+        // Fokus otomatis hanya di layar lebar, supaya keyboard HP
+        // tidak langsung menutupi daftar.
         nextTick(() => {
-            searchInputRef.value?.focus();
+            if (
+                typeof window !== "undefined" &&
+                window.matchMedia("(min-width: 640px)").matches
+            ) {
+                searchInputRef.value?.focus();
+            }
         });
     }
 };
@@ -400,10 +433,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 <template>
     <Head title="Jadwal Cuti Tim" />
     <MainLayout>
-        <div class="max-w-7xl mx-auto space-y-6 pb-12">
+        <div class="max-w-7xl mx-auto space-y-4 sm:space-y-6 pb-12">
             <!-- HEADER SECTION -->
             <div
-                class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-5"
+                class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 sm:gap-5"
             >
                 <div>
                     <h1
@@ -414,15 +447,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                     <p class="text-slate-500 mt-1 text-sm">
                         Pantau kalender kehadiran dan jadwal cuti anggota tim Anda.
                     </p>
-                    <!-- BADGE INFO KHUSUS L1: tidak ada dropdown filter untuk
-                         level ini, jadi ditampilkan info tim yang sedang
-                         dilihat supaya tetap jelas bagi user -->
+                    <!-- BADGE INFO KHUSUS L1 -->
                     <div
                         v-if="showBadgeTimL1"
                         class="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-green-700 text-xs font-semibold"
                     >
                         <svg
-                            class="w-3.5 h-3.5"
+                            class="w-3.5 h-3.5 shrink-0"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -434,25 +465,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                 d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8zm6 3c0-2.21-3.582-4-8-4s-8 1.79-8 4"
                             ></path>
                         </svg>
-                        Menampilkan tim Anda: {{ userTimKerja }}
+                        <span>Menampilkan tim Anda: {{ userTimKerja }}</span>
                     </div>
                 </div>
 
                 <!-- TOOLBAR AKSI (Filter & Navigasi Bulan) -->
                 <div class="flex flex-col sm:flex-row items-center gap-3">
-                    <!-- Filter Dropdown - hanya tampil untuk L2, L3, L4.
-                         L1 & Staff tidak butuh dropdown filter. -->
                     <div class="relative w-full sm:w-auto" v-if="showFilterDropdown">
                         <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <!-- Ikon Filter/Corong -->
                             <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"></path>
                             </svg>
                         </div>
                         <select
+                            id="filter-kalender-tim"
+                            name="kelompok"
+                            aria-label="Filter tim atau kelompok pada kalender"
                             v-model="selectedFilter"
                             @change="applyFilter"
-                            class="appearance-none pl-9 pr-10 py-2.5 w-full sm:min-w-[240px] bg-white border border-slate-200 rounded-xl shadow-sm text-sm font-medium text-slate-700 hover:border-slate-300 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-colors cursor-pointer"
+                            class="appearance-none min-h-[44px] pl-9 pr-10 py-2.5 w-full sm:min-w-[240px] bg-white border border-slate-200 rounded-xl shadow-sm text-base sm:text-sm font-medium text-slate-700 hover:border-slate-300 focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-colors cursor-pointer"
                         >
                             <option :value="filterAllLabel">{{ filterAllLabel }}</option>
                             <option
@@ -463,7 +494,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                 {{ opsi }}
                             </option>
                         </select>
-                        <!-- Panah Dropdown Custom agar terlihat konsisten di semua browser -->
                         <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
                             <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
@@ -479,6 +509,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                             type="button"
                             @click.prevent="prevMonth"
                             class="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 transition cursor-pointer"
+                            aria-label="Bulan sebelumnya"
                         >
                             <svg
                                 class="w-5 h-5"
@@ -502,6 +533,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                             type="button"
                             @click.prevent="nextMonth"
                             class="p-1.5 hover:bg-slate-100 rounded-lg text-slate-600 transition cursor-pointer"
+                            aria-label="Bulan berikutnya"
                         >
                             <svg
                                 class="w-5 h-5"
@@ -525,26 +557,48 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
             <div
                 class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden"
             >
+                <!-- Nama hari: singkat di HP, lengkap di layar >= sm -->
                 <div
-                    class="grid grid-cols-7 bg-slate-50 border-b border-slate-200 text-center text-xs font-bold text-slate-600 py-3 uppercase tracking-wider"
+                    class="grid grid-cols-7 bg-slate-50 border-b border-slate-200 text-center text-[10px] sm:text-xs font-bold text-slate-600 py-2 sm:py-3 uppercase tracking-normal sm:tracking-wider"
                 >
-                    <span>Senin</span>
-                    <span>Selasa</span>
-                    <span>Rabu</span>
-                    <span>Kamis</span>
-                    <span>Jumat</span>
-                    <span class="text-red-500">Sabtu</span>
-                    <span class="text-red-500">Minggu</span>
+                    <span>
+                        <span class="sm:hidden">Sen</span
+                        ><span class="hidden sm:inline">Senin</span>
+                    </span>
+                    <span>
+                        <span class="sm:hidden">Sel</span
+                        ><span class="hidden sm:inline">Selasa</span>
+                    </span>
+                    <span>
+                        <span class="sm:hidden">Rab</span
+                        ><span class="hidden sm:inline">Rabu</span>
+                    </span>
+                    <span>
+                        <span class="sm:hidden">Kam</span
+                        ><span class="hidden sm:inline">Kamis</span>
+                    </span>
+                    <span>
+                        <span class="sm:hidden">Jum</span
+                        ><span class="hidden sm:inline">Jumat</span>
+                    </span>
+                    <span class="text-red-500">
+                        <span class="sm:hidden">Sab</span
+                        ><span class="hidden sm:inline">Sabtu</span>
+                    </span>
+                    <span class="text-red-500">
+                        <span class="sm:hidden">Min</span
+                        ><span class="hidden sm:inline">Minggu</span>
+                    </span>
                 </div>
                 <div class="grid grid-cols-7 auto-rows-fr bg-slate-200 gap-px">
                     <div
                         v-for="(day, index) in calendarDays"
                         :key="index"
-                        class="bg-white min-h-[120px] p-2 flex flex-col justify-between transition"
+                        class="bg-white min-h-[60px] sm:min-h-[100px] lg:min-h-[120px] p-1 sm:p-2 flex flex-col justify-between transition"
                         :class="{
                             'bg-slate-50/50 text-slate-300':
                                 !day.isCurrentMonth,
-                            'cursor-pointer hover:bg-slate-50':
+                            'cursor-pointer hover:bg-slate-50 active:bg-slate-100':
                                 day.isCurrentMonth &&
                                 (getCutiOnDate(day.dateString).length > 0 ||
                                     getHolidayName(day.dateString)),
@@ -557,7 +611,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                 v-if="day.dayNum"
                             >
                                 <span
-                                    class="text-xs font-semibold px-2 py-0.5 rounded-md"
+                                    class="text-[11px] sm:text-xs font-semibold px-1.5 sm:px-2 py-0.5 rounded-md"
                                     :class="{
                                         'text-slate-700':
                                             day.isCurrentMonth &&
@@ -573,27 +627,55 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                         day.isCurrentMonth &&
                                         getCutiOnDate(day.dateString).length > 0
                                     "
-                                    class="text-[10px] bg-green-100 text-green-700 font-bold px-1.5 py-0.5 rounded-full"
+                                    class="hidden sm:inline-block text-[10px] bg-green-100 text-green-700 font-bold px-1.5 py-0.5 rounded-full"
                                 >
                                     {{ getCutiOnDate(day.dateString).length }}
                                     cuti
                                 </span>
                             </div>
+                            <!-- Label hari libur: disembunyikan di HP
+                                 (angka merah sudah menandakan libur,
+                                 nama libur ada di pop up) -->
                             <div
                                 v-if="getHolidayName(day.dateString)"
-                                class="text-[10px] bg-red-50 text-red-600 border border-red-100 font-semibold px-1.5 py-0.5 rounded mt-1 truncate"
+                                class="hidden sm:block text-[10px] bg-red-50 text-red-600 border border-red-100 font-semibold px-1.5 py-0.5 rounded mt-1 truncate"
                                 :title="getHolidayName(day.dateString)"
                             >
                                 🎉 {{ getHolidayName(day.dateString) }}
                             </div>
                         </div>
 
-                        <!-- OPSI D: hanya tampilkan beberapa nama teratas
-                             (MAX_NAMA_DI_GRID), sisanya diringkas jadi badge
-                             "+X lainnya" supaya kotak tidak meluber saat
-                             banyak pegawai cuti dalam satu hari -->
+                        <!-- INDIKATOR TITIK (HP & tablet): detail ada di pop up -->
                         <div
-                            class="space-y-1 mt-1"
+                            v-if="
+                                day.isCurrentMonth &&
+                                getCutiOnDate(day.dateString).length > 0
+                            "
+                            class="lg:hidden flex flex-wrap items-center gap-0.5 sm:gap-1 mt-1 px-0.5"
+                        >
+                            <span
+                                v-for="cuti in getCutiTitikDiGrid(day.dateString)"
+                                :key="cuti.id"
+                                class="w-2 h-2 rounded-full shrink-0"
+                                :class="[
+                                    getCutiColor(cuti).dot,
+                                    isMilikSaya(cuti)
+                                        ? 'ring-2 ring-green-600 ring-offset-1'
+                                        : '',
+                                ]"
+                            ></span>
+                            <span
+                                v-if="getSisaTitikDiGrid(day.dateString) > 0"
+                                class="text-[9px] font-bold text-slate-500 leading-none"
+                                >+{{ getSisaTitikDiGrid(day.dateString) }}</span
+                            >
+                        </div>
+
+                        <!-- OPSI D (DESKTOP): hanya beberapa nama teratas, sisanya
+                             "+X lainnya". Entri milik sendiri selalu di atas,
+                             bertanda "(Anda)" + ring hijau. -->
+                        <div
+                            class="hidden lg:block space-y-1 mt-1"
                             v-if="day.isCurrentMonth"
                         >
                             <template
@@ -602,8 +684,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                             >
                                 <div
                                     class="border text-[11px] font-medium px-2 py-1 rounded-md truncate shadow-sm flex items-center gap-1"
-                                    :class="getCutiColor(cuti).container"
-                                    :title="`${cuti.pegawai?.nama || 'Pegawai'} - ${getJenisCuti(cuti)}`"
+                                    :class="[
+                                        getCutiColor(cuti).container,
+                                        ...getChipExtraClass(cuti),
+                                    ]"
+                                    :title="`${cuti.pegawai?.nama || 'Pegawai'}${isMilikSaya(cuti) ? ' (Anda)' : ''} - ${getJenisCuti(cuti)}`"
                                 >
                                     <span
                                         class="w-1.5 h-1.5 rounded-full shrink-0"
@@ -611,6 +696,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                     ></span>
                                     <span class="truncate">
                                         {{ cuti.pegawai?.nama || "Pegawai" }}
+                                        <span
+                                            v-if="isMilikSaya(cuti)"
+                                            class="font-bold"
+                                            >(Anda)</span
+                                        >
                                         <span class="font-bold"
                                             >({{ getJenisCuti(cuti) }})</span
                                         >
@@ -630,8 +720,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                 </div>
             </div>
 
+            <!-- Petunjuk untuk HP -->
+            <p class="lg:hidden text-center text-xs text-slate-400 -mt-1">
+                Ketuk tanggal bertanda titik untuk melihat siapa saja yang
+                cuti.
+            </p>
+
             <div
-                class="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[11px] font-semibold text-slate-600"
+                class="flex flex-wrap items-center justify-center gap-x-4 sm:gap-x-5 gap-y-2 text-[11px] font-semibold text-slate-600"
             >
                 <div class="flex items-center gap-1.5">
                     <span class="w-2.5 h-2.5 rounded-sm bg-green-500"></span>
@@ -649,6 +745,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                     <span class="w-2.5 h-2.5 rounded-sm bg-amber-500"></span>
                     Cuti Alasan Penting
                 </div>
+                <!-- Keterangan penanda cuti milik sendiri -->
+                <div class="flex items-center gap-1.5">
+                    <span
+                        class="w-4 h-2.5 rounded-sm bg-white ring-2 ring-green-500"
+                    ></span>
+                    Cuti Anda
+                </div>
             </div>
         </div>
     </MainLayout>
@@ -662,13 +765,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
             leave-from-class="opacity-100"
             leave-to-class="opacity-0"
         >
+            <!-- HP: tampil sebagai bottom sheet. Layar >= sm: modal di tengah. -->
             <div
                 v-if="selectedDateData"
-                class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4"
+                class="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-slate-900/50 backdrop-blur-sm p-0 sm:p-4"
                 @click.self="closeModal"
             >
                 <div
-                    class="bg-white w-full max-w-md rounded-2xl shadow-2xl ring-1 ring-slate-900/5 overflow-hidden flex flex-col max-h-[85vh]"
+                    class="bg-white w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl shadow-2xl ring-1 ring-slate-900/5 overflow-hidden flex flex-col max-h-[85vh]"
                     role="dialog"
                     aria-modal="true"
                 >
@@ -692,7 +796,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                 class="text-xs text-slate-500 mt-0.5"
                             >
                                 {{ selectedDateData.list.length }} pegawai
-                                sedang cuti
+                                cuti
                             </p>
                         </div>
                         <button
@@ -700,6 +804,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                             @click.prevent="closeModal"
                             class="shrink-0 text-slate-400 hover:text-slate-700 hover:bg-slate-100 p-1.5 rounded-lg cursor-pointer transition"
                             title="Tutup (Esc)"
+                            aria-label="Tutup"
                         >
                             <svg
                                 class="w-5 h-5"
@@ -717,9 +822,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                         </button>
                     </div>
 
-                    <!-- OPSI A: KOTAK PENCARIAN NAMA -->
-                    <!-- Hanya ditampilkan kalau daftar cukup panjang (>5 orang),
-                         supaya tidak mengganggu tampilan saat cuma 1-2 orang -->
+                    <!-- OPSI A: KOTAK PENCARIAN NAMA (hanya jika >5 orang) -->
                     <div
                         v-if="selectedDateData.list.length > 5"
                         class="shrink-0 px-5 pt-3"
@@ -734,8 +837,11 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                 ref="searchInputRef"
                                 v-model="searchModal"
                                 type="text"
+                                name="cari_pegawai"
+                                id="cari_pegawai"
+                                aria-label="Cari nama pegawai"
                                 placeholder="Cari nama pegawai..."
-                                class="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-colors"
+                                class="w-full pl-9 pr-3 py-2 text-base sm:text-sm bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:border-green-500 focus:ring-1 focus:ring-green-500 transition-colors"
                             />
                         </div>
                     </div>
@@ -778,12 +884,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                             Tidak ada pegawai dengan nama tersebut.
                         </p>
 
-                        <!-- OPSI B: DAFTAR PEGAWAI CUTI, DIKELOMPOKKAN PER
-                             JENIS CUTI. Setiap grup punya sub-header kecil
-                             berwarna (sesuai warna badge jenis cutinya) +
-                             jumlah orang di grup tsb, supaya atasan bisa
-                             cepat scan jenis cuti tertentu tanpa membaca
-                             satu-satu dari daftar campur. -->
+                        <!-- OPSI B: DAFTAR PEGAWAI CUTI PER JENIS CUTI -->
                         <div v-if="groupedModalList.length > 0" class="space-y-4">
                             <div
                                 v-for="grup in groupedModalList"
@@ -804,7 +905,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                         <!-- Avatar: foto_profil jika ada, fallback ke inisial -->
                                         <div
                                             class="w-9 h-9 rounded-full text-white text-xs font-bold flex items-center justify-center shrink-0 overflow-hidden"
-                                            :class="getCutiColor(item).dot"
+                                            :class="[
+                                                getCutiColor(item).dot,
+                                                isMilikSaya(item)
+                                                    ? 'ring-2 ring-green-500 ring-offset-2'
+                                                    : '',
+                                            ]"
                                         >
                                             <img
                                                 v-if="item.pegawai?.foto_profil"
@@ -823,25 +929,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                                                     :title="item.pegawai?.nama"
                                                 >
                                                     {{ item.pegawai?.nama || "Pegawai" }}
-                                                </p>
-                                                <span
-                                                    class="shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded"
-                                                >
-                                                    <svg
-                                                        class="w-3 h-3"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        viewBox="0 0 24 24"
+                                                    <span
+                                                        v-if="isMilikSaya(item)"
+                                                        class="text-green-600 font-bold"
+                                                        >(Anda)</span
                                                     >
-                                                        <path
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                            stroke-width="3"
-                                                            d="M5 13l4 4L19 7"
-                                                        ></path>
-                                                    </svg>
-                                                    Disetujui
-                                                </span>
+                                                </p>
                                             </div>
                                             <div
                                                 class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1"
@@ -872,7 +965,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
                         <button
                             type="button"
                             @click.prevent="closeModal"
-                            class="px-4 py-1.5 bg-slate-800 text-white rounded-lg text-sm font-semibold hover:bg-slate-900 transition cursor-pointer shadow-sm"
+                            class="w-full sm:w-auto px-4 py-2 sm:py-1.5 bg-slate-800 text-white rounded-lg text-sm font-semibold hover:bg-slate-900 transition cursor-pointer shadow-sm"
                         >
                             Tutup
                         </button>

@@ -2,80 +2,6 @@
 import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, router } from "@inertiajs/vue3";
 import { ref, watch, computed } from "vue";
-
-
-// ================= PETA KELOMPOK PEGAWAI =================
-// Sama seperti di halaman Approval Cuti: peta NIP → kelompok/subbagian.
-// Kepala Biro tidak masuk kelompok mana pun; ia hanya tampil di "Semua
-// Kelompok". Pegawai baru / pindah kelompok: cukup tambah atau pindahkan
-// NIP di sini. `label` = nama lengkap (untuk chip), `singkat` = isi dropdown.
-const DAFTAR_KELOMPOK = [
-    { value: "tata_usaha", label: "Subbagian Tata Usaha", singkat: "Subbagian Tata Usaha" },
-    { value: "kebijakan", label: "Kebijakan Pembangunan Pertanian", singkat: "Kebijakan Pertanian" },
-    { value: "program_anggaran", label: "Program dan Anggaran Pembangunan Pertanian", singkat: "Program dan Anggaran" },
-    { value: "kawasan", label: "Pengembangan Kawasan Pertanian", singkat: "Pengembangan Kawasan" },
-    { value: "pemantauan", label: "Pemantauan, Evaluasi dan Pelaporan", singkat: "Pemantauan & Evaluasi" },
-];
-
-
-const NIP_PER_KELOMPOK = {
-    tata_usaha: [
-        "197909182006041018", "198906012019022002", "197207191995031002",
-        "197303112002122002", "199906262025052004", "198001292003121001",
-        "198710102015031001", "200101082025052004", "198510292025211032",
-        "197612062006041021", "198111132025211037", "198502142025211043",
-        "199412182018012001", "196907201998031001", "198611112019022001",
-        "196907042007011001", "198302072002122002", "198806042011012020",
-        "198804092025212047", "197902132009011004", "198510112025212037",
-    ],
-    kebijakan: [
-        "196109291986031003", "197810152009121003", "198109292009011006",
-        "198606252011012014", "199203212025051001", "196912181996021001",
-        "197804152002122002", "199108082018012001", "199204022025051004",
-        "197206082025212011", "196904051999031001", "197011181998032001",
-        "198306182009122004", "198306302009122004", "198701062009121006",
-        "198302102009121003",
-    ],
-    program_anggaran: [
-        "198405122011011008", "198904132018011001", "198302282009121003",
-        "198307032018012001", "197807072025211042", "198301282018012001",
-        "198608082011011023", "198408222009012007", "197901032025212018",
-        "197401101997031002", "199909302022081001", "199210122015031004",
-        "198010202005012001", "198810222025211050", "199502202025052002",
-        "199401312020121004",
-    ],
-    kawasan: [
-        "198103262011011001", "198606152011012023", "198111072011011007",
-        "198312012015031001", "197112071994032005", "198106202025212032",
-        "197705202009121001", "196901121989032001", "199309152025051002",
-        "198904282020122003", "199010102025051001", "198603282005012002",
-        "196707151994032002",
-    ],
-    pemantauan: [
-        "198404292018012001", "197602022009121003", "198208022011011014",
-        "197807072025211043", "198012222002121001", "197712012005012001",
-        "199111122025212058", "198302012011012013", "198411242009121002",
-        "196809101994031003", "198607132011012019", "197205152025212019",
-        "197207011998032001", "196907111997032001", "198402192011012015",
-        "198005062011011009", "199804172025052002", "198602182009011005",
-    ],
-};
-
-
-const normalisasiNip = (nip) => String(nip ?? "").replace(/\D/g, "");
-
-
-const kelompokPerNip = new Map();
-Object.entries(NIP_PER_KELOMPOK).forEach(([kunci, daftarNip]) => {
-    daftarNip.forEach((nip) => kelompokPerNip.set(nip, kunci));
-});
-
-
-const kelompokDariNip = (nip) =>
-    kelompokPerNip.get(normalisasiNip(nip)) ?? null;
-// ================= END PETA KELOMPOK PEGAWAI =================
-
-
 // Debounce lokal (tidak butuh lodash)
 function debounce(fn, delay) {
     let timeoutId;
@@ -84,10 +10,14 @@ function debounce(fn, delay) {
         timeoutId = setTimeout(() => fn(...args), delay);
     };
 }
-
-
 const props = defineProps({
     daftarCuti: {
+        type: Array,
+        default: () => [],
+    },
+    // Daftar nama kelompok substansi (array string) dari controller,
+    // sama seperti halaman Monitoring Cuti.
+    daftarKelompokSubstansi: {
         type: Array,
         default: () => [],
     },
@@ -96,8 +26,6 @@ const props = defineProps({
         default: () => ({}),
     },
 });
-
-
 const formatDate = (dateString) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -107,10 +35,7 @@ const formatDate = (dateString) => {
         year: "numeric",
     }).format(date);
 };
-
-
-// Kamus label status lengkap, dipakai untuk teks deskriptif di bawah badge
-// (sama filosofinya dengan statusLabels di halaman Approval Cuti).
+// Kamus label status lengkap, dipakai untuk teks deskriptif.
 const statusLabels = {
     menunggu_l1: "Menunggu Ketua Tim Kerja",
     menunggu_l2: "Menunggu Ketua Kelompok Substansi",
@@ -121,17 +46,12 @@ const statusLabels = {
     dibatalkan_reguler: "Dibatalkan",
     dibatalkan_ditangguhkan: "Ditangguhkan",
 };
-
-
 const formatStatus = (status) => {
     if (!status) return "-";
     if (statusLabels[status]) return statusLabels[status];
     return status.replace(/_/g, " ").toUpperCase();
 };
-
-
-// Label singkat untuk badge (gaya sama dengan getStatusBadgeLabelSingkat di
-// halaman Approval Cuti).
+// Label singkat untuk badge.
 const STATUS_BADGE_SINGKAT = {
     menunggu_l1: "MENUNGGU L1",
     menunggu_l2: "MENUNGGU L2",
@@ -142,37 +62,23 @@ const STATUS_BADGE_SINGKAT = {
     dibatalkan_reguler: "DIBATALKAN",
     dibatalkan_ditangguhkan: "DITANGGUHKAN",
 };
-
-
 const formatStatusBadge = (status) => {
     if (!status) return "-";
     return (
         STATUS_BADGE_SINGKAT[status] || status.replace(/_/g, " ").toUpperCase()
     );
 };
-
-
-// ---> PERBAIKAN <---
-// Aturan terbaru: L4 boleh menangguhkan cuti di SEMUA status proses
-// approval (menunggu_l1/l2/l3/l4) maupun yang sudah disetujui penuh.
-// Penangguhan HANYA tidak diperbolehkan untuk status berikut. Daftar ini
-// harus konsisten dengan STATUS_TIDAK_BISA_DITANGGUHKAN di
-// PembatalanController.php (backend tetap jadi sumber kebenaran utama;
-// daftar ini di frontend murni untuk UX, bukan satu-satunya lapisan
-// keamanan).
+// Penangguhan HANYA tidak diperbolehkan untuk status berikut. Harus
+// konsisten dengan STATUS_TIDAK_BISA_DITANGGUHKAN di PembatalanController.php
+// (backend tetap sumber kebenaran utama; ini murni untuk UX).
 const STATUS_TIDAK_BISA_DITANGGUHKAN = [
     "ditolak",
     "dibatalkan_reguler",
     "dibatalkan_ditangguhkan",
 ];
-
-
 const bisaDitangguhkan = (status) =>
     !STATUS_TIDAK_BISA_DITANGGUHKAN.includes(status);
-
-
-// Kelas warna badge status. Palet diselaraskan dengan halaman Approval Cuti
-// (emerald/amber/rose/gray) supaya kedua halaman terasa satu sistem visual.
+// Kelas warna badge status (emerald/amber/rose/gray).
 const statusBadgeClass = (status) => {
     if (status === "disetujui") {
         return "bg-emerald-100 text-emerald-800 border-emerald-300";
@@ -186,8 +92,6 @@ const statusBadgeClass = (status) => {
     // menunggu_l1 / menunggu_l2 / menunggu_l3 / menunggu_l4
     return "bg-amber-100 text-amber-800 border-amber-300";
 };
-
-
 const getDurasi = (item) => {
     if (item?.jumlah_hari && item.jumlah_hari > 0) return item.jumlah_hari;
     if (!item?.tanggal_mulai || !item?.tanggal_selesai) return 1;
@@ -196,78 +100,131 @@ const getDurasi = (item) => {
     const selisih = Math.ceil((selesai - mulai) / (1000 * 60 * 60 * 24)) + 1;
     return selisih > 0 ? selisih : 1;
 };
+// ================= NOMOR TELEPON (PERBAIKAN) =================
+const getNomorTelepon = (item) => {
+    if (!item) return "-";
+    return (
+        item.no_telp ??
+        item.no_telepon ??
+        item.telepon ??
+        item.phone ??
+        item.pegawai?.no_telepon ??
+        item.pegawai?.telepon ??
+        item.pegawai?.no_hp ??
+        item.pegawai?.phone ??
+        "-"
+    );
+};
+// ================= END NOMOR TELEPON =================
 
 
+// ===================== FITUR PAGINATION =====================
+const currentPage = ref(1);
+const itemsPerPage = 10;
+const totalData = computed(() => props.daftarCuti.length);
+const totalPages = computed(
+    () => Math.ceil(totalData.value / itemsPerPage) || 1,
+);
+const paginatedData = computed(() => {
+    const start = (currentPage.value - 1) * itemsPerPage;
+    const end = start + itemsPerPage;
+    return props.daftarCuti.slice(start, end);
+});
+const displayedFrom = computed(() =>
+    totalData.value === 0 ? 0 : (currentPage.value - 1) * itemsPerPage + 1,
+);
+const displayedTo = computed(() =>
+    Math.min(currentPage.value * itemsPerPage, totalData.value),
+);
+const prevPage = () => {
+    if (currentPage.value > 1) currentPage.value--;
+};
+const nextPage = () => {
+    if (currentPage.value < totalPages.value) currentPage.value++;
+};
+const setPage = (page) => {
+    currentPage.value = page;
+};
+const pageNumbers = computed(() => {
+    const total = totalPages.value;
+    const current = currentPage.value;
+    const maxVisible = 7;
+    const pages = [];
+    if (total <= maxVisible) {
+        for (let i = 1; i <= total; i++) pages.push(i);
+    } else {
+        if (current <= 4) {
+            pages.push(1, 2, 3, 4, 5, "...", total);
+        } else if (current >= total - 3) {
+            pages.push(
+                1,
+                "...",
+                total - 4,
+                total - 3,
+                total - 2,
+                total - 1,
+                total,
+            );
+        } else {
+            pages.push(
+                1,
+                "...",
+                current - 1,
+                current,
+                current + 1,
+                "...",
+                total,
+            );
+        }
+    }
+    return pages;
+});
+// ===================== END FITUR PAGINATION =====================
 // ===================== FITUR SEARCH & FILTER =====================
 const search = ref(props.filters?.search || "");
-// Filter Kelompok: menyaring pengajuan berdasarkan kelompok/subbagian
-// pegawai (peta NIP → kelompok ada di blok PETA KELOMPOK PEGAWAI di atas).
-const kelompok = ref(props.filters?.kelompok || "");
-
-
+const kelompok = ref(props.filters?.kelompok_substansi || "");
 const buildParams = () => {
     const params = { search: search.value };
-    if (kelompok.value) params.kelompok = kelompok.value;
+    if (kelompok.value) params.kelompok_substansi = kelompok.value;
     return params;
 };
-
-
 watch(
     [search, kelompok],
     debounce(() => {
-        router.get(
-            route("atasan.penangguhan"), // sesuaikan nama route jika berbeda
-            buildParams(),
-            {
-                preserveState: true,
-                preserveScroll: true,
-                replace: true,
-            },
-        );
+        currentPage.value = 1;
+        router.get(route("atasan.penangguhan"), buildParams(), {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+        });
     }, 300),
 );
-
-
-// Cadangan di sisi tampilan: baris pada halaman yang sedang dimuat disaring
-// lagi berdasarkan NIP. Kalau backend sudah menyaring lewat ?kelompok=,
-// hasilnya sama saja (aman ditumpuk) — sama seperti di Approval Cuti.
-const daftarCutiTampil = computed(() => {
-    const semua = props.daftarCuti ?? [];
-    if (!kelompok.value) return semua;
-    return semua.filter(
-        (item) => kelompokDariNip(item.pegawai?.nip) === kelompok.value,
-    );
-});
-
-
-const labelKelompokAktif = computed(
-    () => DAFTAR_KELOMPOK.find((k) => k.value === kelompok.value)?.label ?? "",
-);
-
-
 const adaFilterAktif = computed(() => !!search.value || !!kelompok.value);
-
-
 const resetFilter = () => {
     search.value = "";
     kelompok.value = "";
 };
 // ===================== END FITUR SEARCH & FILTER =====================
-
-
-// --- STATE UNTUK MODAL PENANGGUHAN CUTI (fitur asli, dipertahankan) ---
+// ===================== FITUR NOTIFIKASI TOAST =====================
+const toast = ref({
+    show: false,
+    message: "",
+});
+const showToast = (message) => {
+    toast.value.message = message;
+    toast.value.show = true;
+    setTimeout(() => {
+        toast.value.show = false;
+    }, 4000);
+};
+// ===================== END FITUR NOTIFIKASI TOAST =====================
 const suspendData = ref({
     show: false,
     id: null,
     namaPegawai: "",
     alasan: "",
 });
-
-
-// Error validasi inline (menggantikan alert() browser)
 const suspendError = ref("");
-
-
 const openSuspendModal = (id, nama) => {
     suspendData.value.id = id;
     suspendData.value.namaPegawai = nama;
@@ -275,25 +232,17 @@ const openSuspendModal = (id, nama) => {
     suspendError.value = "";
     suspendData.value.show = true;
 };
-
-
 const closeSuspendModal = () => {
     suspendData.value.show = false;
     suspendError.value = "";
 };
-
-
 const submitSuspend = () => {
-    // Validasi tanpa alert() browser — tampilkan error di dalam modal
     if (!suspendData.value.alasan.trim()) {
         suspendError.value = "Mohon isi alasan penangguhan terlebih dahulu.";
         return;
     }
-
-
     suspendError.value = "";
-
-
+    const namaPegawaiDisuspend = suspendData.value.namaPegawai;
     router.post(
         route("atasan.penangguhan.process", suspendData.value.id),
         {
@@ -302,39 +251,29 @@ const submitSuspend = () => {
         {
             preserveScroll: true,
             onSuccess: () => {
-                // Auto-close popup setelah aksi sukses
                 closeSuspendModal();
                 closeDetailModal();
+                showToast(
+                    `Berhasil: Cuti atas nama ${namaPegawaiDisuspend} telah ditangguhkan.`,
+                );
             },
         },
     );
 };
-
-
-// --- MODAL DETAIL (baru, mengikuti gaya Modal Detail di Approval Cuti) ---
 const detailModal = ref({ show: false, data: null });
-
-
 const bukaDetailModal = (item) => {
     detailModal.value.data = item;
     detailModal.value.show = true;
 };
-
-
 const closeDetailModal = () => {
     detailModal.value.show = false;
     detailModal.value.data = null;
 };
-
-
-// Membuka modal tangguhkan langsung dari dalam modal detail
 const detailModalTangguhkan = () => {
     if (!detailModal.value.data) return;
     const { id, pegawai } = detailModal.value.data;
     openSuspendModal(id, pegawai?.nama);
 };
-
-
 const bisaDitangguhkanDetail = computed(() =>
     bisaDitangguhkan(detailModal.value.data?.status),
 );
@@ -343,8 +282,6 @@ const bisaDitangguhkanDetail = computed(() =>
 
 <template>
     <Head title="Penangguhan Cuti" />
-
-
     <MainLayout>
         <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg p-6">
             <div class="mb-6">
@@ -364,8 +301,6 @@ const bisaDitangguhkanDetail = computed(() =>
                     akan dikembalikan secara otomatis.
                 </p>
             </div>
-
-
             <div
                 class="flex flex-col sm:flex-row sm:flex-wrap items-center gap-3 mb-6"
             >
@@ -388,37 +323,56 @@ const bisaDitangguhkanDetail = computed(() =>
                         </svg>
                     </div>
                     <input
+                        id="cari-pengajuan-pembatalan"
+                        name="cari_pengajuan"
                         v-model="search"
                         type="text"
+                        aria-label="Cari nama atau NIP pegawai"
                         placeholder="Cari nama, NIP..."
-                        class="pl-10 border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-sm w-full"
+                        class="min-h-[44px] pl-10 border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm w-full"
                     />
                 </div>
-
-
-                <select
-                    v-model="kelompok"
-                    class="border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-sm text-gray-600 w-full sm:w-auto shrink-0"
-                >
-                    <option value="">Semua Kelompok</option>
-                    <option
-                        v-for="k in DAFTAR_KELOMPOK"
-                        :key="k.value"
-                        :value="k.value"
-                        :title="k.label"
+                <div class="relative w-full sm:w-auto">
+                    <div
+                        class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
                     >
-                        {{ k.singkat }}
-                    </option>
-                </select>
+                        <svg
+                            class="h-4 w-4 text-gray-400"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke="currentColor"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M3 4a1 1 0 011-1h16a1 1 0 01.8 1.6l-6.3 8.4v5.5a1 1 0 01-.45.83l-4 2.67A1 1 0 019 21v-8l-6.3-8.4A1 1 0 013 4z"
+                            />
+                        </svg>
+                    </div>
+                    <select
+                        id="filter-kelompok-pembatalan"
+                        name="kelompok"
+                        v-model="kelompok"
+                        aria-label="Filter kelompok substansi"
+                        class="min-h-[44px] pl-9 pr-8 border-gray-300 focus:border-green-500 focus:ring-green-500 rounded-lg text-base sm:text-sm text-gray-600 w-full sm:w-auto"
+                    >
+                        <option value="">Semua Kelompok</option>
+                        <option
+                            v-for="k in daftarKelompokSubstansi"
+                            :key="k"
+                            :value="k"
+                        >
+                            {{ k }}
+                        </option>
+                    </select>
+                </div>
             </div>
-
-
-            <!-- Penanda filter kelompok yang sedang aktif -->
             <div v-if="kelompok" class="flex items-center gap-2 mb-4 text-xs">
                 <span
                     class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 font-semibold"
                 >
-                    {{ labelKelompokAktif }}
+                    {{ kelompok }}
                     <button
                         type="button"
                         @click="kelompok = ''"
@@ -429,14 +383,13 @@ const bisaDitangguhkanDetail = computed(() =>
                     </button>
                 </span>
                 <span class="text-gray-500"
-                    >{{ daftarCutiTampil.length }} pengajuan pada halaman
-                    ini</span
+                    >{{ daftarCuti.length }} pengajuan</span
                 >
             </div>
-
-
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-gray-200">
+            <div class="hidden overflow-x-auto md:block">
+                <table
+                    class="min-w-full divide-y divide-gray-200 border-b border-gray-200"
+                >
                     <thead class="bg-gray-50">
                         <tr>
                             <th
@@ -471,12 +424,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             </th>
                             <th
                                 scope="col"
-                                class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
-                            >
-                                Alasan Cuti
-                            </th>
-                            <th
-                                scope="col"
                                 class="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider"
                             >
                                 Aksi
@@ -485,7 +432,7 @@ const bisaDitangguhkanDetail = computed(() =>
                     </thead>
                     <tbody class="bg-white divide-y divide-gray-200">
                         <tr
-                            v-for="item in daftarCutiTampil"
+                            v-for="item in paginatedData"
                             :key="item.id"
                             class="hover:bg-gray-50"
                         >
@@ -499,26 +446,8 @@ const bisaDitangguhkanDetail = computed(() =>
                                     <span v-if="item.pegawai?.jabatan">
                                         {{ item.pegawai?.jabatan }}
                                     </span>
-                                    <template
-                                        v-if="item.pegawai?.biro || item.unit"
-                                    >
-                                        <span
-                                            v-if="item.pegawai?.jabatan"
-                                            class="text-gray-300"
-                                            >•</span
-                                        >
-                                        <span
-                                            class="text-[11px] text-gray-500 bg-gray-100 px-2 py-0.5 rounded-md"
-                                        >
-                                            {{
-                                                item.pegawai?.biro || item.unit
-                                            }}
-                                        </span>
-                                    </template>
                                 </div>
                             </td>
-
-
                             <td
                                 class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"
                             >
@@ -528,8 +457,6 @@ const bisaDitangguhkanDetail = computed(() =>
                                     {{ item.jenis_cuti || "-" }}
                                 </span>
                             </td>
-
-
                             <td
                                 class="px-6 py-4 whitespace-nowrap text-sm text-gray-900"
                             >
@@ -548,12 +475,6 @@ const bisaDitangguhkanDetail = computed(() =>
                                 >
                                     {{ formatStatusBadge(item.status) }}
                                 </span>
-                            </td>
-                            <td
-                                class="px-6 py-4 text-sm text-gray-500 max-w-xs truncate"
-                                :title="item.keterangan || '-'"
-                            >
-                                {{ item.keterangan || "-" }}
                             </td>
                             <td
                                 class="px-6 py-4 whitespace-nowrap text-center text-sm font-medium"
@@ -587,8 +508,6 @@ const bisaDitangguhkanDetail = computed(() =>
                                             />
                                         </svg>
                                     </button>
-
-
                                     <button
                                         v-if="bisaDitangguhkan(item.status)"
                                         type="button"
@@ -625,9 +544,9 @@ const bisaDitangguhkanDetail = computed(() =>
                                 </div>
                             </td>
                         </tr>
-                        <tr v-if="daftarCutiTampil.length === 0">
+                        <tr v-if="paginatedData.length === 0">
                             <td
-                                colspan="7"
+                                colspan="6"
                                 class="px-6 py-8 text-center text-gray-500"
                             >
                                 Tidak ada pengajuan cuti yang bisa ditangguhkan
@@ -645,22 +564,144 @@ const bisaDitangguhkanDetail = computed(() =>
                     </tbody>
                 </table>
             </div>
+            <div class="space-y-3 md:hidden">
+                <article
+                    v-for="item in paginatedData"
+                    :key="item.id"
+                    class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                >
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="min-w-0">
+                            <h3 class="break-words text-sm font-semibold text-gray-900">
+                                {{ item.pegawai?.nama || "-" }}
+                            </h3>
+                            <p v-if="item.pegawai?.jabatan" class="mt-1 break-words text-xs text-gray-500">
+                                {{ item.pegawai.jabatan }}
+                            </p>
+                        </div>
+                        <span
+                            class="shrink-0 rounded-md border px-2 py-1 text-xs font-bold uppercase"
+                            :class="statusBadgeClass(item.status)"
+                        >
+                            {{ formatStatusBadge(item.status) }}
+                        </span>
+                    </div>
+                    <dl class="mt-3 space-y-2 text-sm">
+                        <div class="flex justify-between gap-3">
+                            <dt class="text-gray-500">Jenis cuti</dt>
+                            <dd class="text-right font-medium text-gray-800">{{ item.jenis_cuti || "-" }}</dd>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                            <dt class="text-gray-500">Tanggal</dt>
+                            <dd class="text-right text-gray-800">
+                                {{ formatDate(item.tanggal_mulai) }} s/d {{ formatDate(item.tanggal_selesai) }}
+                            </dd>
+                        </div>
+                        <div class="flex justify-between gap-3">
+                            <dt class="text-gray-500">Durasi</dt>
+                            <dd class="font-medium text-gray-800">{{ getDurasi(item) }} hari</dd>
+                        </div>
+                    </dl>
+                    <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                        <button
+                            type="button"
+                            @click="bukaDetailModal(item)"
+                            class="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700"
+                        >
+                            Lihat detail
+                        </button>
+                        <button
+                            v-if="bisaDitangguhkan(item.status)"
+                            type="button"
+                            @click.prevent="openSuspendModal(item.id, item.pegawai?.nama)"
+                            class="min-h-[44px] rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-700"
+                        >
+                            Tangguhkan
+                        </button>
+                        <span
+                            v-else
+                            class="flex min-h-[44px] items-center justify-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400"
+                            title="Cuti ini sudah ditolak atau sudah dibatalkan/ditangguhkan sebelumnya, tidak dapat ditangguhkan"
+                        >
+                            Tidak bisa ditangguhkan
+                        </span>
+                    </div>
+                </article>
+                <div
+                    v-if="paginatedData.length === 0"
+                    class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
+                >
+                    Tidak ada pengajuan cuti yang bisa ditangguhkan saat ini.
+                </div>
+            </div>
+            <div
+                v-if="totalData > 0"
+                class="flex flex-col sm:flex-row items-center justify-between bg-white px-2 py-4 mt-2 gap-4"
+            >
+                <div class="text-sm text-gray-500">
+                    Menampilkan
+                    <span class="font-medium text-gray-700">{{
+                        displayedFrom
+                    }}</span
+                    >–<span class="font-medium text-gray-700">{{
+                        displayedTo
+                    }}</span>
+                    dari
+                    <span class="font-medium text-gray-700">{{
+                        totalData
+                    }}</span>
+                    data
+                </div>
+                <div>
+                    <nav
+                        class="isolate inline-flex -space-x-px rounded-md shadow-sm"
+                        aria-label="Pagination"
+                    >
+                        <button
+                            @click="prevPage"
+                            :disabled="currentPage === 1"
+                            class="relative inline-flex items-center rounded-l-md px-3 py-2 text-sm font-medium text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed focus:z-20 focus:outline-offset-0 transition-colors"
+                        >
+                            &laquo; Previous
+                        </button>
+                        <button
+                            v-for="(page, index) in pageNumbers"
+                            :key="index"
+                            @click="page !== '...' ? setPage(page) : null"
+                            :class="[
+                                page === currentPage
+                                    ? 'z-10 bg-blue-600 text-white focus-visible:outline-blue-600 font-bold border-blue-600'
+                                    : 'text-gray-700 bg-white hover:bg-gray-50',
+                                page === '...'
+                                    ? 'cursor-default'
+                                    : 'cursor-pointer',
+                                'relative inline-flex items-center px-4 py-2 text-sm font-medium ring-1 ring-inset ring-gray-300 focus:z-20 focus:outline-offset-0 transition-colors',
+                            ]"
+                        >
+                            {{ page }}
+                        </button>
+                        <button
+                            @click="nextPage"
+                            :disabled="currentPage === totalPages"
+                            class="relative inline-flex items-center rounded-r-md px-3 py-2 text-sm font-medium text-gray-500 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed focus:z-20 focus:outline-offset-0 transition-colors"
+                        >
+                            Next &raquo;
+                        </button>
+                    </nav>
+                </div>
+            </div>
         </div>
     </MainLayout>
 
-
-    <!-- MODAL DETAIL: mengikuti struktur & gaya Modal Detail di halaman
-         Approval Cuti, disesuaikan dengan data yang tersedia di halaman
-         Penangguhan Cuti. Field yang datanya belum dikirim backend akan
-         tampil "-" alih-alih error. -->
+    <!-- MODAL DETAIL — disamakan dengan Dashboard / MonitoringCuti -->
     <Teleport to="body">
         <div
             v-if="detailModal.show"
-            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeDetailModal"
         >
             <div
-                class="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden mx-4"
+                class="bg-white rounded-t-2xl shadow-xl w-full max-w-lg max-h-[90dvh] flex flex-col overflow-hidden sm:rounded-2xl"
             >
                 <div
                     class="shrink-0 bg-white flex justify-between items-start gap-3 px-6 py-4 border-b border-gray-100"
@@ -694,8 +735,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             </p>
                         </div>
                     </div>
-
-
                     <span
                         v-if="detailModal.data"
                         class="shrink-0 px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider whitespace-nowrap"
@@ -704,8 +743,6 @@ const bisaDitangguhkanDetail = computed(() =>
                         {{ formatStatusBadge(detailModal.data.status) }}
                     </span>
                 </div>
-
-
                 <div
                     class="flex-1 overflow-y-auto px-6 py-4 space-y-3 text-sm"
                     v-if="detailModal.data"
@@ -720,8 +757,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             {{ detailModal.data.pegawai?.nama || "-" }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             NIP
@@ -730,8 +765,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             {{ detailModal.data.pegawai?.nip || "-" }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Jabatan
@@ -742,22 +775,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             {{ detailModal.data.pegawai?.jabatan || "-" }}
                         </div>
                     </div>
-
-
-                    <div class="grid grid-cols-12 gap-2">
-                        <div class="col-span-4 text-gray-500 font-medium">
-                            Biro / Unit
-                        </div>
-                        <div class="col-span-8 text-slate-800 font-semibold">
-                            {{
-                                detailModal.data.pegawai?.biro ||
-                                detailModal.data.unit ||
-                                "-"
-                            }}
-                        </div>
-                    </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Kelompok Substansi
@@ -770,8 +787,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Jenis Cuti
@@ -781,6 +796,23 @@ const bisaDitangguhkanDetail = computed(() =>
                         </div>
                     </div>
 
+                    <!-- BARU: Anak ke berapa — hanya Cuti Melahirkan -->
+                    <div
+                        v-if="
+                            detailModal.data.jenis_cuti
+                                ?.toLowerCase()
+                                .includes('melahirkan') &&
+                            detailModal.data.anak_ke
+                        "
+                        class="grid grid-cols-12 gap-2"
+                    >
+                        <div class="col-span-4 text-gray-500 font-medium">
+                            Anak ke berapa
+                        </div>
+                        <div class="col-span-8 text-slate-800 font-semibold">
+                            {{ detailModal.data.anak_ke }}
+                        </div>
+                    </div>
 
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
@@ -792,8 +824,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             ({{ getDurasi(detailModal.data) }} Hari)
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Status
@@ -802,8 +832,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             {{ formatStatus(detailModal.data.status) }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Alasan / Keterangan
@@ -814,8 +842,6 @@ const bisaDitangguhkanDetail = computed(() =>
                             {{ detailModal.data.keterangan || "-" }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Alamat
@@ -830,24 +856,14 @@ const bisaDitangguhkanDetail = computed(() =>
                             }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Nomor Telepon
                         </div>
                         <div class="col-span-8 text-slate-800 font-semibold">
-                            {{
-                                detailModal.data.pegawai?.no_telepon ??
-                                detailModal.data.pegawai?.telepon ??
-                                detailModal.data.pegawai?.no_hp ??
-                                detailModal.data.pegawai?.phone ??
-                                "-"
-                            }}
+                            {{ getNomorTelepon(detailModal.data) }}
                         </div>
                     </div>
-
-
                     <div class="grid grid-cols-12 gap-2 items-center">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Lampiran
@@ -897,12 +913,12 @@ const bisaDitangguhkanDetail = computed(() =>
                         </div>
                     </div>
 
-
+                    <!-- Info penangguhan (aksi halaman ini) -->
                     <div
-                        class="rounded-xl p-4 border bg-amber-50 border-amber-200"
+                        class="rounded-xl p-4 border bg-orange-50 border-orange-200"
                     >
                         <h4
-                            class="text-xs font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1.5 text-amber-700"
+                            class="text-xs font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1.5 text-orange-700"
                         >
                             <svg
                                 class="w-4 h-4"
@@ -914,21 +930,19 @@ const bisaDitangguhkanDetail = computed(() =>
                                     stroke-linecap="round"
                                     stroke-linejoin="round"
                                     stroke-width="2"
-                                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
                                 />
                             </svg>
                             Catatan Penangguhan
                         </h4>
-                        <p class="text-sm text-amber-800/90 leading-relaxed">
-                            Menangguhkan cuti ini akan mengembalikan saldo
-                            cuti yang sebelumnya sudah dipotong (jika
-                            statusnya sudah Disetujui), dan menghentikan
-                            proses persetujuan bila masih berjalan (L1-L4).
+                        <p class="text-sm text-orange-800/90 leading-relaxed">
+                            Menangguhkan cuti ini akan mengembalikan saldo cuti
+                            yang sebelumnya sudah dipotong (jika statusnya sudah
+                            Disetujui), dan menghentikan proses persetujuan bila
+                            masih berjalan (L1-L4).
                         </p>
                     </div>
                 </div>
-
-
                 <div
                     class="shrink-0 bg-white border-t border-gray-100 px-6 py-4 flex items-center justify-end gap-3"
                 >
@@ -952,17 +966,15 @@ const bisaDitangguhkanDetail = computed(() =>
         </div>
     </Teleport>
 
-
-    <!-- POP-UP MODAL PENANGGUHAN DENGAN TELEPORT (fitur asli, dipertahankan
-         utuh — hanya dipanggil juga dari tombol di dalam Modal Detail). -->
+    <!-- MODAL PENANGGUHAN -->
     <Teleport to="body">
         <div
             v-if="suspendData.show"
-            class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center bg-slate-900/60 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="closeSuspendModal"
         >
             <div
-                class="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-100 overflow-hidden transform animate-in zoom-in duration-200"
+                class="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full max-h-[90dvh] overflow-y-auto shadow-2xl border border-slate-100"
             >
                 <div
                     class="p-5 border-b border-slate-100 bg-orange-50 flex items-center gap-3"
@@ -996,14 +1008,17 @@ const bisaDitangguhkanDetail = computed(() =>
                 </div>
                 <div class="p-6">
                     <label
+                        for="alasan-penangguhan"
                         class="block text-sm font-semibold text-slate-700 mb-2"
                         >Alasan Penangguhan
                         <span class="text-red-500">*</span></label
                     >
                     <textarea
+                        id="alasan-penangguhan"
+                        name="alasan"
                         v-model="suspendData.alasan"
                         rows="3"
-                        class="w-full text-sm border rounded-xl focus:ring-orange-500 focus:border-orange-500"
+                        class="w-full min-h-[88px] text-base sm:text-sm border rounded-xl focus:ring-orange-500 focus:border-orange-500"
                         :class="
                             suspendError
                                 ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
@@ -1012,7 +1027,6 @@ const bisaDitangguhkanDetail = computed(() =>
                         placeholder="Contoh: Perintah tugas mendadak untuk persiapan dinas luar kota."
                         @input="suspendError = ''"
                     ></textarea>
-                    <!-- Pesan error validasi inline (menggantikan alert browser) -->
                     <p
                         v-if="suspendError"
                         class="mt-2 text-xs font-semibold text-red-600 flex items-center gap-1.5"
@@ -1054,5 +1068,65 @@ const bisaDitangguhkanDetail = computed(() =>
             </div>
         </div>
     </Teleport>
-</template>
 
+    <!-- TOAST -->
+    <Teleport to="body">
+        <Transition
+            enter-active-class="transform ease-out duration-300 transition"
+            enter-from-class="-translate-y-10 opacity-0"
+            enter-to-class="translate-y-0 opacity-100"
+            leave-active-class="transition ease-in duration-200"
+            leave-from-class="opacity-100 translate-y-0"
+            leave-to-class="opacity-0 -translate-y-10"
+        >
+            <div
+                v-if="toast.show"
+                class="fixed top-6 left-1/2 -translate-x-1/2 z-[10000] max-w-sm w-full bg-white shadow-2xl rounded-2xl pointer-events-auto border border-gray-100 overflow-hidden flex items-start p-4"
+            >
+                <div class="shrink-0 pt-0.5">
+                    <div
+                        class="h-8 w-8 rounded-full bg-emerald-100 flex items-center justify-center"
+                    >
+                        <svg
+                            class="h-5 w-5 text-emerald-600"
+                            fill="none"
+                            viewBox="0 0 24 24"
+                            stroke-width="2.5"
+                            stroke="currentColor"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                d="M4.5 12.75l6 6 9-13.5"
+                            />
+                        </svg>
+                    </div>
+                </div>
+                <div class="ml-3 w-0 flex-1">
+                    <p class="text-sm font-bold text-gray-900">Aksi Berhasil</p>
+                    <p class="mt-1 text-sm text-gray-600">{{ toast.message }}</p>
+                </div>
+                <div class="ml-4 flex shrink-0">
+                    <button
+                        type="button"
+                        @click="toast.show = false"
+                        class="inline-flex rounded-md bg-white text-gray-400 hover:text-gray-600 focus:outline-none transition-colors"
+                    >
+                        <span class="sr-only">Tutup</span>
+                        <svg
+                            class="h-5 w-5"
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                        >
+                            <path
+                                fill-rule="evenodd"
+                                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                                clip-rule="evenodd"
+                            />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </Transition>
+    </Teleport>
+</template>

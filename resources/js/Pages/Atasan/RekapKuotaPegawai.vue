@@ -4,10 +4,8 @@ import { router, Head } from "@inertiajs/vue3";
 import MainLayout from "@/Layouts/MainLayout.vue";
 
 // Halaman ini adalah versi ATASAN dari "Rekap Kuota Detail" milik HR Admin
-// (lihat Pages/Admin/RekapKuotaDetail.vue). Data & tampilan tabel/modal
-// SENGAJA dibuat identik supaya konsisten, tapi TANPA fitur "Impor Kuota"
-// sama sekali — atasan hanya boleh melihat rekap saldo/kuota & riwayat cuti
-// bawahannya, tidak boleh mengubah data secara massal.
+// (lihat Pages/Admin/RekapKuotaDetail.vue). Atasan hanya boleh melihat rekap
+// saldo/kuota & riwayat cuti bawahannya, tanpa Impor Kuota dan tanpa Export.
 const props = defineProps({
     dataPegawai: Object,
     filters: Object,
@@ -21,9 +19,31 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
+    // Filter Tahun (dikirim backend lewat renderRekap())
+    tahunTerpilih: Number,
+    daftarTahun: {
+        type: Array,
+        default: () => [],
+    },
 });
 
 const search = ref(props.filters?.search || "");
+
+// ================= FILTER TAHUN =================
+const currentYear = new Date().getFullYear();
+
+const filterTahun = ref(
+    Number(props.filters?.tahun) || props.tahunTerpilih || currentYear,
+);
+
+// SATU-SATUNYA sumber tahun untuk semua label di halaman ini.
+const tahunAktif = computed(() => Number(filterTahun.value) || currentYear);
+
+const daftarTahunPilihan = computed(() => {
+    const daftar = (props.daftarTahun || []).map(Number).filter(Boolean);
+    return [...new Set([...daftar, tahunAktif.value])].sort((a, b) => b - a);
+});
+// ================= END FILTER TAHUN =================
 
 // State untuk Modal Detail Riwayat Cuti
 const showModal = ref(false);
@@ -98,17 +118,7 @@ const approvalStepClass = (status) => {
 };
 
 // ================= APPROVAL CHAIN (MURNI DARI BACKEND) =================
-// Tidak ada hardcode NIP/nama. Backend (RekapKuotaDetailController::
-// buildApprovalChain + getRequiredLevels) sudah menentukan level mana yang
-// relevan per role pemohon dan mengisi nama approver dari DB.
-//
-// Frontend hanya:
-//   1) mengurutkan langkah berlevel L1 → L4
-//   2) (opsional) menyembunyikan status "belum_giliran" agar tampilan ringkas
-//
-// Jika ingin menampilkan SEMUA langkah termasuk "Belum Giliran", ubah
-// HIDE_BELUM_GILIRAN menjadi false.
-const HIDE_BELUM_GILIRAN = true;
+const HIDE_BELUM_GILIRAN = false;
 
 const urutkanChain = (chain) => {
     const berlevel = chain
@@ -118,16 +128,43 @@ const urutkanChain = (chain) => {
     return chain.map((step) => (step?.level ? berlevel[i++] : step));
 };
 
-const getVisibleApprovalChain = (chainAsli) => {
+const getVisibleApprovalChain = (chainAsli, pegawai = null) => {
     if (!Array.isArray(chainAsli)) return [];
-    const chain = urutkanChain(chainAsli);
+
+    // Kepala Biro (L4): disetujui otomatis, tanpa rantai L1–L3
+    if (Number(pegawai?.role_id) === 6) {
+        const chain = urutkanChain(chainAsli);
+        const onlyL4 = chain.filter(
+            (step) => !step?.level || Number(step.level) === 4,
+        );
+        return onlyL4.length > 0 ? onlyL4 : chain;
+    }
+
+    let chain = urutkanChain(chainAsli);
+
+    const kelompokPegawai = (pegawai?.kelompok_substansi || "")
+        .toLowerCase()
+        .trim();
+    const timKerja = (pegawai?.tim_kerja || "").trim();
+
+    const isSubbagianTataUsaha = kelompokPegawai.includes(
+        "subbagian tata usaha",
+    );
+
+    const tidakPunyaTimKerja =
+        !timKerja || timKerja === "-" || timKerja === "";
+
+    // Sembunyikan L1 jika Subbagian Tata Usaha ATAU tidak punya tim kerja
+    if (isSubbagianTataUsaha || tidakPunyaTimKerja) {
+        chain = chain.filter((step) => Number(step?.level) !== 1);
+    }
+
     if (!HIDE_BELUM_GILIRAN) return chain;
     return chain.filter((step) => step?.status !== "belum_giliran");
 };
 // ================= END APPROVAL CHAIN =================
 
 // ================= FILTER BERJENJANG SESUAI LEVEL ATASAN =================
-// Diselaraskan dengan pola yang sama di KalenderTim.vue:
 //   L1 (role_id 2)       : TANPA dropdown, badge "Menampilkan tim Anda: ..."
 //   L2 (role_id 3)       : dropdown Tim Kerja (dalam kelompoknya sendiri)
 //   L3 & L4 (role_id 4/6): dropdown Kelompok/Subbagian (lintas kelompok)
@@ -216,8 +253,9 @@ function debounce(fn, delay = 300) {
     };
 }
 
+// Ikut mengirim 'tahun' ke backend.
 const buildParams = () => {
-    const params = {};
+    const params = { tahun: tahunAktif.value };
     if (search.value) params.search = search.value;
     if (kelompok.value) params[filterQueryParam.value] = kelompok.value;
     return params;
@@ -231,7 +269,8 @@ const terapkanFilter = debounce(() => {
     });
 }, 300);
 
-watch([search, kelompok], terapkanFilter);
+// Ikut memantau filterTahun.
+watch([search, kelompok, filterTahun], terapkanFilter);
 
 const goToPage = (url) => {
     if (!url) return;
@@ -242,36 +281,49 @@ const goToPage = (url) => {
 };
 
 // ================= PERHITUNGAN KUOTA =================
-const currentYear = new Date().getFullYear();
-
+// Semua angka DIAMBIL dari backend
+// (RekapKuotaDetailController::hitungKuota()). Jangan hitung ulang di sini
+// supaya selalu sama dengan Dashboard & halaman Admin.
 const toNum = (nilai) => {
     const angka = Number(nilai);
     return Number.isFinite(angka) ? angka : 0;
 };
 
-const getTerpakai = (pegawai) => {
-    return toNum(pegawai?.cuti_terpakai);
-};
+const getTerpakai = (pegawai) => toNum(pegawai?.cuti_terpakai);
 
-const getSisaTahunIni = (pegawai) => {
-    return toNum(pegawai?.sisa_cuti_tahun_ini) + getTerpakai(pegawai);
-};
+// Hak tahun berjalan (kuota awal), bukan sisa + terpakai.
+const getSisaTahunIni = (pegawai) =>
+    toNum(pegawai?.kuota_tahunan ?? pegawai?.hak_cuti);
 
 const getSaldoBawaanEligible = (pegawai) => {
-    return toNum(pegawai?.carry_forward_normal);
+    if (pegawai?.saldo_bawaan_eligible != null) {
+        return toNum(pegawai.saldo_bawaan_eligible);
+    }
+    // Fallback (aturan sama dengan backend)
+    const sisaN2 = toNum(pegawai?.sisa_cuti_dua_tahun_lalu);
+    const sisaN1 = toNum(pegawai?.carry_forward_normal);
+    return sisaN2 === 12 && sisaN1 === 12 ? 12 : Math.min(6, sisaN1);
 };
 
 const getTotalTersedia = (pegawai) => {
+    if (pegawai?.total_cuti_tersedia != null) {
+        return toNum(pegawai.total_cuti_tersedia);
+    }
     return getSisaTahunIni(pegawai) + getSaldoBawaanEligible(pegawai);
 };
 
 const getSisaTahunBerjalan = (pegawai) => {
-    const sisa = getSisaTahunIni(pegawai) - getTerpakai(pegawai);
-    return sisa > 0 ? sisa : 0;
+    if (pegawai?.sisa_kuota_tahun_ini != null) {
+        return toNum(pegawai.sisa_kuota_tahun_ini);
+    }
+    return Math.max(0, getSisaTahunIni(pegawai) - getTerpakai(pegawai));
 };
 
 const getSaldoAkhir = (pegawai) => {
-    return getTotalTersedia(pegawai) - getTerpakai(pegawai);
+    if (pegawai?.saldo_akhir != null) {
+        return toNum(pegawai.saldo_akhir);
+    }
+    return Math.max(0, getTotalTersedia(pegawai) - getTerpakai(pegawai));
 };
 // ================= END PERHITUNGAN KUOTA =================
 </script>
@@ -313,10 +365,42 @@ const getSaldoAkhir = (pegawai) => {
                     <div
                         class="flex flex-col sm:flex-row gap-3 items-center w-full md:w-auto"
                     >
-                        <!-- FILTER BERJENJANG — ukuran lebar seperti versi lama -->
+                        <!-- FILTER TAHUN -->
+                        <div class="relative w-full sm:w-auto shrink-0">
+                            <svg
+                                class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                />
+                            </svg>
+                            <select
+                                id="filter-tahun-kuota"
+                                name="tahun"
+                                v-model="filterTahun"
+                                class="border border-gray-300 rounded-lg pl-9 pr-8 py-2 w-full min-h-[44px] text-base sm:text-sm bg-white focus:ring-green-500 focus:border-green-500"
+                                aria-label="Filter tahun"
+                            >
+                                <option
+                                    v-for="t in daftarTahunPilihan"
+                                    :key="t"
+                                    :value="t"
+                                >
+                                    Tahun {{ t }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <!-- FILTER BERJENJANG -->
                         <div
                             v-if="showFilterDropdown"
-                            class="relative w-full sm:w-[600px] shrink-0"
+                            class="relative w-full sm:w-[350px] shrink-0"
                         >
                             <svg
                                 class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
@@ -332,8 +416,10 @@ const getSaldoAkhir = (pegawai) => {
                                 />
                             </svg>
                             <select
+                                id="filter-kelompok-kuota"
+                                name="kelompok"
                                 v-model="kelompok"
-                                class="border border-gray-300 rounded-lg pl-9 pr-3 py-2 w-full text-sm bg-white truncate focus:ring-green-500 focus:border-green-500"
+                                class="border border-gray-300 rounded-lg pl-9 pr-3 py-2 w-full min-h-[44px] text-base sm:text-sm bg-white truncate focus:ring-green-500 focus:border-green-500"
                             >
                                 <option value="">{{ filterAllLabel }}</option>
                                 <option
@@ -347,12 +433,16 @@ const getSaldoAkhir = (pegawai) => {
                             </select>
                         </div>
 
+                        <!-- CARI NAMA / NIP -->
                         <div class="relative w-full sm:w-auto">
                             <input
+                                id="cari-pegawai-kuota"
+                                name="cari_pegawai"
                                 v-model="search"
                                 type="text"
+                                aria-label="Cari nama atau NIP pegawai"
                                 placeholder="Cari nama/NIP..."
-                                class="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full sm:w-[400px] text-sm focus:ring-green-500 focus:border-green-500"
+                                class="border border-gray-300 rounded-lg pl-10 pr-4 py-2 w-full min-h-[44px] sm:w-[300px] text-base sm:text-sm focus:ring-green-500 focus:border-green-500"
                             />
                             <svg
                                 class="w-4 h-4 text-gray-400 absolute left-3 top-3"
@@ -390,7 +480,7 @@ const getSaldoAkhir = (pegawai) => {
                     </span>
                 </div>
 
-                <div class="overflow-x-auto">
+                <div class="hidden overflow-x-auto md:block">
                     <table
                         class="w-full text-left border-collapse whitespace-nowrap"
                     >
@@ -400,16 +490,16 @@ const getSaldoAkhir = (pegawai) => {
                             >
                                 <th class="p-4">Nama Pegawai</th>
                                 <th class="p-4 text-center">
-                                    Hak {{ currentYear }}
+                                    Hak {{ tahunAktif }}
                                 </th>
                                 <th class="p-4 text-center">
-                                    Terpakai {{ currentYear }}
+                                    Terpakai {{ tahunAktif }}
                                 </th>
                                 <th class="p-4 text-center">
-                                    Sisa {{ currentYear }}
+                                    Sisa {{ tahunAktif }}
                                 </th>
                                 <th class="p-4 text-center text-slate-800">
-                                    Saldo Akhir {{ currentYear }}
+                                    Saldo Akhir {{ tahunAktif }}
                                 </th>
                                 <th class="p-4 text-center">Aksi</th>
                             </tr>
@@ -504,6 +594,67 @@ const getSaldoAkhir = (pegawai) => {
                             </tr>
                         </tbody>
                     </table>
+                </div>
+
+                <div class="space-y-3 md:hidden">
+                    <article
+                        v-for="pegawai in daftarPegawai"
+                        :key="pegawai.id"
+                        class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                    >
+                        <div class="mb-3 min-w-0">
+                            <h3 class="break-words font-bold text-slate-800">
+                                {{ pegawai.nama }}
+                            </h3>
+                            <p class="mt-1 break-words text-xs text-slate-500">
+                                {{
+                                    pegawai.jabatan ||
+                                    pegawai.kelompok_substansi ||
+                                    pegawai.departemen ||
+                                    "Staf"
+                                }}
+                            </p>
+                        </div>
+                        <dl class="grid grid-cols-2 gap-3 text-sm">
+                            <div class="rounded-lg bg-slate-50 p-3">
+                                <dt class="text-xs text-slate-500">Hak {{ tahunAktif }}</dt>
+                                <dd class="mt-1 font-bold text-slate-800">{{ getSisaTahunIni(pegawai) }} hari</dd>
+                            </div>
+                            <div class="rounded-lg bg-rose-50 p-3">
+                                <dt class="text-xs text-rose-700">Terpakai {{ tahunAktif }}</dt>
+                                <dd class="mt-1 font-bold text-rose-800">{{ pegawai.cuti_terpakai || 0 }} hari</dd>
+                            </div>
+                            <div class="rounded-lg bg-blue-50 p-3">
+                                <dt class="text-xs text-blue-700">Sisa {{ tahunAktif }}</dt>
+                                <dd class="mt-1 font-bold text-blue-800">{{ getSisaTahunBerjalan(pegawai) }} hari</dd>
+                            </div>
+                            <div class="rounded-lg bg-slate-800 p-3">
+                                <dt class="text-xs text-slate-200">Saldo akhir</dt>
+                                <dd class="mt-1 font-bold text-white">{{ getSaldoAkhir(pegawai) }} hari</dd>
+                            </div>
+                        </dl>
+                        <button
+                            type="button"
+                            @click="openDetailModal(pegawai)"
+                            class="mt-3 min-h-[44px] w-full rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
+                        >
+                            Lihat Riwayat Cuti
+                        </button>
+                    </article>
+                    <div
+                        v-if="daftarPegawai.length === 0"
+                        class="rounded-xl border border-slate-200 p-6 text-center text-sm text-slate-500"
+                    >
+                        Tidak ada data pegawai ditemukan.
+                        <button
+                            v-if="kelompok || search"
+                            type="button"
+                            @click="search = ''; kelompok = ''"
+                            class="ml-1 font-semibold text-green-700 hover:underline"
+                        >
+                            Atur ulang filter
+                        </button>
+                    </div>
                 </div>
 
                 <div
@@ -614,7 +765,7 @@ const getSaldoAkhir = (pegawai) => {
                                 <p
                                     class="text-[10px] font-bold text-gray-400 uppercase tracking-wider"
                                 >
-                                    Hak {{ currentYear }}
+                                    Hak {{ tahunAktif }}
                                 </p>
                                 <p
                                     class="text-2xl font-black text-gray-800 mt-1"
@@ -632,7 +783,7 @@ const getSaldoAkhir = (pegawai) => {
                                 <p
                                     class="text-[10px] font-bold text-rose-500 uppercase tracking-wider"
                                 >
-                                    Terpakai {{ currentYear }}
+                                    Terpakai {{ tahunAktif }}
                                 </p>
                                 <p
                                     class="text-2xl font-black text-rose-600 mt-1"
@@ -650,7 +801,7 @@ const getSaldoAkhir = (pegawai) => {
                                 <p
                                     class="text-[10px] font-bold text-blue-500 uppercase tracking-wider"
                                 >
-                                    Sisa {{ currentYear }}
+                                    Sisa {{ tahunAktif }}
                                 </p>
                                 <p
                                     class="text-2xl font-black text-blue-600 mt-1"
@@ -668,7 +819,7 @@ const getSaldoAkhir = (pegawai) => {
                                 <p
                                     class="text-[10px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
-                                    Saldo Akhir {{ currentYear }}
+                                    Saldo Akhir {{ tahunAktif }}
                                 </p>
                                 <p class="text-2xl font-black text-white mt-1">
                                     {{ getSaldoAkhir(selectedPegawai) }}
@@ -682,7 +833,7 @@ const getSaldoAkhir = (pegawai) => {
                         <p
                             class="bg-gray-50 px-3 py-2 rounded-lg text-xs text-gray-600 border border-gray-100"
                         >
-                            Saldo Akhir {{ currentYear }}:
+                            Saldo Akhir {{ tahunAktif }}:
                             <span class="font-semibold text-gray-800">
                                 Hak {{ getSisaTahunIni(selectedPegawai) }} +
                                 Bawaan
@@ -873,7 +1024,7 @@ const getSaldoAkhir = (pegawai) => {
                                                 <p
                                                     class="font-medium text-gray-800 mt-0.5"
                                                 >
-                                                    {{ riwayat.telepon || "-" }}
+                                                    {{ riwayat.no_telp || "-" }}
                                                 </p>
                                             </div>
                                         </div>
@@ -928,11 +1079,12 @@ const getSaldoAkhir = (pegawai) => {
                                             >
                                         </div>
 
-                                        <!-- Approval chain: hanya dari backend -->
+                                        <!-- Approval chain: SEMUA level + jaring pengaman filter L1 -->
                                         <div
                                             v-if="
                                                 getVisibleApprovalChain(
                                                     riwayat.approval_chain,
+                                                    selectedPegawai,
                                                 ).length > 0
                                             "
                                             class="bg-white p-3 rounded-lg border border-green-100 space-y-1"
@@ -942,6 +1094,7 @@ const getSaldoAkhir = (pegawai) => {
                                                     step, idx
                                                 ) in getVisibleApprovalChain(
                                                     riwayat.approval_chain,
+                                                    selectedPegawai,
                                                 )"
                                                 :key="
                                                     step.level ??

@@ -1,3 +1,10 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Hilangkan icon "reveal password" bawaan Edge/IE agar tidak dobel
+   dengan icon mata custom (Login.vue, GantiPassword.vue, dll) */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+    display: none;
+}
