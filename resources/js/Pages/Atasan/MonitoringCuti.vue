@@ -1,15 +1,16 @@
 <script setup>
 import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, router, usePage } from "@inertiajs/vue3";
-import { ref, watch, computed, nextTick } from "vue";
+import {
+    ref,
+    watch,
+    computed,
+    nextTick,
+    onMounted,
+    onBeforeUnmount,
+} from "vue";
 
 // ================= PETA KELOMPOK PEGAWAI =================
-// Hanya dipertahankan sebagai fallback label (title) dropdown Kelompok.
-// Sumber data utama dropdown sekarang berasal dari prop `listKelompok`
-// (dikirim dinamis oleh MonitoringCutiController::buildFilterPropsUntukAtasan()),
-// bukan lagi hardcode statis. Array ini tetap dipakai untuk mencari label
-// yang lebih rapi kalau value-nya cocok, tapi TIDAK lagi menjadi sumber
-// v-for utama dropdown Kelompok (lihat template).
 const DAFTAR_KELOMPOK = [
     {
         value: "tata_usaha",
@@ -40,6 +41,25 @@ const DAFTAR_KELOMPOK = [
 ];
 // ================= END PETA KELOMPOK PEGAWAI =================
 
+// ================= TANPA KELOMPOK =================
+const LABEL_TANPA_KELOMPOK = "Tanpa Kelompok";
+
+const kosongKelompok = (nilai) =>
+    ["", "-", "–", "—"].includes(String(nilai ?? "").trim());
+
+const kelompokPegawai = (pegawai) => {
+    const ks = pegawai?.kelompok_substansi;
+    const dep = pegawai?.departemen;
+    if (!kosongKelompok(ks)) return String(ks).trim();
+    if (!kosongKelompok(dep)) return String(dep).trim();
+    return LABEL_TANPA_KELOMPOK;
+};
+
+const adaKelompokPegawai = (pegawai) =>
+    !kosongKelompok(pegawai?.kelompok_substansi) ||
+    !kosongKelompok(pegawai?.departemen);
+// ================= END TANPA KELOMPOK =================
+
 function debounce(fn, delay) {
     let timeoutId;
     return (...args) => {
@@ -49,14 +69,6 @@ function debounce(fn, delay) {
 }
 
 // ================= PROPS =================
-// `opsi_tim_kerja`   : dikirim controller untuk L2 (isinya = listTimKerja
-//                      di dalam kelompoknya sendiri). Dipertahankan nama
-//                      prop-nya (bukan diganti listTimKerja) supaya tidak
-//                      perlu ubah controller lebih jauh dari yang sudah ada.
-// `userTimKerja`     : nama Tim Kerja milik user yang login — dipakai
-//                      untuk badge "Menampilkan tim Anda: ..." khusus L1.
-// `listKelompok`     : daftar Kelompok Substansi dinamis dari controller,
-//                      dipakai dropdown Kelompok untuk L3/L4/HR (readonly).
 const props = defineProps({
     antrean: Object,
     filters: Object,
@@ -78,20 +90,11 @@ const page = usePage();
 const userRole = computed(() => page.props.auth.user.role_id);
 const isReadOnly = computed(() => userRole.value === 5);
 
-// ================= SKEMA FILTER BERJENJANG (DIPERBAIKI) =================
-// Mengikuti pola yang sama dengan Rekap Kuota (RekapKuotaDetailController):
-//   Role 2 (L1)        -> TANPA dropdown, cuma badge "Menampilkan tim Anda: ..."
-//   Role 3 (L2)        -> dropdown Tim Kerja (dalam kelompoknya sendiri)
-//   Role 4 / 6 (L3/L4) -> dropdown Kelompok
-//   Role 5 (HR/Monitoring readonly) -> dropdown Kelompok (lintas kelompok, sama seperti L3/L4)
+// ================= SKEMA FILTER BERJENJANG =================
 const filterMode = computed(() => {
     if (userRole.value === 2) return "l1";
     if (userRole.value === 3) return "l2";
-    if (
-        userRole.value === 4 ||
-        userRole.value === 6 ||
-        userRole.value === 5
-    )
+    if (userRole.value === 4 || userRole.value === 6 || userRole.value === 5)
         return "l3l4";
     return "none";
 });
@@ -104,16 +107,22 @@ const showBadgeTimL1 = computed(
     () => filterMode.value === "l1" && !!props.userTimKerja,
 );
 
-// Sumber opsi dropdown Kelompok: pakai prop dinamis dari controller kalau
-// tersedia, fallback ke DAFTAR_KELOMPOK statis kalau controller belum
-// mengirimnya (mis. saat pengembangan awal / belum sempat diupdate).
-const opsiKelompok = computed(() =>
-    props.listKelompok && props.listKelompok.length > 0
-        ? props.listKelompok
-        : DAFTAR_KELOMPOK.map((k) => k.value),
-);
+const opsiKelompok = computed(() => {
+    const dasar =
+        props.listKelompok && props.listKelompok.length > 0
+            ? props.listKelompok
+            : DAFTAR_KELOMPOK.map((k) => k.value);
+
+    const bernama = dasar.filter((k) => !kosongKelompok(k));
+    const tanpa = dasar.find(
+        (k) => String(k ?? "").trim() !== "" && kosongKelompok(k),
+    );
+
+    return tanpa !== undefined ? [tanpa, ...bernama] : bernama;
+});
 
 const labelKelompok = (value) => {
+    if (kosongKelompok(value)) return LABEL_TANPA_KELOMPOK;
     const match = DAFTAR_KELOMPOK.find((k) => k.value === value);
     return match ? match.singkat : value;
 };
@@ -137,19 +146,125 @@ const status = ref(props.filters?.status || "");
 const kelompok = ref(props.filters?.kelompok || "");
 const timKerja = ref(props.filters?.tim_kerja || "");
 
+// ================================================================
+// DROPDOWN FILTER KUSTOM
+// Mobile  : Search full → Kelompok full → Jenis | Status (2 kolom)
+// Desktop : satu baris horizontal (seperti foto)
+// ================================================================
+const dropdownTerbuka = ref(null);
+
+const toggleDropdown = (nama) => {
+    dropdownTerbuka.value = dropdownTerbuka.value === nama ? null : nama;
+};
+
+const OPSI_JENIS_CUTI = [
+    "Semua Jenis Cuti",
+    "Cuti Tahunan",
+    "Cuti Melahirkan",
+    "Cuti Besar",
+    "Cuti Alasan Penting",
+].map((j) => ({ value: j, label: j }));
+
+const OPSI_STATUS = [
+    { value: "", label: "Semua Status" },
+    { value: "menunggu_l1", label: "Menunggu L1" },
+    { value: "menunggu_l2", label: "Menunggu L2" },
+    { value: "menunggu_l3", label: "Menunggu L3" },
+    { value: "menunggu_l4", label: "Menunggu L4" },
+    { value: "disetujui", label: "Disetujui" },
+    { value: "ditolak", label: "Ditolak" },
+    { value: "ditangguhkan", label: "Ditangguhkan" },
+    { value: "dibatalkan_reguler", label: "Dibatalkan (Reguler)" },
+    { value: "kedaluwarsa", label: "Kedaluwarsa" },
+];
+
+/** Filter wilayah (Tim Kerja / Kelompok) */
+const filterWilayah = computed(() => {
+    if (filterMode.value === "l2") {
+        return {
+            key: "tim",
+            id: "filter-tim-kerja",
+            ariaLabel: "Filter tim kerja",
+            selected: timKerja.value,
+            options: [
+                { value: "", label: "Semua Tim Kerja" },
+                ...props.opsi_tim_kerja.map((t) => ({
+                    value: t.value || t,
+                    label: t.label || t,
+                })),
+            ],
+        };
+    }
+    if (filterMode.value === "l3l4") {
+        return {
+            key: "kelompok",
+            id: "filter-kelompok-monitoring",
+            ariaLabel: "Filter kelompok substansi",
+            selected: kelompok.value,
+            options: [
+                { value: "", label: "Semua Kelompok" },
+                ...opsiKelompok.value.map((k) => ({
+                    value: k,
+                    label: labelKelompok(k),
+                })),
+            ],
+        };
+    }
+    return null;
+});
+
+/** Jenis Cuti + Status */
+const filterLain = computed(() => [
+    {
+        key: "jenis",
+        id: "filter-jenis-cuti-monitoring",
+        ariaLabel: "Filter jenis cuti",
+        selected: jenisCuti.value,
+        options: OPSI_JENIS_CUTI,
+    },
+    {
+        key: "status",
+        id: "filter-status-monitoring",
+        ariaLabel: "Filter status pengajuan",
+        selected: status.value,
+        options: OPSI_STATUS,
+    },
+]);
+
+const labelSelected = (f) => {
+    const cocok = f.options.find((o) => o.value === f.selected);
+    return cocok ? cocok.label : f.selected || f.options[0]?.label || "";
+};
+
+const pilihFilter = (key, nilai) => {
+    if (key === "tim") timKerja.value = nilai;
+    else if (key === "kelompok") kelompok.value = nilai;
+    else if (key === "jenis") jenisCuti.value = nilai;
+    else if (key === "status") status.value = nilai;
+    dropdownTerbuka.value = null;
+};
+
+const tutupDropdownSaatKlikLuar = (event) => {
+    if (!event.target.closest?.("[data-dropdown]")) {
+        dropdownTerbuka.value = null;
+    }
+};
+onMounted(() => document.addEventListener("click", tutupDropdownSaatKlikLuar));
+onBeforeUnmount(() =>
+    document.removeEventListener("click", tutupDropdownSaatKlikLuar),
+);
+// ================= END DROPDOWN FILTER KUSTOM =================
+
 const buildParams = () => {
     const params = {
         search: search.value,
         jenis_cuti: jenisCuti.value,
         status: status.value,
     };
-
-    // Hanya kirim parameter sesuai role & mode filter wilayahnya
     if (filterMode.value === "l3l4" && kelompok.value)
         params.kelompok = kelompok.value;
     if (filterMode.value === "l2" && timKerja.value)
         params.tim_kerja = timKerja.value;
-
     return params;
 };
 
@@ -164,10 +279,7 @@ watch(
     }, 300),
 );
 
-// Sorting & Filtering JS lokal DIHAPUS. Murni pakai urutan dari ORDER BY server.
-const antreanTampil = computed(() => {
-    return props.antrean?.data ?? [];
-});
+const antreanTampil = computed(() => props.antrean?.data ?? []);
 
 const labelFilterAktif = computed(() => {
     if (filterMode.value === "l3l4" && kelompok.value) {
@@ -212,13 +324,11 @@ const statusLabels = {
     kedaluwarsa: "Kedaluwarsa",
 };
 
-const getStatusLabel = (st) => {
-    return statusLabels[st] || st?.replace(/_/g, " ").toUpperCase() || "-";
-};
+const getStatusLabel = (st) =>
+    statusLabels[st] || st?.replace(/_/g, " ").toUpperCase() || "-";
 
-const isKeteranganDitangguhkan = (keterangan) => {
-    return /ditangguhkan/i.test(keterangan || "");
-};
+const isKeteranganDitangguhkan = (keterangan) =>
+    /ditangguhkan/i.test(keterangan || "");
 
 const getEffectiveStatus = (item) => {
     if (!item) return null;
@@ -231,9 +341,8 @@ const getEffectiveStatus = (item) => {
     return item.status;
 };
 
-const getEffectiveStatusLabel = (item) => {
-    return getStatusLabel(getEffectiveStatus(item));
-};
+const getEffectiveStatusLabel = (item) =>
+    getStatusLabel(getEffectiveStatus(item));
 
 const statusLabelsSingkat = {
     menunggu_l1: "MENUNGGU L1",
@@ -255,6 +364,22 @@ const getEffectiveStatusLabelSingkatTahap = (item) => {
     );
 };
 
+const kelasBadgeStatus = (item) => ({
+    "bg-amber-100 text-amber-800 border-amber-300":
+        !!item.status?.includes("menunggu"),
+    "bg-emerald-100 text-emerald-800 border-emerald-300":
+        item.status === "disetujui",
+    "bg-rose-100 text-rose-800 border-rose-300":
+        getEffectiveStatus(item) === "ditolak",
+    "bg-slate-100 text-slate-600 border-slate-300":
+        getEffectiveStatus(item) === "kedaluwarsa",
+    "bg-gray-200 text-gray-800 border-gray-300":
+        getEffectiveStatus(item) === "ditangguhkan" ||
+        !!item.status?.includes("ditangguhkan") ||
+        !!item.status?.includes("dibatalkan"),
+    "bg-gray-200 text-gray-600 border-gray-300": !item.status,
+});
+
 const formatDate = (dateString) => {
     if (!dateString) return "-";
     const date = new Date(dateString);
@@ -275,37 +400,24 @@ const hitungDurasi = (mulai, selesai) => {
 };
 
 const getDurasi = (item) => {
-    if (item?.jumlah_hari && item.jumlah_hari > 0) {
-        return item.jumlah_hari;
-    }
+    if (item?.jumlah_hari && item.jumlah_hari > 0) return item.jumlah_hari;
     return hitungDurasi(item?.tanggal_mulai, item?.tanggal_selesai);
 };
 
 const processApproval = (id, action) => {
-    if (action === "approve") {
-        openApproveModal(id);
-    } else if (action === "reject") {
-        openRejectModal(id);
-    }
+    if (action === "approve") openApproveModal(id);
+    else if (action === "reject") openRejectModal(id);
 };
 
-const approveModal = ref({
-    show: false,
-    id: null,
-    item: null,
-});
+const approveModal = ref({ show: false, id: null, item: null });
 
 const openApproveModal = (id) => {
     const item = props.antrean?.data?.find((i) => i.id === id) || null;
-    approveModal.value.id = id;
-    approveModal.value.item = item;
-    approveModal.value.show = true;
+    approveModal.value = { show: true, id, item };
 };
 
 const closeApproveModal = () => {
-    approveModal.value.show = false;
-    approveModal.value.id = null;
-    approveModal.value.item = null;
+    approveModal.value = { show: false, id: null, item: null };
 };
 
 const submitApprove = () => {
@@ -313,12 +425,7 @@ const submitApprove = () => {
     router.post(
         route("atasan.approval.process", approveModal.value.id),
         { action: "approve" },
-        {
-            preserveScroll: true,
-            onSuccess: () => {
-                closeApproveModal();
-            },
-        },
+        { preserveScroll: true, onSuccess: () => closeApproveModal() },
     );
 };
 
@@ -330,27 +437,30 @@ const rejectModal = ref({
     error: "",
     shake: false,
 });
-
 const rejectTextarea = ref(null);
 
 const openRejectModal = (id) => {
     const item = props.antrean?.data?.find((i) => i.id === id) || null;
-    rejectModal.value.id = id;
-    rejectModal.value.item = item;
-    rejectModal.value.alasan = "";
-    rejectModal.value.error = "";
-    rejectModal.value.shake = false;
-    rejectModal.value.show = true;
+    rejectModal.value = {
+        show: true,
+        id,
+        item,
+        alasan: "",
+        error: "",
+        shake: false,
+    };
     nextTick(() => rejectTextarea.value?.focus());
 };
 
 const closeRejectModal = () => {
-    rejectModal.value.show = false;
-    rejectModal.value.id = null;
-    rejectModal.value.item = null;
-    rejectModal.value.alasan = "";
-    rejectModal.value.error = "";
-    rejectModal.value.shake = false;
+    rejectModal.value = {
+        show: false,
+        id: null,
+        item: null,
+        alasan: "",
+        error: "",
+        shake: false,
+    };
 };
 
 watch(
@@ -370,19 +480,10 @@ const submitReject = () => {
         });
         return;
     }
-
     router.post(
         route("atasan.approval.process", rejectModal.value.id),
-        {
-            action: "reject",
-            alasan: rejectModal.value.alasan,
-        },
-        {
-            preserveScroll: true,
-            onSuccess: () => {
-                closeRejectModal();
-            },
-        },
+        { action: "reject", alasan: rejectModal.value.alasan },
+        { preserveScroll: true, onSuccess: () => closeRejectModal() },
     );
 };
 
@@ -397,18 +498,13 @@ const goToPage = (url) => {
 const detailModal = ref({ show: false, data: null });
 
 const bukaDetailModal = (item) => {
-    detailModal.value.data = item;
-    detailModal.value.show = true;
+    detailModal.value = { show: true, data: item };
 };
 
 const closeDetailModal = () => {
-    detailModal.value.show = false;
-    detailModal.value.data = null;
+    detailModal.value = { show: false, data: null };
 };
 
-// Lampiran disimpan di disk 'public' (CutiController::store) sebagai path
-// relatif, mis. "lampiran-cuti/abc.pdf". Agar bisa dibuka di browser, path
-// itu harus diawali "/storage/". URL yang sudah lengkap dibiarkan apa adanya.
 const getLampiranUrl = (path) => {
     if (!path) return "";
     if (/^(https?:)?\/\//.test(path) || path.startsWith("/")) return path;
@@ -437,14 +533,10 @@ const getIsiCatatanMentah = (text) => {
     if (!text) return "";
     const bracketRegex = /\[DITANGGUHKAN\/DIBATALKAN ATASAN:\s*(.*?)\]/i;
     const bracketMatch = text.match(bracketRegex);
-    if (bracketMatch && bracketMatch[1]) {
-        return bracketMatch[1].trim();
-    }
-    const parenRegex = /\(([^)]+)\)/;
+    if (bracketMatch && bracketMatch[1]) return bracketMatch[1].trim();
+    const parenRegex = /([)]+)/;
     const parenMatch = text.match(parenRegex);
-    if (parenMatch && parenMatch[1]) {
-        return parenMatch[1].trim();
-    }
+    if (parenMatch && parenMatch[1]) return parenMatch[1].trim();
     return "";
 };
 
@@ -467,9 +559,7 @@ const getNamaPemberiCatatan = (text) => {
     return bagianSetelahOleh.length > 1 ? bagianSetelahOleh[1].trim() : "";
 };
 
-// ================= PERBAIKAN: NAMA L1/L2 DINAMIS + RUTE APPROVAL SESUAI TIM KERJA =================
-// levelsDefinition menyediakan fallback jabatan untuk L1-L4. Nama pejabat
-// diutamakan dari field yang dikirim Controller sesuai pengajuan.
+// ================= NAMA L1/L2 DINAMIS + RUTE APPROVAL =================
 const levelsDefinition = [
     {
         key: 1,
@@ -481,11 +571,7 @@ const levelsDefinition = [
         jabatan: "L2 - Ketua Kelompok Substansi",
         nama: "Ketua Kelompok Substansi",
     },
-    {
-        key: 3,
-        jabatan: "L3 - Kasubag TU",
-        nama: "Kasubag TU",
-    },
+    { key: 3, jabatan: "L3 - Kasubag TU", nama: "Kasubag TU" },
     {
         key: 4,
         jabatan: "L4 - Kepala Biro Perencanaan",
@@ -493,31 +579,15 @@ const levelsDefinition = [
     },
 ];
 
-// Mengambil nama tampilan untuk satu level approval (1-4) pada satu item
-// pengajuan (`data`). Kalau backend belum mengirim nilai, jatuh ke jabatan.
-const getLevelDisplayName = (levelKey, data) => {
-    return (
-        data?.[`atasan_l${levelKey}_nama`] ||
-        levelsDefinition.find((l) => l.key === levelKey)?.nama ||
-        "-"
-    );
-};
+const getLevelDisplayName = (levelKey, data) =>
+    data?.[`atasan_l${levelKey}_nama`] ||
+    levelsDefinition.find((l) => l.key === levelKey)?.nama ||
+    "-";
 
-// getApprovalRoute(pegawai) menerima objek pegawai (bukan cuma role_id).
-// Disamakan dengan logika Dashboard (Catatan / Respon Atasan) &
-// CutiController::tentukanLevelAwalCuti():
-//   - Role L4 (6)              -> []  (disetujui otomatis, tanpa rute)
-//   - Role L3 (4)              -> [L4]
-//   - Role L2 (3)              -> [L3, L4]
-//   - Role L1 (2)              -> [L2, L3, L4]
-//   - Staf Subbagian Tata Usaha -> [L3, L4]  (tanpa L1 & L2)
-//   - Staf TANPA Tim Kerja      -> [L2, L3, L4]
-//   - Staf DENGAN Tim Kerja     -> [L1, L3, L4]  (lompat L2)
 const getApprovalRoute = (pegawai) => {
     const roleId = pegawai?.role_id ?? 1;
     switch (roleId) {
         case 6:
-            // Kepala Biro (L4): disetujui otomatis, tanpa rute approval.
             return [];
         case 4:
             return [levelsDefinition[3]];
@@ -530,8 +600,6 @@ const getApprovalRoute = (pegawai) => {
                 levelsDefinition[3],
             ];
         default: {
-            // Deteksi Subbagian Tata Usaha (unit tanpa L1 & L2).
-            // Cocokkan beberapa bentuk string yang umum dipakai di DB.
             const kelompok = (
                 pegawai?.kelompok_substansi ??
                 pegawai?.departemen ??
@@ -544,25 +612,18 @@ const getApprovalRoute = (pegawai) => {
                 kelompok.includes("subbagian tata usaha") ||
                 kelompok.includes("tata usaha") ||
                 kelompok === "tata_usaha";
-
             if (isSubbagianTataUsaha) {
-                // Staf Subbagian: langsung L3 -> L4 (sama seperti Dashboard).
                 return [levelsDefinition[2], levelsDefinition[3]];
             }
-
             const timKerja = (pegawai?.tim_kerja ?? "").toString().trim();
             const tanpaTimKerja = timKerja === "" || timKerja === "-";
-
             if (tanpaTimKerja) {
-                // Staf tanpa Tim Kerja (bukan Subbagian): L2 -> L3 -> L4.
                 return [
                     levelsDefinition[1],
                     levelsDefinition[2],
                     levelsDefinition[3],
                 ];
             }
-
-            // Staf dengan Tim Kerja: L1 -> (lompat L2) -> L3 -> L4.
             return [
                 levelsDefinition[0],
                 levelsDefinition[2],
@@ -571,22 +632,19 @@ const getApprovalRoute = (pegawai) => {
         }
     }
 };
-// ================= END PERBAIKAN =================
+// ================= END =================
 
 const approvalTimeline = computed(() => {
     const data = detailModal.value.data;
     if (!data) return [];
-
     const st = data.status;
     const steps = getApprovalRoute(data.pegawai);
-
     const pendingMatch = st?.match(/^menunggu_l(\d)$/);
     const pendingLevel = pendingMatch ? parseInt(pendingMatch[1], 10) : null;
     const isStoppedStatus =
         st === "ditolak" ||
         st === "ditangguhkan" ||
         st === "dibatalkan_ditangguhkan";
-
     let stoppedLevel = null;
     if (isStoppedStatus && steps.length > 0) {
         if (data.level_saat_ini) {
@@ -594,28 +652,21 @@ const approvalTimeline = computed(() => {
         } else {
             const ket = data.keterangan || "";
             const matchLevel = ket.match(/l([1-4])/i);
-            if (matchLevel) {
-                stoppedLevel = parseInt(matchLevel[1], 10);
-            } else {
-                stoppedLevel = steps[steps.length - 1].key;
-            }
+            stoppedLevel = matchLevel
+                ? parseInt(matchLevel[1], 10)
+                : steps[steps.length - 1].key;
         }
     }
-
     const catatanAtasan =
         stoppedLevel !== null ? getCatatanAtasan(data.keterangan) : "";
     const catatanMenyebutDitangguhkan = isKeteranganDitangguhkan(
         data.keterangan,
     );
-
     return steps.map((level) => {
         let label = "-";
         let color = "text-gray-400";
         let catatan = "";
-        // Nama diambil dinamis (nama asli L1/L2 dari backend, bukan lagi
-        // selalu teks generik statis).
         let nama = getLevelDisplayName(level.key, data);
-
         if (st === "disetujui") {
             label = "Disetujui";
             color = "text-emerald-700";
@@ -637,15 +688,12 @@ const approvalTimeline = computed(() => {
                         ? "Ditolak"
                         : "Ditangguhkan";
                 color = "text-rose-600";
-                if (catatanAtasan) {
-                    catatan = catatanAtasan;
-                }
+                if (catatanAtasan) catatan = catatanAtasan;
             } else if (level.key > stoppedLevel) {
                 label = "Menunggu Persetujuan";
                 color = "text-orange-500";
             }
         }
-
         return { ...level, nama, status: label, color, catatan };
     });
 });
@@ -653,7 +701,6 @@ const approvalTimeline = computed(() => {
 const getStatusBadgeLabelSingkat = (item) => {
     const st = getEffectiveStatus(item);
     if (!st) return "STATUS";
-
     const levelMap = {
         menunggu_l1: "MENUNGGU L1",
         menunggu_l2: "MENUNGGU L2",
@@ -666,19 +713,11 @@ const getStatusBadgeLabelSingkat = (item) => {
         dibatalkan_reguler: "DIBATALKAN",
         kedaluwarsa: "KEDALUWARSA",
     };
-
     return levelMap[st] || st.replace(/_/g, " ").toUpperCase();
 };
 
-// approvalTimeline di atas SUDAH otomatis hanya berisi level yang memang
-// relevan untuk pegawai tsb (lihat getApprovalRoute), jadi tidak perlu
-// filter tambahan lagi di sini — cukup teruskan apa adanya supaya
-// L1/L2/L3/L4 yang memang berlaku untuk pegawai itu semuanya tampil (tidak
-// lagi selalu dibuang ke hanya L3/L4).
 const filteredApprovalTimeline = computed(() => approvalTimeline.value);
 
-// [BARU] Pemohon Kepala Biro (L4) tidak punya rantai approval: pengajuannya
-// disetujui otomatis oleh sistem (lihat CutiController::setujuiOtomatisKabiro).
 const isPemohonKabiro = computed(
     () => Number(detailModal.value.data?.pegawai?.role_id) === 6,
 );
@@ -715,8 +754,6 @@ const getStoppedLevel = (data) => {
     }
     const matchLevel = (data.keterangan || "").match(/l([1-4])/i);
     if (matchLevel) return parseInt(matchLevel[1], 10);
-    // Rute dihitung dari objek pegawai (bukan cuma role_id) agar konsisten
-    // dengan approvalTimeline & memperhitungkan kasus tanpa Tim Kerja.
     const steps = getApprovalRoute(data.pegawai);
     return steps.length > 0 ? steps[steps.length - 1].key : null;
 };
@@ -741,20 +778,14 @@ const pemrosesDitangguhkan = computed(() => {
 const getApprovalLogs = (item) =>
     item?.approval_logs || item?.approvalLogs || [];
 
-// buildRiwayatPersetujuan memakai getApprovalRoute(item.pegawai) supaya
-// level yang ditampilkan mengikuti rute approval ASLI pegawai (termasuk
-// L2 untuk staf tanpa Tim Kerja), dan nama L1/L2 diambil dinamis lewat
-// getLevelDisplayName supaya konsisten dengan approvalTimeline di atas.
 const buildRiwayatPersetujuan = (item) => {
     const approvals = Array.isArray(item?.approvals) ? item.approvals : [];
     const logs = getApprovalLogs(item);
     const steps = getApprovalRoute(item?.pegawai);
-
     return steps.map((level) => {
         let status = "Menunggu Persetujuan";
         let color = "text-orange-500";
         const nama = getLevelDisplayName(level.key, item);
-
         const ap = approvals.find((a) => Number(a.level) === level.key);
         if (ap) {
             const s = (ap.status || "").toString().toUpperCase();
@@ -770,9 +801,7 @@ const buildRiwayatPersetujuan = (item) => {
                 .filter((l) => Number(l.level_approval) === level.key)
                 .reduce(
                     (best, cur) =>
-                        !best || Number(cur.id) > Number(best.id)
-                            ? cur
-                            : best,
+                        !best || Number(cur.id) > Number(best.id) ? cur : best,
                     null,
                 );
             if (log?.keputusan === "setuju") {
@@ -783,7 +812,6 @@ const buildRiwayatPersetujuan = (item) => {
                 color = "text-rose-600";
             }
         }
-
         return { ...level, nama, status, color, catatan: "" };
     });
 };
@@ -814,8 +842,8 @@ const riwayatDibatalkan = computed(() =>
     />
 
     <MainLayout>
-        <div class="bg-white overflow-hidden shadow-sm sm:rounded-lg p-6">
-            <div class="mb-6">
+        <div class="bg-white shadow-sm sm:rounded-lg p-4 sm:p-6">
+            <div class="mb-5">
                 <h2 class="text-2xl font-bold text-gray-800">
                     {{
                         isReadOnly
@@ -829,10 +857,19 @@ const riwayatDibatalkan = computed(() =>
                 </p>
             </div>
 
+            <!-- ============================================================
+                 FILTER RESPONSIVE
+                 Mobile  : Search full → Kelompok full → Jenis | Status
+                 Desktop : satu baris horizontal (seperti foto)
+                 ============================================================ -->
             <div
-                class="flex flex-col sm:flex-row sm:flex-wrap items-center gap-3 mb-6"
+                @keydown.esc="dropdownTerbuka = null"
+                class="mb-5 flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center lg:gap-2.5"
             >
-                <div class="relative min-w-0 flex-1 w-full">
+                <!-- 1. Search -->
+                <div
+                    class="relative w-full min-w-0 lg:flex-1 lg:min-w-[12rem] lg:max-w-xs"
+                >
                     <div
                         class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
                     >
@@ -841,6 +878,7 @@ const riwayatDibatalkan = computed(() =>
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
+                            aria-hidden="true"
                         >
                             <path
                                 stroke-linecap="round"
@@ -857,165 +895,238 @@ const riwayatDibatalkan = computed(() =>
                         type="text"
                         aria-label="Cari nama atau NIP pegawai"
                         placeholder="Cari nama, NIP..."
-                        class="min-h-[44px] pl-10 border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm w-full"
+                        class="min-h-[40px] pl-10 border border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg text-sm w-full bg-white"
                     />
                 </div>
 
-                <!-- FILTER TIM KERJA (Khusus L2) -->
+                <!-- 2. Kelompok / Tim Kerja -->
                 <div
-                    v-if="filterMode === 'l2'"
-                    class="relative w-full sm:w-[300px] shrink-0"
+                    v-if="filterWilayah"
+                    data-dropdown
+                    class="relative w-full min-w-0 lg:w-52 lg:shrink-0"
                 >
-                    <svg
-                        class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                    <div
+                        class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none"
                     >
-                        <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"
-                        />
-                    </svg>
-                    <select
-                        id="filter-tim-kerja"
-                        name="tim_kerja"
-                        v-model="timKerja"
-                        aria-label="Filter tim kerja"
-                        class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm text-gray-600 w-full truncate"
-                    >
-                        <option value="">Semua Tim Kerja</option>
-                        <!-- Support Array String atau Array Object {value, label} dari Controller -->
-                        <option
-                            v-for="t in opsi_tim_kerja"
-                            :key="t.value || t"
-                            :value="t.value || t"
+                        <svg
+                            class="w-3.5 h-3.5 text-gray-400"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
                         >
-                            {{ t.label || t }}
-                        </option>
-                    </select>
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                            />
+                        </svg>
+                    </div>
+                    <button
+                        :id="filterWilayah.id"
+                        type="button"
+                        :aria-label="filterWilayah.ariaLabel"
+                        aria-haspopup="listbox"
+                        :aria-expanded="dropdownTerbuka === filterWilayah.key"
+                        :title="labelSelected(filterWilayah)"
+                        @click="toggleDropdown(filterWilayah.key)"
+                        class="w-full min-h-[40px] text-left text-sm border border-gray-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none rounded-lg shadow-sm text-gray-700 py-1.5 pl-8 pr-7 bg-white cursor-pointer"
+                    >
+                        <span class="block truncate">{{
+                            labelSelected(filterWilayah)
+                        }}</span>
+                    </button>
+                    <span
+                        class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                    >
+                        <svg
+                            class="w-3.5 h-3.5 text-gray-500 transition-transform"
+                            :class="{
+                                'rotate-180':
+                                    dropdownTerbuka === filterWilayah.key,
+                            }"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M19 9l-7 7-7-7"
+                            />
+                        </svg>
+                    </span>
+                    <ul
+                        v-if="dropdownTerbuka === filterWilayah.key"
+                        role="listbox"
+                        class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                    >
+                        <li
+                            v-for="opt in filterWilayah.options"
+                            :key="opt.value"
+                        >
+                            <button
+                                type="button"
+                                role="option"
+                                :title="opt.label"
+                                :aria-selected="
+                                    filterWilayah.selected === opt.value
+                                "
+                                @click="
+                                    pilihFilter(filterWilayah.key, opt.value)
+                                "
+                                :class="
+                                    filterWilayah.selected === opt.value
+                                        ? 'bg-emerald-50 text-emerald-700 font-semibold'
+                                        : 'text-gray-700 hover:bg-gray-50'
+                                "
+                                class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm cursor-pointer"
+                            >
+                                {{ opt.label }}
+                            </button>
+                        </li>
+                    </ul>
                 </div>
 
-                <!-- FILTER KELOMPOK (Khusus L3, L4, Monitoring/HR) -->
+                <!-- 3. Jenis Cuti + Status
+                     Mobile  : grid 2 kolom
+                     Desktop : ikut baris flex -->
                 <div
-                    v-if="filterMode === 'l3l4'"
-                    class="relative w-full sm:w-[600px] shrink-0"
+                    class="grid grid-cols-2 gap-2 w-full lg:w-auto lg:flex lg:gap-2.5 lg:shrink-0"
                 >
-                    <svg
-                        class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
+                    <div
+                        v-for="f in filterLain"
+                        :key="f.key"
+                        data-dropdown
+                        class="relative w-full min-w-0 lg:w-44"
                     >
-                        <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="2"
-                            d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"
-                        />
-                    </svg>
-                    <select
-                        id="filter-kelompok-monitoring"
-                        name="kelompok"
-                        v-model="kelompok"
-                        aria-label="Filter kelompok substansi"
-                        class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg pl-9 pr-3 py-2 text-base sm:text-sm text-gray-600 w-full truncate"
-                    >
-                        <option value="">Semua Kelompok</option>
-                        <option
-                            v-for="k in opsiKelompok"
-                            :key="k"
-                            :value="k"
-                            :title="labelKelompok(k)"
+                        <div
+                            class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none"
                         >
-                            {{ labelKelompok(k) }}
-                        </option>
-                    </select>
+                            <svg
+                                class="w-3.5 h-3.5 text-gray-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                                aria-hidden="true"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                                />
+                            </svg>
+                        </div>
+                        <button
+                            :id="f.id"
+                            type="button"
+                            :aria-label="f.ariaLabel"
+                            aria-haspopup="listbox"
+                            :aria-expanded="dropdownTerbuka === f.key"
+                            :title="labelSelected(f)"
+                            @click="toggleDropdown(f.key)"
+                            class="w-full min-h-[40px] text-left text-sm border border-gray-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none rounded-lg shadow-sm text-gray-700 py-1.5 pl-8 pr-7 bg-white cursor-pointer"
+                        >
+                            <span class="block truncate">{{
+                                labelSelected(f)
+                            }}</span>
+                        </button>
+                        <span
+                            class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                        >
+                            <svg
+                                class="w-3.5 h-3.5 text-gray-500 transition-transform"
+                                :class="{
+                                    'rotate-180': dropdownTerbuka === f.key,
+                                }"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                                aria-hidden="true"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M19 9l-7 7-7-7"
+                                />
+                            </svg>
+                        </span>
+                        <ul
+                            v-if="dropdownTerbuka === f.key"
+                            role="listbox"
+                            class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg min-w-[12rem]"
+                        >
+                            <li v-for="opt in f.options" :key="opt.value">
+                                <button
+                                    type="button"
+                                    role="option"
+                                    :title="opt.label"
+                                    :aria-selected="f.selected === opt.value"
+                                    @click="pilihFilter(f.key, opt.value)"
+                                    :class="
+                                        f.selected === opt.value
+                                            ? 'bg-emerald-50 text-emerald-700 font-semibold'
+                                            : 'text-gray-700 hover:bg-gray-50'
+                                    "
+                                    class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm cursor-pointer"
+                                >
+                                    {{ opt.label }}
+                                </button>
+                            </li>
+                        </ul>
+                    </div>
                 </div>
 
-                <select
-                    id="filter-jenis-cuti-monitoring"
-                    name="jenis_cuti"
-                    v-model="jenisCuti"
-                    aria-label="Filter jenis cuti"
-                    class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm text-gray-600 w-full sm:w-auto shrink-0"
-                >
-                    <option value="Semua Jenis Cuti">Semua Jenis Cuti</option>
-                    <option value="Cuti Tahunan">Cuti Tahunan</option>
-                    <option value="Cuti Melahirkan">Cuti Melahirkan</option>
-                    <option value="Cuti Besar">Cuti Besar</option>
-                    <option value="Cuti Alasan Penting">
-                        Cuti Alasan Penting
-                    </option>
-                </select>
-
-                <select
-                    id="filter-status-monitoring"
-                    name="status"
-                    v-model="status"
-                    aria-label="Filter status pengajuan"
-                    class="min-h-[44px] border-gray-300 focus:border-blue-500 focus:ring-blue-500 rounded-lg text-base sm:text-sm text-gray-600 w-full sm:w-auto shrink-0"
-                >
-                    <option value="">Semua Status</option>
-                    <option value="menunggu_l1">Menunggu L1</option>
-                    <option value="menunggu_l2">Menunggu L2</option>
-                    <option value="menunggu_l3">Menunggu L3</option>
-                    <option value="menunggu_l4">Menunggu L4</option>
-                    <option value="disetujui">Disetujui</option>
-                    <option value="ditolak">Ditolak</option>
-                    <option value="ditangguhkan">Ditangguhkan</option>
-                    <option value="dibatalkan_reguler">
-                        Dibatalkan (Reguler)
-                    </option>
-                    <option value="kedaluwarsa">Kedaluwarsa</option>
-                </select>
-
-                <!-- BADGE TIM KERJA (Khusus L1 — tanpa dropdown) -->
-                <!-- Ditaruh PALING KANAN (elemen terakhir baris filter).
-                     ml-auto mendorongnya menempel ke ujung kanan pada
-                     layar sm+ (flex-row); saat susunan jadi flex-col di
-                     layar kecil, ml-auto tidak berefek horizontal sehingga
-                     tetap tersusun rapi ke bawah. -->
+                <!-- Badge Tim Kerja L1 -->
                 <div
                     v-if="showBadgeTimL1"
-                    class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-green-50 border border-green-200 text-green-700 text-xs font-semibold shrink-0 w-full sm:w-auto sm:ml-auto"
+                    class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-green-50 border border-green-200 text-green-700 text-xs font-semibold w-full lg:w-auto lg:ml-auto"
                 >
                     <svg
-                        class="w-3.5 h-3.5"
+                        class="w-3.5 h-3.5 shrink-0"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
+                        aria-hidden="true"
                     >
                         <path
                             stroke-linecap="round"
                             stroke-linejoin="round"
                             stroke-width="2"
                             d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8zm6 3c0-2.21-3.582-4-8-4s-8 1.79-8 4"
-                        ></path>
+                        />
                     </svg>
-                    Menampilkan tim Anda: {{ userTimKerja }}
+                    <span class="min-w-0 break-words"
+                        >Menampilkan tim Anda: {{ userTimKerja }}</span
+                    >
                 </div>
             </div>
 
-            <!-- Penanda filter yang sedang aktif -->
+            <!-- Penanda filter aktif -->
             <div
                 v-if="kelompok || timKerja"
-                class="flex items-center gap-2 mb-4 text-xs"
+                class="flex flex-wrap items-center gap-2 mb-4 text-xs"
             >
                 <span
-                    class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 font-semibold"
+                    class="inline-flex max-w-full items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-50 text-green-700 border border-green-200 font-semibold"
                 >
-                    {{ labelFilterAktif }}
+                    <span class="min-w-0 break-words">{{
+                        labelFilterAktif
+                    }}</span>
                     <button
                         type="button"
                         @click="
                             kelompok = '';
                             timKerja = '';
                         "
-                        class="hover:text-green-900 cursor-pointer"
+                        class="shrink-0 hover:text-green-900 cursor-pointer"
                         title="Hapus filter"
+                        aria-label="Hapus filter"
                     >
                         &times;
                     </button>
@@ -1025,45 +1136,57 @@ const riwayatDibatalkan = computed(() =>
                 >
             </div>
 
-            <!-- TABEL -->
+            <!-- ================= TABEL (lg+) ================= -->
             <div class="w-full min-w-0">
-            <div class="hidden overflow-x-auto rounded-lg border border-gray-200 md:block">
-                    <table class="min-w-full divide-y divide-gray-200">
+                <div
+                    class="hidden overflow-hidden rounded-lg border border-gray-200 lg:block"
+                >
+                    <table class="w-full table-fixed divide-y divide-gray-200">
+                        <colgroup>
+                            <col class="w-[26%]" />
+                            <col class="w-[14%]" />
+                            <col class="w-[17%]" />
+                            <col class="w-[8%]" />
+                            <col />
+                            <col
+                                :class="isReadOnly ? 'w-[76px]' : 'w-[184px]'"
+                            />
+                        </colgroup>
                         <thead class="bg-gray-50">
                             <tr>
                                 <th
                                     scope="col"
-                                    class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
+                                    class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                                 >
                                     Nama Karyawan
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
+                                    class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                                 >
                                     Jenis Cuti
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
+                                    class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                                 >
                                     Tanggal Cuti
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
+                                    class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                                 >
                                     Durasi
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap"
+                                    class="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
                                 >
                                     Tahap
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap sticky right-0 bg-gray-50"
+                                    class="px-3 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider"
                                 >
                                     Aksi
                                 </th>
@@ -1075,67 +1198,51 @@ const riwayatDibatalkan = computed(() =>
                                 :key="item.id"
                                 class="hover:bg-gray-50"
                             >
-                                <td class="px-4 py-4 whitespace-nowrap">
+                                <td class="px-3 py-3.5 align-middle">
                                     <div
-                                        class="text-sm font-medium text-gray-900"
+                                        class="break-words text-sm font-medium leading-snug text-gray-900"
+                                        :title="item.pegawai.nama"
                                     >
                                         {{ item.pegawai.nama }}
                                     </div>
-                                    <div class="text-xs text-gray-500">
-                                        {{ item.pegawai.departemen }}
+                                    <div
+                                        class="mt-0.5 break-words text-xs leading-snug"
+                                        :class="
+                                            adaKelompokPegawai(item.pegawai)
+                                                ? 'text-gray-500'
+                                                : 'italic text-gray-400'
+                                        "
+                                        :title="kelompokPegawai(item.pegawai)"
+                                    >
+                                        {{ kelompokPegawai(item.pegawai) }}
                                     </div>
                                 </td>
-
-                                <td
-                                    class="px-4 py-4 whitespace-nowrap text-sm text-gray-900"
-                                >
+                                <td class="px-3 py-3.5 align-middle">
                                     <span
-                                        class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-200 text-blue-800 border border-blue-300"
+                                        class="inline-flex max-w-full px-2.5 py-1 text-xs leading-tight font-semibold rounded-full bg-blue-200 text-blue-800 border border-blue-300"
                                     >
                                         {{ item.jenis_cuti }}
                                     </span>
                                 </td>
-
-                                <td
-                                    class="px-4 py-4 whitespace-nowrap text-sm text-gray-900"
-                                >
-                                    {{ formatDate(item.tanggal_mulai) }} s/d
-                                    {{ formatDate(item.tanggal_selesai) }}
+                                <td class="px-3 py-3.5 align-middle text-sm">
+                                    <div class="text-gray-900">
+                                        {{ formatDate(item.tanggal_mulai) }}
+                                    </div>
+                                    <div class="text-xs text-gray-500">
+                                        s/d
+                                        {{ formatDate(item.tanggal_selesai) }}
+                                    </div>
                                 </td>
                                 <td
-                                    class="px-4 py-4 whitespace-nowrap text-sm text-gray-900"
+                                    class="px-3 py-3.5 align-middle text-sm text-gray-900 whitespace-nowrap"
                                 >
                                     {{ getDurasi(item) }} Hari
                                 </td>
-                                <td class="px-4 py-4 whitespace-nowrap text-sm">
+                                <td class="px-3 py-3.5 align-middle text-sm">
                                     <span
                                         :title="getEffectiveStatusLabel(item)"
-                                        class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold tracking-wide uppercase border cursor-default"
-                                        :class="{
-                                            'bg-amber-100 text-amber-800 border-amber-300':
-                                                item.status?.includes(
-                                                    'menunggu',
-                                                ),
-                                            'bg-emerald-100 text-emerald-800 border-emerald-300':
-                                                item.status === 'disetujui',
-                                            'bg-rose-100 text-rose-800 border-rose-300':
-                                                getEffectiveStatus(item) ===
-                                                'ditolak',
-                                            'bg-slate-100 text-slate-600 border-slate-300':
-                                                getEffectiveStatus(item) ===
-                                                'kedaluwarsa',
-                                            'bg-gray-200 text-gray-800 border-gray-300':
-                                                getEffectiveStatus(item) ===
-                                                    'ditangguhkan' ||
-                                                item.status?.includes(
-                                                    'ditangguhkan',
-                                                ) ||
-                                                item.status?.includes(
-                                                    'dibatalkan',
-                                                ),
-                                            'bg-gray-200 text-gray-600 border-gray-300':
-                                                !item.status,
-                                        }"
+                                        class="inline-flex max-w-full items-center px-2.5 py-1 rounded-md text-xs leading-tight font-bold tracking-wide uppercase border cursor-default"
+                                        :class="kelasBadgeStatus(item)"
                                     >
                                         {{
                                             getEffectiveStatusLabelSingkatTahap(
@@ -1145,22 +1252,24 @@ const riwayatDibatalkan = computed(() =>
                                     </span>
                                 </td>
                                 <td
-                                    class="px-4 py-4 whitespace-nowrap text-center text-sm font-medium sticky right-0 bg-white"
+                                    class="px-3 py-3.5 align-middle text-center text-sm font-medium"
                                 >
                                     <div
-                                        class="flex items-center justify-center gap-2"
+                                        class="flex flex-nowrap items-center justify-center gap-1.5"
                                     >
                                         <button
                                             type="button"
                                             @click="bukaDetailModal(item)"
                                             title="Lihat Detail Pengajuan"
-                                            class="inline-flex items-center justify-center p-1.5 bg-white border border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50 hover:text-blue-600 transition-colors shadow-sm"
+                                            aria-label="Lihat detail pengajuan"
+                                            class="shrink-0 inline-flex items-center justify-center p-1.5 bg-white border border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50 hover:text-blue-600 transition-colors shadow-sm cursor-pointer"
                                         >
                                             <svg
                                                 class="w-5 h-5"
                                                 fill="none"
                                                 stroke="currentColor"
                                                 viewBox="0 0 24 24"
+                                                aria-hidden="true"
                                             >
                                                 <path
                                                     stroke-linecap="round"
@@ -1176,9 +1285,9 @@ const riwayatDibatalkan = computed(() =>
                                                 />
                                             </svg>
                                         </button>
-
                                         <template v-if="!isReadOnly">
                                             <button
+                                                type="button"
                                                 @click="
                                                     processApproval(
                                                         item.id,
@@ -1187,16 +1296,16 @@ const riwayatDibatalkan = computed(() =>
                                                 "
                                                 :disabled="!canApprove(item)"
                                                 :class="[
-                                                    'px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
+                                                    'shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
                                                     canApprove(item)
-                                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
                                                         : 'bg-slate-200 text-slate-400 cursor-not-allowed',
                                                 ]"
                                             >
                                                 SETUJUI
                                             </button>
-
                                             <button
+                                                type="button"
                                                 @click="
                                                     processApproval(
                                                         item.id,
@@ -1205,9 +1314,9 @@ const riwayatDibatalkan = computed(() =>
                                                 "
                                                 :disabled="!canApprove(item)"
                                                 :class="[
-                                                    'px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
+                                                    'shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
                                                     canApprove(item)
-                                                        ? 'bg-red-600 hover:bg-red-700 text-white'
+                                                        ? 'bg-red-600 hover:bg-red-700 text-white cursor-pointer'
                                                         : 'bg-slate-200 text-slate-400 cursor-not-allowed',
                                                 ]"
                                             >
@@ -1237,104 +1346,148 @@ const riwayatDibatalkan = computed(() =>
                         </tbody>
                     </table>
                 </div>
-            <div class="space-y-3 md:hidden">
-                <article
-                    v-for="item in antreanTampil"
-                    :key="item.id"
-                    class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
-                >
-                    <div class="flex items-start justify-between gap-3">
-                        <div class="min-w-0">
-                            <h3 class="break-words text-sm font-semibold text-gray-900">
-                                {{ item.pegawai.nama }}
-                            </h3>
-                            <p class="mt-1 break-words text-xs text-gray-500">
-                                {{ item.pegawai.departemen }}
-                            </p>
-                        </div>
-                        <span class="shrink-0 rounded-md border border-blue-300 bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">
-                            {{ getEffectiveStatusLabelSingkatTahap(item) }}
-                        </span>
-                    </div>
-                    <dl class="mt-3 space-y-2 text-sm">
-                        <div class="flex justify-between gap-3">
-                            <dt class="text-gray-500">Jenis cuti</dt>
-                            <dd class="text-right font-medium text-gray-800">{{ item.jenis_cuti }}</dd>
-                        </div>
-                        <div class="flex justify-between gap-3">
-                            <dt class="text-gray-500">Tanggal</dt>
-                            <dd class="text-right text-gray-800">
-                                {{ formatDate(item.tanggal_mulai) }} s/d {{ formatDate(item.tanggal_selesai) }}
-                            </dd>
-                        </div>
-                        <div class="flex justify-between gap-3">
-                            <dt class="text-gray-500">Durasi</dt>
-                            <dd class="font-medium text-gray-800">{{ getDurasi(item) }} hari</dd>
-                        </div>
-                    </dl>
-                    <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                        <button
-                            type="button"
-                            @click="bukaDetailModal(item)"
-                            class="min-h-[44px] rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700"
+
+                <!-- ================= KARTU (di bawah lg) ================= -->
+                <div class="lg:hidden">
+                    <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <article
+                            v-for="item in antreanTampil"
+                            :key="item.id"
+                            class="flex min-w-0 flex-col rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
                         >
-                            Lihat detail
-                        </button>
-                        <template v-if="!isReadOnly">
-                            <button
-                                type="button"
-                                @click="processApproval(item.id, 'approve')"
-                                :disabled="!canApprove(item)"
-                                class="min-h-[44px] rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            <div class="flex items-start justify-between gap-3">
+                                <div class="min-w-0">
+                                    <h3
+                                        class="break-words text-sm font-semibold text-gray-900"
+                                    >
+                                        {{ item.pegawai.nama }}
+                                    </h3>
+                                    <p
+                                        class="mt-1 break-words text-xs"
+                                        :class="
+                                            adaKelompokPegawai(item.pegawai)
+                                                ? 'text-gray-500'
+                                                : 'italic text-gray-400'
+                                        "
+                                    >
+                                        {{ kelompokPegawai(item.pegawai) }}
+                                    </p>
+                                </div>
+                                <span
+                                    class="shrink-0 rounded-md border px-2 py-1 text-xs font-bold"
+                                    :class="kelasBadgeStatus(item)"
+                                >
+                                    {{
+                                        getEffectiveStatusLabelSingkatTahap(
+                                            item,
+                                        )
+                                    }}
+                                </span>
+                            </div>
+                            <dl class="mt-3 space-y-2 text-sm">
+                                <div class="flex justify-between gap-3">
+                                    <dt class="shrink-0 text-gray-500">
+                                        Jenis cuti
+                                    </dt>
+                                    <dd
+                                        class="min-w-0 break-words text-right font-medium text-gray-800"
+                                    >
+                                        {{ item.jenis_cuti }}
+                                    </dd>
+                                </div>
+                                <div class="flex justify-between gap-3">
+                                    <dt class="shrink-0 text-gray-500">
+                                        Tanggal
+                                    </dt>
+                                    <dd
+                                        class="min-w-0 break-words text-right text-gray-800"
+                                    >
+                                        {{ formatDate(item.tanggal_mulai) }} s/d
+                                        {{ formatDate(item.tanggal_selesai) }}
+                                    </dd>
+                                </div>
+                                <div class="flex justify-between gap-3">
+                                    <dt class="shrink-0 text-gray-500">
+                                        Durasi
+                                    </dt>
+                                    <dd class="font-medium text-gray-800">
+                                        {{ getDurasi(item) }} hari
+                                    </dd>
+                                </div>
+                            </dl>
+                            <div
+                                class="mt-auto grid gap-2 pt-4"
+                                :class="
+                                    isReadOnly ? 'grid-cols-1' : 'grid-cols-3'
+                                "
                             >
-                                Setujui
-                            </button>
-                            <button
-                                type="button"
-                                @click="processApproval(item.id, 'reject')"
-                                :disabled="!canApprove(item)"
-                                class="min-h-[44px] rounded-lg bg-red-600 px-3 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                Tolak
-                            </button>
-                        </template>
+                                <button
+                                    type="button"
+                                    @click="bukaDetailModal(item)"
+                                    class="min-h-[44px] rounded-lg border border-gray-300 bg-white px-2 py-2 text-sm font-semibold text-gray-700 cursor-pointer"
+                                >
+                                    Detail
+                                </button>
+                                <template v-if="!isReadOnly">
+                                    <button
+                                        type="button"
+                                        @click="
+                                            processApproval(item.id, 'approve')
+                                        "
+                                        :disabled="!canApprove(item)"
+                                        class="min-h-[44px] rounded-lg bg-emerald-600 px-2 py-2 text-sm font-bold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Setujui
+                                    </button>
+                                    <button
+                                        type="button"
+                                        @click="
+                                            processApproval(item.id, 'reject')
+                                        "
+                                        :disabled="!canApprove(item)"
+                                        class="min-h-[44px] rounded-lg bg-red-600 px-2 py-2 text-sm font-bold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Tolak
+                                    </button>
+                                </template>
+                            </div>
+                        </article>
                     </div>
-                </article>
-                <div
-                    v-if="antreanTampil.length === 0"
-                    class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
-                >
-                    Saat ini tidak ada antrean pengajuan cuti yang memerlukan persetujuan Anda.
-                    <button
-                        v-if="adaFilterAktif"
-                        type="button"
-                        @click="resetFilter"
-                        class="ml-1 font-semibold text-green-700 underline"
+                    <div
+                        v-if="antreanTampil.length === 0"
+                        class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
                     >
-                        Atur ulang filter
-                    </button>
+                        Saat ini tidak ada antrean pengajuan cuti yang
+                        memerlukan persetujuan Anda.
+                        <button
+                            v-if="adaFilterAktif"
+                            type="button"
+                            @click="resetFilter"
+                            class="ml-1 font-semibold text-green-700 underline cursor-pointer"
+                        >
+                            Atur ulang filter
+                        </button>
+                    </div>
                 </div>
             </div>
-            </div>
 
+            <!-- PAGINATION -->
             <div
                 v-if="antrean.links && antrean.links.length > 3"
-                class="flex flex-wrap items-center justify-between gap-2 mt-6"
+                class="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:justify-between"
             >
-                <p class="text-sm text-gray-500">
-                    Menampilkan {{ antrean.from ?? 0 }}–{{
-                        antrean.to ?? 0
-                    }}
+                <p class="text-center text-sm text-gray-500">
+                    Menampilkan {{ antrean.from ?? 0 }}–{{ antrean.to ?? 0 }}
                     dari {{ antrean.total ?? 0 }} data
                 </p>
-                <div class="flex flex-wrap gap-1">
+                <div class="flex flex-wrap justify-center gap-1">
                     <button
                         v-for="(link, index) in antrean.links"
                         :key="index"
                         v-html="link.label"
                         :disabled="!link.url"
                         @click="goToPage(link.url)"
-                        class="px-3 py-1 text-sm rounded-md border"
+                        class="min-h-[40px] px-3 py-1 text-sm rounded-md border"
                         :class="[
                             link.active
                                 ? 'bg-blue-600 border-blue-600 text-white'
@@ -1375,7 +1528,7 @@ const riwayatDibatalkan = computed(() =>
                                     stroke-linecap="round"
                                     stroke-linejoin="round"
                                     d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
-                                ></path>
+                                />
                             </svg>
                         </div>
                         <div class="min-w-0">
@@ -1391,7 +1544,6 @@ const riwayatDibatalkan = computed(() =>
                             </p>
                         </div>
                     </div>
-
                     <span
                         v-if="detailModal.data"
                         class="shrink-0 px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider whitespace-nowrap"
@@ -1418,7 +1570,6 @@ const riwayatDibatalkan = computed(() =>
                         {{ getStatusBadgeLabelSingkat(detailModal.data) }}
                     </span>
                 </div>
-
                 <div
                     class="flex-1 overflow-y-auto px-6 py-4 space-y-3 text-sm"
                     v-if="detailModal.data"
@@ -1433,7 +1584,6 @@ const riwayatDibatalkan = computed(() =>
                             {{ detailModal.data.pegawai?.nama || "-" }}
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             NIP
@@ -1442,7 +1592,6 @@ const riwayatDibatalkan = computed(() =>
                             {{ detailModal.data.pegawai?.nip || "-" }}
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Jabatan
@@ -1453,20 +1602,14 @@ const riwayatDibatalkan = computed(() =>
                             {{ detailModal.data.pegawai?.jabatan || "-" }}
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Kelompok Substansi
                         </div>
                         <div class="col-span-8 text-slate-800 font-semibold">
-                            {{
-                                detailModal.data.pegawai?.kelompok_substansi ||
-                                detailModal.data.pegawai?.departemen ||
-                                "-"
-                            }}
+                            {{ kelompokPegawai(detailModal.data.pegawai) }}
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Jenis Cuti
@@ -1475,8 +1618,6 @@ const riwayatDibatalkan = computed(() =>
                             {{ detailModal.data.jenis_cuti || "-" }}
                         </div>
                     </div>
-
-                    <!-- BARU: Anak ke berapa, hanya tampil untuk Cuti Melahirkan -->
                     <div
                         v-if="
                             detailModal.data.jenis_cuti
@@ -1493,7 +1634,6 @@ const riwayatDibatalkan = computed(() =>
                             {{ detailModal.data.anak_ke }}
                         </div>
                     </div>
-
                     <div
                         v-if="
                             detailModal.data.jenis_cuti
@@ -1507,21 +1647,32 @@ const riwayatDibatalkan = computed(() =>
                         </div>
                         <div class="col-span-8">
                             <span class="font-extrabold text-amber-800 block">
-                                {{ detailModal.data.pegawai?.total_cuti_tersedia ?? detailModal.data.pegawai?.sisa_cuti_tersedia ?? 0 }}
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.total_cuti_tersedia ??
+                                    detailModal.data.pegawai
+                                        ?.sisa_cuti_tersedia ??
+                                    0
+                                }}
                                 Hari Total
                             </span>
                             <span
                                 class="font-normal text-amber-600/80 text-xs block mt-0.5"
                             >
                                 (Tahun Ini:
-                            {{ detailModal.data.pegawai?.sisa_hak_tahun_berjalan ?? 0 }}
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.sisa_hak_tahun_berjalan ?? 0
+                                }}
                                 hari | Saldo Bawaan:
-                                    {{ detailModal.data.pegawai?.saldo_bawaan_eligible ?? 0 }}
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.saldo_bawaan_eligible ?? 0
+                                }}
                                 hari)
                             </span>
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Waktu Cuti
@@ -1532,7 +1683,6 @@ const riwayatDibatalkan = computed(() =>
                             ({{ getDurasi(detailModal.data) }} Hari)
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Alasan
@@ -1543,7 +1693,6 @@ const riwayatDibatalkan = computed(() =>
                             {{ getAlasanBersih(detailModal.data.keterangan) }}
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Alamat
@@ -1558,9 +1707,6 @@ const riwayatDibatalkan = computed(() =>
                             }}
                         </div>
                     </div>
-
-                    <!-- Nomor telepon diisi pegawai saat mengajukan cuti dan
-                         tersimpan di pengajuan (kolom `no_telp`). -->
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Nomor Telepon
@@ -1569,7 +1715,6 @@ const riwayatDibatalkan = computed(() =>
                             {{ detailModal.data.no_telp || "-" }}
                         </div>
                     </div>
-
                     <div class="grid grid-cols-12 gap-2 items-center">
                         <div class="col-span-4 text-gray-500 font-medium">
                             Lampiran
@@ -1577,7 +1722,9 @@ const riwayatDibatalkan = computed(() =>
                         <div class="col-span-8">
                             <a
                                 v-if="detailModal.data.lampiran"
-                                :href="getLampiranUrl(detailModal.data.lampiran)"
+                                :href="
+                                    getLampiranUrl(detailModal.data.lampiran)
+                                "
                                 target="_blank"
                                 rel="noopener"
                                 class="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-600 hover:bg-emerald-100 rounded-xl text-xs font-medium transition-colors"
@@ -1601,47 +1748,19 @@ const riwayatDibatalkan = computed(() =>
                                 v-else
                                 class="inline-flex items-center gap-2 px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-400 rounded-xl text-xs font-medium"
                             >
-                                <svg
-                                    class="w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                                    />
-                                </svg>
                                 Tidak ada lampiran
                             </div>
                         </div>
                     </div>
-
                     <div v-if="isDitangguhkanDetail" class="pt-1">
                         <div
                             class="rounded-xl p-4 border bg-slate-50 border-slate-200"
                         >
                             <h4
-                                class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5 text-slate-500"
+                                class="text-xs font-bold uppercase tracking-wider mb-2 text-slate-500"
                             >
-                                <svg
-                                    class="w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    />
-                                </svg>
                                 Alasan Penangguhan / Pembatalan Atasan
                             </h4>
-
                             <p
                                 v-if="pemrosesDitangguhkan?.jabatanBersih"
                                 class="text-sm text-slate-700"
@@ -1657,9 +1776,6 @@ const riwayatDibatalkan = computed(() =>
                             >
                                 "{{ pemrosesDitangguhkan.catatan }}"
                             </p>
-
-                            <!-- [DIUBAH] v-if="riwayatDitangguhkan.length": untuk pemohon
-                                 Kepala Biro rutenya kosong, jadi judul & daftar disembunyikan. -->
                             <h5
                                 v-if="riwayatDitangguhkan.length"
                                 class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mt-3 pt-3 mb-2 border-t border-slate-200"
@@ -1685,37 +1801,21 @@ const riwayatDibatalkan = computed(() =>
                                     <span
                                         class="text-xs font-bold"
                                         :class="level.color"
+                                        >{{ level.status }}</span
                                     >
-                                        {{ level.status }}
-                                    </span>
                                 </div>
                             </div>
                         </div>
                     </div>
-
                     <div v-else-if="isDibatalkanDetail" class="pt-1">
                         <div
                             class="rounded-xl p-4 border bg-slate-50 border-slate-200"
                         >
                             <h4
-                                class="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5 text-slate-500"
+                                class="text-xs font-bold uppercase tracking-wider mb-2 text-slate-500"
                             >
-                                <svg
-                                    class="w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    />
-                                </svg>
                                 Informasi Pembatalan
                             </h4>
-
                             <p class="text-sm text-slate-600">
                                 Dibatalkan oleh:
                                 <span class="font-semibold text-slate-800"
@@ -1727,9 +1827,6 @@ const riwayatDibatalkan = computed(() =>
                                 oleh pemohon sebelum proses persetujuan
                                 selesai."
                             </p>
-
-                            <!-- [DIUBAH] v-if="riwayatDibatalkan.length": untuk pemohon
-                                 Kepala Biro rutenya kosong, jadi judul & daftar disembunyikan. -->
                             <h5
                                 v-if="riwayatDibatalkan.length"
                                 class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mt-4 mb-2"
@@ -1755,14 +1852,12 @@ const riwayatDibatalkan = computed(() =>
                                     <span
                                         class="text-xs font-bold"
                                         :class="level.color"
+                                        >{{ level.status }}</span
                                     >
-                                        {{ level.status }}
-                                    </span>
                                 </div>
                             </div>
                         </div>
                     </div>
-
                     <div v-else class="pt-1">
                         <div
                             :class="[
@@ -1782,7 +1877,7 @@ const riwayatDibatalkan = computed(() =>
                         >
                             <h4
                                 :class="[
-                                    'text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5',
+                                    'text-xs font-bold uppercase tracking-wider mb-3',
                                     getEffectiveStatus(detailModal.data) ===
                                     'disetujui'
                                         ? 'text-emerald-700'
@@ -1797,24 +1892,8 @@ const riwayatDibatalkan = computed(() =>
                                             : 'text-gray-700',
                                 ]"
                             >
-                                <svg
-                                    class="w-4 h-4"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    />
-                                </svg>
                                 Catatan / Respon Atasan
                             </h4>
-
-                            <!-- [BARU] Pemohon Kepala Biro (L4): tidak ada rantai approval,
-                                 cukup satu baris keterangan persetujuan otomatis. -->
                             <div
                                 v-if="isPemohonKabiro"
                                 class="bg-white rounded-lg border border-slate-100 px-3 py-2.5 flex flex-col shadow-sm"
@@ -1825,7 +1904,9 @@ const riwayatDibatalkan = computed(() =>
                                         detailModal.data.pegawai?.nama
                                     }}</span>
                                 </span>
-                                <span class="text-xs font-bold text-emerald-700">
+                                <span
+                                    class="text-xs font-bold text-emerald-700"
+                                >
                                     Disetujui otomatis (pemohon adalah Kepala
                                     Biro)
                                 </span>
@@ -1859,35 +1940,32 @@ const riwayatDibatalkan = computed(() =>
                         </div>
                     </div>
                 </div>
-
                 <div
                     class="shrink-0 bg-white border-t border-gray-100 px-6 py-4 flex items-center justify-end gap-3"
                 >
-                    <div class="flex items-center gap-2">
+                    <button
+                        type="button"
+                        @click="closeDetailModal"
+                        class="px-5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold transition shadow-sm"
+                    >
+                        Tutup
+                    </button>
+                    <template v-if="canApproveDetail">
                         <button
                             type="button"
-                            @click="closeDetailModal"
-                            class="px-5 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-bold transition shadow-sm"
+                            @click="detailModalReject"
+                            class="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-sm"
                         >
-                            Tutup
+                            Tolak
                         </button>
-                        <template v-if="canApproveDetail">
-                            <button
-                                type="button"
-                                @click="detailModalReject"
-                                class="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-sm"
-                            >
-                                Tolak
-                            </button>
-                            <button
-                                type="button"
-                                @click="detailModalApprove"
-                                class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-sm"
-                            >
-                                Setuju
-                            </button>
-                        </template>
-                    </div>
+                        <button
+                            type="button"
+                            @click="detailModalApprove"
+                            class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-sm"
+                        >
+                            Setuju
+                        </button>
+                    </template>
                 </div>
             </div>
         </div>
@@ -1901,7 +1979,7 @@ const riwayatDibatalkan = computed(() =>
             @click.self="closeRejectModal"
         >
             <div
-                class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto transform transition-all"
+                class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto"
             >
                 <div
                     class="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-rose-50/50"
@@ -1909,77 +1987,46 @@ const riwayatDibatalkan = computed(() =>
                     <div
                         class="flex items-center gap-2 text-rose-700 font-semibold"
                     >
-                        <svg
-                            class="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                            />
-                        </svg>
                         <h3>Alasan Penolakan Cuti</h3>
                     </div>
                     <button
                         type="button"
                         @click="closeRejectModal"
-                        class="text-gray-400 hover:text-gray-600 transition-colors"
+                        class="text-gray-400 hover:text-gray-600"
                     >
-                        <svg
-                            class="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M6 18L18 6M6 6l12 12"
-                            />
-                        </svg>
+                        ✕
                     </button>
                 </div>
-
                 <div class="p-6 space-y-4">
-                    <p class="text-sm text-slate-600 leading-relaxed">
+                    <p class="text-sm text-slate-600">
                         Silakan berikan alasan atau catatan mengapa pengajuan
-                        cuti ini ditolak. Alasan ini akan dibaca oleh pegawai
-                        yang bersangkutan.
+                        cuti ini ditolak.
                     </p>
-
                     <div
                         v-if="rejectModal.item"
-                        class="p-3.5 bg-slate-50 border border-slate-100 rounded-xl text-left"
+                        class="p-3.5 bg-slate-50 border border-slate-100 rounded-xl text-left text-xs"
                     >
-                        <div class="flex justify-between items-center mb-1.5">
-                            <span
-                                class="text-xs font-bold text-slate-400 uppercase tracking-wider"
+                        <div class="flex justify-between mb-1">
+                            <span class="text-slate-400 font-bold uppercase"
                                 >Karyawan</span
                             >
-                            <span class="text-xs font-semibold text-slate-700">
-                                {{ rejectModal.item.pegawai?.nama || "-" }}
-                            </span>
+                            <span class="font-semibold text-slate-700">{{
+                                rejectModal.item.pegawai?.nama || "-"
+                            }}</span>
                         </div>
-                        <div class="flex justify-between items-center mb-1.5">
-                            <span
-                                class="text-xs font-bold text-slate-400 uppercase tracking-wider"
+                        <div class="flex justify-between mb-1">
+                            <span class="text-slate-400 font-bold uppercase"
                                 >Jenis Cuti</span
                             >
-                            <span class="text-xs font-semibold text-rose-600">
-                                {{ rejectModal.item.jenis_cuti || "-" }}
-                            </span>
+                            <span class="font-semibold text-rose-600">{{
+                                rejectModal.item.jenis_cuti || "-"
+                            }}</span>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span
-                                class="text-xs font-bold text-slate-400 uppercase tracking-wider"
+                        <div class="flex justify-between">
+                            <span class="text-slate-400 font-bold uppercase"
                                 >Tanggal</span
                             >
-                            <span class="text-xs font-semibold text-slate-700">
+                            <span class="font-semibold text-slate-700">
                                 {{ formatDate(rejectModal.item.tanggal_mulai) }}
                                 s/d
                                 {{
@@ -1989,7 +2036,6 @@ const riwayatDibatalkan = computed(() =>
                             </span>
                         </div>
                     </div>
-
                     <div>
                         <label
                             for="alasan-penolakan"
@@ -2003,59 +2049,39 @@ const riwayatDibatalkan = computed(() =>
                             ref="rejectTextarea"
                             v-model="rejectModal.alasan"
                             rows="3"
-                            placeholder="Contoh: Masih ada tugas proyek mendesak yang harus diselesaikan..."
+                            placeholder="Contoh: Masih ada tugas proyek mendesak..."
                             :aria-invalid="!!rejectModal.error"
-                            aria-describedby="alasan-penolakan-error"
                             @animationend="rejectModal.shake = false"
                             :class="[
-                                'w-full rounded-xl text-sm shadow-sm transition-colors',
+                                'w-full rounded-xl text-sm shadow-sm',
                                 rejectModal.error
-                                    ? 'border-red-400 bg-red-50/40 focus:border-red-500 focus:ring-red-500'
-                                    : 'border-gray-300 focus:border-rose-500 focus:ring-rose-500',
+                                    ? 'border-red-400 bg-red-50/40'
+                                    : 'border-gray-300',
                                 rejectModal.shake ? 'animate-shake' : '',
                             ]"
                         ></textarea>
-
-                        <transition name="fade-error">
-                            <p
-                                v-if="rejectModal.error"
-                                id="alasan-penolakan-error"
-                                role="alert"
-                                class="mt-1.5 flex items-center gap-1.5 text-xs font-medium text-red-600"
-                            >
-                                <svg
-                                    class="w-4 h-4 shrink-0"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                    />
-                                </svg>
-                                {{ rejectModal.error }}
-                            </p>
-                        </transition>
+                        <p
+                            v-if="rejectModal.error"
+                            class="mt-1.5 text-xs font-medium text-red-600"
+                        >
+                            {{ rejectModal.error }}
+                        </p>
                     </div>
                 </div>
-
                 <div
                     class="bg-gray-50 px-6 py-3.5 flex justify-end gap-3 border-t border-gray-100"
                 >
                     <button
                         type="button"
                         @click="closeRejectModal"
-                        class="px-4 py-2 bg-white border border-gray-300 rounded-xl text-xs font-semibold text-gray-700 uppercase tracking-wider hover:bg-gray-50 transition-colors shadow-sm"
+                        class="px-4 py-2 bg-white border border-gray-300 rounded-xl text-xs font-semibold text-gray-700 uppercase"
                     >
                         Batal
                     </button>
                     <button
                         type="button"
                         @click="submitReject"
-                        class="px-4 py-2 bg-red-600 border border-transparent rounded-xl text-xs font-semibold text-white uppercase tracking-wider hover:bg-red-700 transition-colors shadow-sm"
+                        class="px-4 py-2 bg-red-600 rounded-xl text-xs font-semibold text-white uppercase"
                     >
                         Kirim Penolakan
                     </button>
@@ -2072,7 +2098,7 @@ const riwayatDibatalkan = computed(() =>
             @click.self="closeApproveModal"
         >
             <div
-                class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto transform transition-all"
+                class="bg-white rounded-t-2xl sm:rounded-2xl shadow-xl w-full max-w-md max-h-[90dvh] overflow-y-auto"
             >
                 <div
                     class="flex justify-between items-center px-6 py-4 border-b border-gray-100 bg-emerald-50/50"
@@ -2080,77 +2106,45 @@ const riwayatDibatalkan = computed(() =>
                     <div
                         class="flex items-center gap-2 text-emerald-700 font-semibold"
                     >
-                        <svg
-                            class="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M5 13l4 4L19 7"
-                            />
-                        </svg>
                         <h3>Setujui Pengajuan Cuti</h3>
                     </div>
                     <button
                         type="button"
                         @click="closeApproveModal"
-                        class="text-gray-400 hover:text-gray-600 transition-colors"
+                        class="text-gray-400 hover:text-gray-600"
                     >
-                        <svg
-                            class="w-5 h-5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M6 18L18 6M6 6l12 12"
-                            />
-                        </svg>
+                        ✕
                     </button>
                 </div>
-
                 <div class="p-6 space-y-4 text-center">
                     <p class="text-sm text-gray-600">
                         Apakah Anda yakin ingin menyetujui pengajuan cuti ini?
                     </p>
-
                     <div
                         v-if="approveModal.item"
-                        class="p-3.5 bg-slate-50 border border-slate-100 rounded-xl text-left"
+                        class="p-3.5 bg-slate-50 border border-slate-100 rounded-xl text-left text-xs"
                     >
-                        <div class="flex justify-between items-center mb-1.5">
-                            <span
-                                class="text-xs font-bold text-slate-400 uppercase tracking-wider"
+                        <div class="flex justify-between mb-1">
+                            <span class="text-slate-400 font-bold uppercase"
                                 >Karyawan</span
                             >
-                            <span class="text-xs font-semibold text-slate-700">
-                                {{ approveModal.item.pegawai?.nama || "-" }}
-                            </span>
+                            <span class="font-semibold text-slate-700">{{
+                                approveModal.item.pegawai?.nama || "-"
+                            }}</span>
                         </div>
-                        <div class="flex justify-between items-center mb-1.5">
-                            <span
-                                class="text-xs font-bold text-slate-400 uppercase tracking-wider"
+                        <div class="flex justify-between mb-1">
+                            <span class="text-slate-400 font-bold uppercase"
                                 >Jenis Cuti</span
                             >
-                            <span
-                                class="text-xs font-semibold text-emerald-600"
-                            >
-                                {{ approveModal.item.jenis_cuti || "-" }}
-                            </span>
+                            <span class="font-semibold text-emerald-600">{{
+                                approveModal.item.jenis_cuti || "-"
+                            }}</span>
                         </div>
-                        <div class="flex justify-between items-center">
-                            <span
-                                class="text-xs font-bold text-slate-400 uppercase tracking-wider"
+                        <div class="flex justify-between">
+                            <span class="text-slate-400 font-bold uppercase"
                                 >Tanggal</span
                             >
-                            <span class="text-xs font-semibold text-slate-700">
+                            <span class="font-semibold text-slate-700">
                                 {{
                                     formatDate(approveModal.item.tanggal_mulai)
                                 }}
@@ -2164,8 +2158,7 @@ const riwayatDibatalkan = computed(() =>
                             </span>
                         </div>
                     </div>
-
-                    <p class="text-sm text-slate-500 leading-relaxed">
+                    <p class="text-sm text-slate-500">
                         <template
                             v-if="
                                 approveModal.item?.jenis_cuti
@@ -2178,25 +2171,24 @@ const riwayatDibatalkan = computed(() =>
                         </template>
                         <template v-else>
                             Jenis cuti ini tidak akan memotong saldo Cuti
-                            Tahunan karyawan setelah persetujuan dikonfirmasi.
+                            Tahunan karyawan.
                         </template>
                     </p>
                 </div>
-
                 <div
                     class="bg-gray-50 px-6 py-3.5 flex justify-end gap-3 border-t border-gray-100"
                 >
                     <button
                         type="button"
                         @click="closeApproveModal"
-                        class="px-4 py-2 bg-white border border-gray-300 rounded-xl text-xs font-semibold text-gray-700 uppercase tracking-wider hover:bg-gray-50 transition-colors shadow-sm"
+                        class="px-4 py-2 bg-white border border-gray-300 rounded-xl text-xs font-semibold text-gray-700 uppercase"
                     >
                         Batal
                     </button>
                     <button
                         type="button"
                         @click="submitApprove"
-                        class="px-4 py-2 bg-emerald-600 border border-transparent rounded-xl text-xs font-semibold text-white uppercase tracking-wider hover:bg-emerald-700 transition-colors shadow-sm"
+                        class="px-4 py-2 bg-emerald-600 rounded-xl text-xs font-semibold text-white uppercase"
                     >
                         Ya, Setujui
                     </button>
@@ -2225,21 +2217,8 @@ const riwayatDibatalkan = computed(() =>
         transform: translateX(4px);
     }
 }
-
 .animate-shake {
     animation: shake 0.4s ease-in-out;
 }
-
-.fade-error-enter-active,
-.fade-error-leave-active {
-    transition:
-        opacity 0.2s ease,
-        transform 0.2s ease;
-}
-
-.fade-error-enter-from,
-.fade-error-leave-to {
-    opacity: 0;
-    transform: translateY(-4px);
-}
 </style>
+

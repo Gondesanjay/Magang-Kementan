@@ -23,11 +23,27 @@ class SaldoCuti extends Model
     }
 
     /**
+     * Cuti Tahunan berstatus disetujui yang benar-benar terpakai untuk satu pegawai & tahun.
+     */
+    public static function terpakaiMurni(int $pegawaiId, int $tahun): int
+    {
+        return (int) PengajuanCuti::where('pegawai_id', $pegawaiId)
+            ->where('jenis_cuti', 'Cuti Tahunan')
+            ->whereYear('tanggal_mulai', $tahun)
+            ->where('status', 'disetujui')
+            ->sum('jumlah_hari');
+    }
+
+    /**
      * Cuti Tahunan terpakai EFEKTIF untuk satu pegawai & tahun.
-     * koreksi_saldo NULL  -> ikut hitungan sistem (SUM pengajuan disetujui)
+     * koreksi_saldo NULL  -> ikut hitungan sistem berdasarkan terpakaiMurni()
      * koreksi_saldo 0..n  -> angka koreksi Admin HR dipakai apa adanya (termasuk 0)
      */
-    public static function terpakaiEfektif(int $pegawaiId, int $tahun, ?self $saldo = null): int
+    public static function terpakaiEfektif(
+        int $pegawaiId,
+        int $tahun,
+        ?self $saldo = null
+    ): int
     {
         $saldo ??= static::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
 
@@ -35,11 +51,16 @@ class SaldoCuti extends Model
             return max(0, (int) $saldo->koreksi_saldo);
         }
 
-        return (int) PengajuanCuti::where('pegawai_id', $pegawaiId)
-            ->where('jenis_cuti', 'Cuti Tahunan')
-            ->where('status', 'disetujui')
-            ->whereYear('tanggal_mulai', $tahun)
-            ->sum('jumlah_hari');
+        return static::terpakaiMurni($pegawaiId, $tahun);
+    }
+
+    public static function hitungBawaan(int $sisaDuaTahunLalu, int $sisaTahunLalu, int $kuota): int
+    {
+        $normal = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
+            ? 12
+            : min(6, max(0, $sisaTahunLalu));
+
+        return max(0, min($normal, 24 - $kuota));
     }
 
     /**

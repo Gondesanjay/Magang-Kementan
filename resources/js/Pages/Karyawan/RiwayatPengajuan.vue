@@ -1,7 +1,7 @@
 <script setup>
 import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, Link, router, useForm, usePage } from "@inertiajs/vue3";
-import { computed, ref, watch } from "vue";
+import { computed, ref, watch, onMounted, onUnmounted } from "vue";
 
 const props = defineProps({
     riwayat: Object,
@@ -30,7 +30,7 @@ const props = defineProps({
         type: Boolean,
         default: true,
     },
-    // ================= BARU: RUTE LEVEL UNTUK FILTER STATUS =================
+    // ================= RUTE LEVEL UNTUK FILTER STATUS =================
     // Dikirim dari CutiController@history: daftar level "Menunggu" yang
     // relevan untuk pegawai yang login, mis. [1,3,4] / [2,3,4] / [3,4] / [4] / [].
     // Default null (bukan []) supaya array kosong dari backend (Kepala Biro)
@@ -40,7 +40,7 @@ const props = defineProps({
         type: Array,
         default: null,
     },
-    // BARU: tahun yang sudah punya baris saldo (untuk validasi modal Revisi).
+    // Tahun yang sudah punya baris saldo (untuk validasi modal Revisi).
     tahun_saldo_tersedia: {
         type: Array,
         default: null,
@@ -113,7 +113,9 @@ const sisaCutiTahunanInfo = computed(() => {
             s.sisa_kuota_tahun_ini != null
                 ? Number(s.sisa_kuota_tahun_ini)
                 : Math.max(0, (s.kuota_tahunan ?? 12) - (s.cuti_terpakai ?? 0));
-        const tahunLalu = Number(s.saldo_bawaan_eligible ?? s.carry_forward_normal ?? 0);
+        const tahunLalu = Number(
+            s.saldo_bawaan_eligible ?? s.carry_forward_normal ?? 0,
+        );
         const total =
             s.total_cuti_tersedia != null
                 ? Number(s.total_cuti_tersedia)
@@ -132,8 +134,7 @@ const sisaCutiTahunanInfo = computed(() => {
 // Rincian di Modal Detail: prioritaskan data per-pegawai, lalu stats backend
 const rincianSisaCuti = (item) => ({
     total:
-        item?.pegawai?.sisa_cuti_tersedia ??
-        sisaCutiTahunanInfo.value.total,
+        item?.pegawai?.sisa_cuti_tersedia ?? sisaCutiTahunanInfo.value.total,
     tahunIni:
         item?.pegawai?.sisa_kuota_tahun_ini ??
         sisaCutiTahunanInfo.value.tahunIni,
@@ -144,28 +145,134 @@ const rincianSisaCuti = (item) => ({
 // ================= END SISA CUTI TAHUNAN =================
 
 // ================= FILTER =================
-// PEMBARUAN: fitur pencarian ("search berdasarkan keterangan") DIHAPUS.
+// Fitur pencarian ("search berdasarkan keterangan") DIHAPUS.
 // Filter yang tersisa hanya Jenis Cuti dan Status.
 const status = ref(props.filters?.status || "");
 const jenisCutiFilter = ref(props.filters?.jenis_cuti || "");
 
 let timeout = null;
-watch(
-    [status, jenisCutiFilter],
-    ([newStatus, newJenisCuti]) => {
-        clearTimeout(timeout);
-        timeout = setTimeout(() => {
-            router.get(
-                route("karyawan.riwayat"),
-                {
-                    status: newStatus,
-                    jenis_cuti: newJenisCuti,
-                },
-                { preserveState: true, replace: true },
-            );
-        }, 300);
-    },
+watch([status, jenisCutiFilter], ([newStatus, newJenisCuti]) => {
+    clearTimeout(timeout);
+    timeout = setTimeout(() => {
+        router.get(
+            route("karyawan.riwayat"),
+            {
+                status: newStatus,
+                jenis_cuti: newJenisCuti,
+            },
+            { preserveState: true, replace: true },
+        );
+    }, 300);
+});
+
+// ================================================================
+// DROPDOWN FILTER KUSTOM (Jenis Cuti & Status)
+// Disamakan dengan dropdown "Jenis Cuti" di AjukanCuti.vue — tombol
+// berikon + panah, daftar SELALU terbuka ke bawah dengan lebar SAMA
+// dengan tombolnya, tinggi dibatasi (bisa di-scroll), teks panjang
+// membungkus, opsi terpilih berwarna hijau. Menutup saat klik di luar
+// (elemen tanpa atribut data-dropdown) atau menekan Esc. Hanya satu
+// dropdown yang terbuka pada satu waktu. Nilai tetap disimpan di
+// `jenisCutiFilter` dan `status`, sehingga watcher & filter backend
+// TIDAK berubah.
+// ================================================================
+const dropdownAktif = ref(null); // 'jenis' | 'status' | null
+
+const toggleDropdown = (nama) => {
+    dropdownAktif.value = dropdownAktif.value === nama ? null : nama;
+};
+
+const tutupDropdown = () => {
+    dropdownAktif.value = null;
+};
+
+const opsiJenisFilter = [
+    { value: "", label: "Semua Jenis Cuti" },
+    { value: "Cuti Tahunan", label: "Cuti Tahunan" },
+    { value: "Cuti Besar", label: "Cuti Besar" },
+    { value: "Cuti Melahirkan", label: "Cuti Melahirkan" },
+    { value: "Cuti Alasan Penting", label: "Cuti Alasan Penting" },
+];
+
+// Opsi "Menunggu Lx" tetap mengikuti RUTE PERSETUJUAN pegawai yang login.
+const opsiStatusFilter = computed(() => [
+    { value: "", label: "Semua Status" },
+    ...levelFilterTersedia.value.map((lvl) => ({
+        value: `menunggu_l${lvl}`,
+        label: `Menunggu L${lvl}`,
+    })),
+    { value: "disetujui", label: "Disetujui" },
+    { value: "ditolak", label: "Ditolak" },
+    { value: "ditangguhkan", label: "Ditangguhkan" },
+    { value: "dibatalkan_reguler", label: "Dibatalkan" },
+    { value: "kedaluwarsa", label: "Kedaluwarsa" },
+]);
+
+const jenisFilterLabel = computed(() => {
+    const cocok = opsiJenisFilter.find(
+        (o) => o.value === jenisCutiFilter.value,
+    );
+    return cocok ? cocok.label : "Semua Jenis Cuti";
+});
+
+const statusFilterLabel = computed(() => {
+    const cocok = opsiStatusFilter.value.find((o) => o.value === status.value);
+    return cocok ? cocok.label : "Semua Status";
+});
+
+// ================= LABEL SINGKAT FILTER (khusus tombol di HP) =================
+// Di HP kedua dropdown tersusun kiri-kanan (2 kolom), jadi tiap tombol hanya
+// ±165px. Teks tombol dipersingkat supaya tidak terpotong; daftar pilihan
+// di bawahnya tetap memakai label lengkap, dan nilai filter TIDAK berubah.
+const JENIS_LABEL_SINGKAT = {
+    "": "Semua Jenis",
+    "Cuti Tahunan": "Tahunan",
+    "Cuti Besar": "Besar",
+    "Cuti Melahirkan": "Melahirkan",
+    "Cuti Alasan Penting": "Alasan Penting",
+};
+
+const jenisFilterLabelSingkat = computed(
+    () =>
+        JENIS_LABEL_SINGKAT[jenisCutiFilter.value] ?? jenisFilterLabel.value,
 );
+
+const statusFilterLabelSingkat = computed(() =>
+    status.value ? statusFilterLabel.value : "Semua Status",
+);
+// ================= END LABEL SINGKAT FILTER =================
+
+const pilihJenisFilter = (opt) => {
+    jenisCutiFilter.value = opt.value;
+    tutupDropdown();
+};
+
+const pilihStatusFilter = (opt) => {
+    status.value = opt.value;
+    tutupDropdown();
+};
+
+const tutupDropdownSaatKlikLuar = (event) => {
+    if (!event.target.closest?.("[data-dropdown]")) {
+        dropdownAktif.value = null;
+    }
+};
+
+// Esc global: menutup dropdown walau fokus tidak sedang di dalamnya.
+const onKeydownGlobal = (e) => {
+    if (e.key === "Escape") dropdownAktif.value = null;
+};
+
+onMounted(() => {
+    document.addEventListener("click", tutupDropdownSaatKlikLuar);
+    document.addEventListener("keydown", onKeydownGlobal);
+});
+onUnmounted(() => {
+    document.removeEventListener("click", tutupDropdownSaatKlikLuar);
+    document.removeEventListener("keydown", onKeydownGlobal);
+    clearTimeout(timeout);
+});
+// ================= END DROPDOWN FILTER KUSTOM =================
 
 // ==========================================================
 // PEMBATALAN CUTI — MASIH MENUNGGU APPROVAL (menunggu_l1/l2/l3/l4)
@@ -204,16 +311,20 @@ const eksekusiBatalCuti = () => {
 };
 
 // ==========================================================
-// PEMBATALAN MANDIRI — CUTI SUDAH "DISETUJUI"
+// PEMBATALAN MANDIRI — CUTI SUDAH "DISETUJUI" DAN BELUM DIMULAI
 // Wajib isi alasan pembatalan. Saldo cuti otomatis dikembalikan
 // tanpa perlu approval ulang dari atasan.
 //
-// PEMBARUAN: validasi "alasan wajib diisi" sebelumnya memakai alert()
-// bawaan browser (tampilannya "sistem", tidak bisa di-styling, dan
-// mengganggu alur modal custom). Sekarang diganti validasi inline:
-// textarea diberi border merah + pesan error di bawahnya, mengikuti
-// pola yang sama seperti modal-modal lain di aplikasi ini (mis. modal
-// penolakan pada AntreanApproval.vue).
+// Tombol Batalkan untuk cuti disetujui TIDAK lagi memeriksa status
+// saja, tetapi memakai flag `item.bisa_batal_mandiri` yang dikirim
+// CutiController@history (aturan tunggal: disetujui DAN tanggal mulai
+// masih sesudah hari ini, dihitung dengan jam SERVER). Tanggal sengaja
+// tidak dihitung di sini, supaya jam perangkat pengguna tidak bisa
+// dimanipulasi. Server (CutiController@batalkanMandiri) tetap menolak
+// permintaan yang melanggar aturan yang sama.
+//
+// Validasi "alasan wajib diisi" memakai validasi inline: textarea diberi
+// border merah + pesan error di bawahnya (bukan alert() bawaan browser).
 // ==========================================================
 const batalModal = ref({
     show: false,
@@ -269,76 +380,15 @@ const closeDetailModal = () => {
 // Status pengajuan yang boleh direvisi (dipakai untuk kondisi tombol
 // "Revisi" di tabel, tombol "Revisi Cuti" di footer Modal Detail, maupun
 // validasi sebelum membuka Modal Revisi).
-const isStatusBisaDirevisi = (item) =>
-    item?.status === "ditangguhkan" ||
-    item?.status === "dibatalkan_ditangguhkan";
+const isStatusBisaDirevisi = (item) => item?.bisa_direvisi === true;
 
-// BARU: dari footer Modal Detail -> tutup detail lalu buka Modal Revisi
+// Dari footer Modal Detail -> tutup detail lalu buka Modal Revisi
 // (dedicated) yang sudah ada, jadi tidak ada logika revisi ganda.
 const revisiDariDetail = () => {
     const item = selectedDetail.value;
     if (!item) return;
     closeDetailModal();
     konfirmasiRevisi(item);
-};
-
-// Nama Status Atasan & Hierarki L4 — disamakan dengan statusLabels di
-// MonitoringCuti.vue Admin (nama atasan lengkap per level).
-const formatStatus = (statusCode) => {
-    switch (statusCode) {
-        // ------------------------------------------------------------
-        // PEMBARUAN: label "menunggu" sekarang memakai JABATAN + kode
-        // level (mis. "Menunggu Kasubag TU (L3)"), bukan nama pejabat.
-        // Alasannya: jabatan lebih stabil terhadap pergantian orang, dan
-        // lebih ringkas di badge/tabel. Nama lengkap pejabat tetap
-        // ditampilkan di Modal Detail (lihat rutePersetujuan).
-        // ------------------------------------------------------------
-        case "menunggu_l1":
-            return {
-                text: "Menunggu Ketua Tim Kerja (L1)",
-                class: "bg-amber-100 text-amber-700 border border-amber-200",
-            };
-        case "menunggu_l2":
-            return {
-                text: "Menunggu Ketua Kelompok Substansi (L2)",
-                class: "bg-amber-100 text-amber-700 border border-amber-200",
-            };
-        case "menunggu_l3":
-            return {
-                text: "Menunggu Kasubag TU (L3)",
-                class: "bg-amber-100 text-amber-700 border border-amber-200",
-            };
-        case "menunggu_l4":
-            return {
-                text: "Menunggu Kepala Biro Perencanaan (L4)",
-                class: "bg-amber-100 text-amber-700 border border-amber-200",
-            };
-        case "disetujui":
-            return {
-                text: "Disetujui",
-                class: "bg-green-100 text-green-700 border border-green-200",
-            };
-        case "ditolak":
-            return {
-                text: "Ditolak",
-                class: "bg-rose-50 text-rose-700 border border-rose-100",
-            };
-        case "dibatalkan_reguler":
-            return {
-                text: "Dibatalkan (Reguler)",
-                class: "bg-slate-100 text-slate-600 border border-slate-200",
-            };
-        case "dibatalkan_ditangguhkan":
-            return {
-                text: "Dibatalkan (Ditangguhkan)",
-                class: "bg-orange-50 text-orange-700 border border-orange-200",
-            };
-        default:
-            return {
-                text: statusCode,
-                class: "bg-slate-100 text-slate-600 border border-slate-200",
-            };
-    }
 };
 
 const formatDate = (dateString) => {
@@ -352,9 +402,9 @@ const formatDate = (dateString) => {
 };
 
 // Helper: nama atasan yang memproses pengajuan.
-// PEMBARUAN: sekarang lebih dulu mencari log 'tangguh'/'tolak' terakhir di
-// approval_logs (pemroses sebenarnya), baru jatuh ke fallback lama
-// (relasi atasanL1-L4 / level_saat_ini) — fallback lama tetap dipertahankan.
+// Lebih dulu mencari log 'tangguh'/'tolak' terakhir di approval_logs
+// (pemroses sebenarnya), baru jatuh ke fallback lama (relasi atasanL1-L4 /
+// level_saat_ini) — fallback lama tetap dipertahankan.
 const getNamaAtasanPemroses = (item) => {
     if (!item) return "Atasan";
 
@@ -382,25 +432,6 @@ const getNamaAtasanPemroses = (item) => {
         }[item.level_saat_ini] ||
         "Atasan"
     );
-};
-
-// Membersihkan teks catatan atasan: ambil bagian setelah "|", buang prefix
-// "[Label: ...]" beserta sisa kurung siku. DIPERTAHANKAN sebagai fallback.
-const formatCatatanAtasan = (keterangan, status) => {
-    if (!keterangan || !keterangan.includes("|")) {
-        return (
-            {
-                disetujui: "Disetujui dan diteruskan sesuai alur birokrasi.",
-                ditolak: "Pengajuan ditolak oleh atasan.",
-            }[status] || "Diproses tanpa catatan tambahan."
-        );
-    }
-
-    return keterangan
-        .split("|")[1]
-        .replace(/\[.*?:\s*/g, "")
-        .replace(/\]/g, "")
-        .trim();
 };
 
 // ================= CATATAN / RESPON ATASAN (SUMBER DATA ASLI) =================
@@ -443,32 +474,15 @@ const getApprovalLogs = (item) => {
     return legacyLogs;
 };
 
-// Level 5 = penanda khusus penangguhan oleh L4 (Kepala Biro), sesuai
-// ApprovalLog::create() di PembatalanController@process.
-const getApprovalLevelLabel = (level) =>
-    ({
-        1: "L1 - Ketua Tim Kerja",
-        2: "L2 - Ketua Kelompok Substansi",
-        3: "L3 - Kasubag TU",
-        4: "L4 - Kepala Biro Perencanaan",
-        5: "Penangguhan oleh Kepala Biro",
-    })[level] || `Level ${level}`;
-
-// Label & warna badge per nilai kolom `keputusan` di approval_logs
-// ('setuju' | 'tolak' | 'tangguh'). 'tangguh' SENGAJA memakai warna
-// silver/abu (bukan merah) supaya tidak dikesankan sama seperti penolakan.
+// Label per nilai kolom `keputusan` di approval_logs
+// ('setuju' | 'tolak' | 'tangguh').
 const keputusanLabel = (k) =>
     ({ setuju: "Disetujui", tolak: "Ditolak", tangguh: "Ditangguhkan" })[k] ||
     k;
 
-const keputusanClass = (k) =>
-    ({
-        setuju: "bg-emerald-50 text-emerald-700 border border-emerald-200",
-        tolak: "bg-red-50 text-red-700 border border-red-200",
-        tangguh: "bg-slate-200 text-slate-700 border border-slate-300",
-    })[k] || "bg-slate-100 text-slate-600 border border-slate-200";
-
-// BARU: warna teks status per entri (dipakai di daftar riwayat persetujuan).
+// Warna teks status per entri (dipakai di daftar riwayat persetujuan).
+// 'tangguh' SENGAJA memakai warna oranye (bukan merah) supaya tidak
+// dikesankan sama seperti penolakan.
 const keputusanTextClass = (k) =>
     ({
         setuju: "text-emerald-600",
@@ -477,75 +491,11 @@ const keputusanTextClass = (k) =>
     })[k] || "text-slate-600";
 // ================= END CATATAN / RESPON ATASAN =================
 
-// ================= JEJAK APPROVAL LENGKAP (disamakan dengan RekapKuotaDetail.vue Admin) =================
-const approvalStepLabel = (statusStep) => {
-    switch (statusStep) {
-        case "setuju":
-            return "Setuju";
-        case "tolak":
-            return "Tolak";
-        case "menunggu":
-            return "Menunggu";
-        case "belum_giliran":
-            return "Belum Giliran";
-        case "tangguh":
-            return "Ditangguhkan";
-        default:
-            return statusStep;
-    }
-};
-
-const approvalStepClass = (statusStep) => {
-    switch (statusStep) {
-        case "setuju":
-            return "text-emerald-600";
-        case "tolak":
-            return "text-rose-600";
-        case "menunggu":
-            return "text-amber-600";
-        case "belum_giliran":
-            return "text-gray-400";
-        case "tangguh":
-            return "text-slate-600 font-medium";
-        default:
-            return "text-gray-500";
-    }
-};
-
-// Pembersih kalimat keterangan (konsisten dengan RekapKuotaDetail.vue Admin
-// & AntreanApproval.vue). PembatalanController@process menyimpan bracket
-// dengan kata "ATASAN" — regex menerima ALASAN maupun ATASAN.
-const formatKeteranganRapi = (text) => {
-    if (!text || text === "-") return "-";
-
-    if (text.includes("|") || text.includes("[DITANGGUHKAN")) {
-        let bagian = text.split("|").map((item) => item.trim());
-        let alasanAwal =
-            bagian[0] && bagian[0] !== "-" ? bagian[0] : "Ada keperluan";
-
-        let regex = /\[DITANGGUHKAN\/DIBATALKAN (?:ALASAN|ATASAN):\s*(.*?)\]/i;
-        let match = text.match(regex);
-
-        if (match && match[1]) {
-            let catatanAtasan = match[1].trim();
-            return `${alasanAwal} (Ditangguhkan: ${catatanAtasan})`;
-        }
-
-        return alasanAwal;
-    }
-
-    return text;
-};
-// ================= END JEJAK APPROVAL LENGKAP =================
-
-// ================= TIMELINE PERSETUJUAN (FALLBACK, dari MonitoringCuti Atasan) =================
-// ----------------------------------------------------------------
-// PEMBARUAN: label "menunggu" di badge tabel Riwayat (dipakai lewat
-// getEffectiveStatusLabel) sekarang memakai JABATAN + kode level saja
-// (mis. "Menunggu Kasubag TU (L3)"), tanpa nama pejabat — supaya badge
-// tetap ringkas dan tidak berubah kalau pejabatnya diganti orang. Nama
-// lengkap tetap tampil di Modal Detail lewat rutePersetujuan.
-// ----------------------------------------------------------------
+// ================= STATUS EFEKTIF & BADGE =================
+// Label "menunggu" di badge tabel Riwayat memakai JABATAN + kode level saja
+// (mis. "Menunggu Kasubag TU (L3)"), tanpa nama pejabat — supaya badge tetap
+// ringkas dan tidak berubah kalau pejabatnya diganti orang. Nama lengkap
+// tetap tampil di Modal Detail lewat rutePersetujuan.
 const statusLabels = {
     menunggu_l1: "Menunggu Ketua Tim Kerja (L1)",
     menunggu_l2: "Menunggu Ketua Kelompok Substansi (L2)",
@@ -584,8 +534,8 @@ const getEffectiveStatusLabel = (item) => {
     return getStatusLabel(getEffectiveStatus(item));
 };
 
-// BARU (responsif): kelas warna badge status untuk tabel (desktop) dan
-// kartu (HP), supaya aturan warnanya cukup ditulis sekali.
+// Kelas warna badge status untuk tabel (desktop) dan kartu (HP), supaya
+// aturan warnanya cukup ditulis sekali.
 const statusBadgeClass = (item) => ({
     "bg-amber-100 text-amber-800 border-amber-300":
         item.status?.includes("menunggu"),
@@ -625,9 +575,9 @@ const getStatusBadgeLabelSingkat = (item) => {
 
     return levelMap[st] || st.replace(/_/g, " ").toUpperCase();
 };
-// ================= END LABEL SINGKAT BADGE =================
+// ================= END STATUS EFEKTIF & BADGE =================
 
-// ================= BARU: HELPER BLOK "RESPON ATASAN / PEMBATALAN" (gaya Dashboard) =================
+// ================= HELPER BLOK "RESPON ATASAN / PEMBATALAN" (gaya Dashboard) =================
 const isStatusDibatalkanReguler = (item) =>
     item?.status === "dibatalkan_reguler" || item?.status === "dibatalkan";
 
@@ -635,9 +585,6 @@ const isStatusDitangguhkan = (item) => {
     const st = getEffectiveStatus(item);
     return st === "ditangguhkan" || st === "dibatalkan_ditangguhkan";
 };
-
-const isStatusDibatalkanAtauDitangguhkan = (item) =>
-    isStatusDitangguhkan(item) || isStatusDibatalkanReguler(item);
 
 const getNamaPembatal = (item) => {
     return (
@@ -660,27 +607,11 @@ const getCatatanPembatalanReguler = (item) => {
     return "Pengajuan cuti telah dibatalkan secara mandiri oleh pemohon sebelum proses persetujuan selesai.";
 };
 
-// Daftar histori persetujuan L1-L4 (tanpa log penangguhan level 5) dalam
-// bentuk yang siap dirender di template.
 const jabatanPerLevel = {
     1: "Ketua Tim Kerja",
     2: "Ketua Kelompok Substansi",
     3: "Kasubag TU",
     4: "Kepala Biro Perencanaan",
-};
-
-const getCatatanAtasanList = (item) => {
-    return getApprovalLogs(item)
-        .filter((log) => Number(log.level_approval) <= 4)
-        .map((log) => ({
-            key: log.id,
-            level: log.level_approval,
-            jabatan: jabatanPerLevel[log.level_approval] || "Atasan",
-            nama: log.approver?.nama || "-",
-            catatan: log.catatan || "",
-            statusText: keputusanLabel(log.keputusan),
-            statusColorClass: keputusanTextClass(log.keputusan),
-        }));
 };
 
 // Alasan utama dari atasan: prioritas log 'tangguh'/'tolak' terakhir,
@@ -796,6 +727,8 @@ const getIsiCatatanMentah = (text) => {
         return bracketMatch[1].trim();
     }
 
+    // [PERBAIKAN] Mengambil teks di dalam tanda kurung "( ... )". Regex yang
+    // rusak sebelumnya (/([)]+)/) hanya mencocokkan tanda kurung tutup.
     const parenRegex = /\(([^)]+)\)/;
     const parenMatch = text.match(parenRegex);
     if (parenMatch && parenMatch[1]) {
@@ -817,14 +750,13 @@ const getCatatanAtasanLevel = (text) => {
     return isi;
 };
 
-// ================= [PERBAIKAN] DEFINISI 4 LEVEL PERSETUJUAN =================
+// ================= DEFINISI 4 LEVEL PERSETUJUAN =================
 // levelsDefinition adalah FUNGSI yang menerima `item` (data pengajuan),
 // sehingga nama L1/L2 diambil dari `item.pegawai.nama_l1` /
 // `item.pegawai.nama_l2` — data yang sudah dihitung dan ditempelkan oleh
 // CutiController@history (lihat accessor ketua_tim_kerja / ketua_kelompok
 // di model Pegawai). Kalau data belum tersedia, fallback ke label jabatan
 // generik.
-// ================= END PERBAIKAN =================
 const getLevelsDefinition = (item) => [
     {
         key: 1,
@@ -849,7 +781,7 @@ const getLevelsDefinition = (item) => [
 ];
 
 // ================================================================
-// [PERBAIKAN] RUTE PERSETUJUAN — DINAMIS PER-ITEM, BUKAN TEBAKAN GLOBAL
+// RUTE PERSETUJUAN — DINAMIS PER-ITEM, BUKAN TEBAKAN GLOBAL
 // BERDASARKAN roleId + flag biner ada_atasan_l1.
 //
 // Levelnya dideteksi LANGSUNG dari data pengajuan itu sendiri
@@ -907,8 +839,8 @@ const getApprovalRoute = (item) => {
 };
 
 // Menyusun status tiap level pada rute yang berlaku, berdasarkan
-// selectedDetail. DIPERTAHANKAN sebagai fallback cadangan — tampilan
-// utama memakai getApprovalLogs().
+// selectedDetail. Dipakai sebagai dasar/cadangan oleh rutePersetujuan;
+// data approval_logs tetap diprioritaskan di sana.
 const approvalTimeline = computed(() => {
     const data = selectedDetail.value;
     if (!data) return [];
@@ -983,7 +915,8 @@ const approvalTimeline = computed(() => {
         return { ...level, nama, status: label, color, catatan };
     });
 });
-// BARU: rute persetujuan per level (L1/L3/L4 dst.) untuk Modal Detail, format
+
+// Rute persetujuan per level (L1/L3/L4 dst.) untuk Modal Detail, format
 // sama seperti Dashboard: "L3 - Kasubag TU: Nama" + status di bawahnya.
 // Nama & keputusan diambil dari approval_logs bila ada; kalau belum ada
 // (masih menunggu) jatuh ke approvalTimeline.
@@ -1034,10 +967,10 @@ const rutePersetujuan = computed(() => {
         };
     });
 });
-// ================= END TIMELINE PERSETUJUAN =================
+// ================= END RUTE PERSETUJUAN =================
 
 // ================= FILTER STATUS BERDASARKAN STATUS EFEKTIF =================
-// BARU: mencocokkan pilihan dropdown dengan STATUS EFEKTIF (yang tampil di
+// Mencocokkan pilihan dropdown dengan STATUS EFEKTIF (yang tampil di
 // tabel & modal detail), bukan status mentah di database:
 //   - "ditangguhkan" mencakup 'ditangguhkan', 'dibatalkan_ditangguhkan',
 //     dan data lama 'ditolak' yang keterangannya mengandung "ditangguhkan".
@@ -1059,8 +992,8 @@ const cocokFilterStatus = (item, filter) => {
 };
 
 // ================= PENGURUTAN DATA (SORTING TIGA PRIORITAS) =================
-// BARU: menggantikan urutan mentah dari backend. Status diurutkan supaya
-// yang paling butuh perhatian tampil paling atas:
+// Menggantikan urutan mentah dari backend. Status diurutkan supaya yang
+// paling butuh perhatian tampil paling atas:
 //   1) Ditangguhkan / Dibatalkan (Ditangguhkan) — perlu direvisi
 //   2) Menunggu Persetujuan Atasan (L1-L4)
 //   3) Selesai (Disetujui, Ditolak, Dibatalkan Reguler)
@@ -1069,7 +1002,7 @@ const cocokFilterStatus = (item, filter) => {
 const sortedRiwayatData = computed(() => {
     if (!props.riwayat?.data) return [];
 
-    return props.riwayat.data
+    return [...props.riwayat.data]
         .filter((item) => cocokFilterStatus(item, status.value))
         .sort((a, b) => {
             const getGroup = (item) => {
@@ -1152,14 +1085,56 @@ const tutupModalRevisi = () => {
     formRevisi.clearErrors();
 };
 
-const minDate = computed(() => new Date().toISOString().split("T")[0]);
-
+// Memakai tanggal LOKAL (bukan toISOString UTC) supaya di WIB tidak mundur 1 hari.
+// [PERBAIKAN] Template string yang benar: `${yyyy}-${mm}-${dd}`.
 const toDateStr = (date) => {
     const yyyy = date.getFullYear();
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const dd = String(date.getDate()).padStart(2, "0");
     return `${yyyy}-${mm}-${dd}`;
 };
+
+const parseLocalDate = (dateStr) => new Date(`${dateStr}T00:00:00`);
+
+const minDate = computed(() => toDateStr(new Date()));
+
+// ================= BATAS RENTANG (selaras AjukanCuti + CutiController) =================
+// Backend: MAKS_RENTANG_HARI = 92, MAKS_MULAI_TAHUN_KE_DEPAN = 2.
+// Atribut :max di input date hanya UX; backend tetap penjaga akhir.
+const MAKS_RENTANG_HARI = 92; // hari kalender inklusif
+const MAKS_MULAI_TAHUN_KE_DEPAN = 2;
+
+const maxTanggalMulaiRevisi = computed(() => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + MAKS_MULAI_TAHUN_KE_DEPAN);
+    return toDateStr(d);
+});
+
+// Selesai: min(mulai + 91 hari, batas mulai + 2 tahun dari hari ini)
+const maxTanggalSelesaiRevisi = computed(() => {
+    const batasGlobal = maxTanggalMulaiRevisi.value;
+    if (!formRevisi.tanggal_mulai) return batasGlobal;
+    const m = parseLocalDate(formRevisi.tanggal_mulai);
+    m.setDate(m.getDate() + (MAKS_RENTANG_HARI - 1)); // 92 hari inklusif
+    const maxDariMulai = toDateStr(m);
+    return maxDariMulai < batasGlobal ? maxDariMulai : batasGlobal;
+});
+
+// Jika tanggal mulai berubah dan selesai sudah di luar batas, rapikan selesai.
+watch(
+    () => formRevisi.tanggal_mulai,
+    (val) => {
+        if (!val || !formRevisi.tanggal_selesai) return;
+        if (formRevisi.tanggal_selesai < val) {
+            formRevisi.tanggal_selesai = val;
+        } else if (
+            formRevisi.tanggal_selesai > maxTanggalSelesaiRevisi.value
+        ) {
+            formRevisi.tanggal_selesai = maxTanggalSelesaiRevisi.value;
+        }
+    },
+);
+// ================= END BATAS RENTANG =================
 
 const hariLiburSet = computed(
     () => new Set(props.hariLiburs.map((hari) => hari.tanggal)),
@@ -1168,8 +1143,8 @@ const hariLiburSet = computed(
 const liburBertepatan = computed(() => {
     if (!formRevisi.tanggal_mulai || !formRevisi.tanggal_selesai) return [];
 
-    const start = new Date(formRevisi.tanggal_mulai);
-    const end = new Date(formRevisi.tanggal_selesai);
+    const start = parseLocalDate(formRevisi.tanggal_mulai);
+    const end = parseLocalDate(formRevisi.tanggal_selesai);
     if (start > end) return [];
 
     const hasil = [];
@@ -1187,8 +1162,8 @@ const liburBertepatan = computed(() => {
 const jumlahHariKerja = computed(() => {
     if (!formRevisi.tanggal_mulai || !formRevisi.tanggal_selesai) return 0;
 
-    const start = new Date(formRevisi.tanggal_mulai);
-    const end = new Date(formRevisi.tanggal_selesai);
+    const start = parseLocalDate(formRevisi.tanggal_mulai);
+    const end = parseLocalDate(formRevisi.tanggal_selesai);
     if (start > end) return 0;
 
     let count = 0;
@@ -1210,8 +1185,8 @@ const jumlahHariKerja = computed(() => {
 const isInvalidWeekendOnly = computed(() => {
     if (!formRevisi.tanggal_mulai || !formRevisi.tanggal_selesai) return false;
 
-    const start = new Date(formRevisi.tanggal_mulai);
-    const end = new Date(formRevisi.tanggal_selesai);
+    const start = parseLocalDate(formRevisi.tanggal_mulai);
+    const end = parseLocalDate(formRevisi.tanggal_selesai);
     if (start > end) return false;
 
     const current = new Date(start);
@@ -1250,9 +1225,9 @@ const tahunTanpaSaldoRevisi = computed(() => {
 });
 // ================= END SALDO TAHUN BELUM ADA (MODAL REVISI) =================
 
-// Catatan/instruksi atasan yang ditampilkan di Modal Revisi — sekarang
-// diambil dari log 'tangguh' di approval_logs (sumber asli), lalu approval_chain
-// (jika suatu saat tersedia), lalu fallback ke kolom keterangan lama.
+// Catatan/instruksi atasan yang ditampilkan di Modal Revisi — diambil dari
+// log 'tangguh' di approval_logs (sumber asli), lalu approval_chain (jika
+// suatu saat tersedia), lalu fallback ke kolom keterangan lama.
 const catatanAtasanUntukRevisi = computed(() => {
     const item = cutiYangDirevisi.value;
     if (!item) return "";
@@ -1304,59 +1279,209 @@ const eksekusiRevisi = () => {
                     </p>
                 </div>
 
-                <!-- Filter: Jenis Cuti & Status. Di HP tersusun ke bawah, lebar penuh. -->
+                <!-- ================= FILTER: Jenis Cuti & Status (DROPDOWN KUSTOM) =================
+                     Gaya sama dengan dropdown "Jenis Cuti" di AjukanCuti.vue.
+                     Di HP: dua kolom sejajar (kiri-kanan) supaya hemat tinggi layar, dengan
+                     teks tombol dipersingkat. Di layar >= sm: berjajar dengan lebar tetap. -->
                 <div
-                    class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full md:w-auto"
+                    class="grid grid-cols-2 gap-2 sm:flex sm:flex-row sm:items-center sm:gap-3 w-full md:w-auto"
                 >
-                    <select
-                        id="filter_jenis_cuti"
-                        name="jenis_cuti"
-                        aria-label="Filter jenis cuti"
-                        v-model="jenisCutiFilter"
-                        class="w-full min-h-[44px] sm:w-48 py-2.5 sm:py-2 px-3 text-base sm:text-sm border border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-white text-slate-600"
+                    <!-- Dropdown Jenis Cuti -->
+                    <div
+                        data-dropdown
+                        class="relative w-full min-w-0 sm:w-52"
+                        @keydown.esc="tutupDropdown"
                     >
-                        <option value="">Semua Jenis Cuti</option>
-                        <option value="Cuti Tahunan">Cuti Tahunan</option>
-                        <option value="Cuti Besar">Cuti Besar</option>
-                        <option value="Cuti Melahirkan">
-                            Cuti Melahirkan
-                        </option>
-                        <option value="Cuti Alasan Penting">
-                            Cuti Alasan Penting
-                        </option>
-                    </select>
+                        <div
+                            class="absolute inset-y-0 left-0 pl-2.5 sm:pl-3 flex items-center pointer-events-none"
+                        >
+                            <svg
+                                class="w-4 h-4 text-gray-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                />
+                            </svg>
+                        </div>
+
+                        <button
+                            id="filter_jenis_cuti"
+                            type="button"
+                            aria-label="Filter jenis cuti"
+                            aria-haspopup="listbox"
+                            :aria-expanded="dropdownAktif === 'jenis'"
+                            :title="jenisFilterLabel"
+                            @click="toggleDropdown('jenis')"
+                            class="w-full min-h-[44px] text-left text-[13px] sm:text-sm border border-gray-300 bg-white cursor-pointer rounded-lg shadow-sm text-gray-600 py-2 pl-8 pr-7 sm:pl-9 sm:pr-8 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                        >
+                            <!-- HP: label singkat; >= sm: label lengkap -->
+                            <span class="block truncate sm:hidden">{{
+                                jenisFilterLabelSingkat
+                            }}</span>
+                            <span class="hidden truncate sm:block">{{
+                                jenisFilterLabel
+                            }}</span>
+                        </button>
+
+                        <span
+                            class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                        >
+                            <svg
+                                class="w-3.5 h-3.5 text-gray-500 transition-transform"
+                                :class="{
+                                    'rotate-180': dropdownAktif === 'jenis',
+                                }"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M19 9l-7 7-7-7"
+                                ></path>
+                            </svg>
+                        </span>
+
+                        <ul
+                            v-if="dropdownAktif === 'jenis'"
+                            role="listbox"
+                            class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                        >
+                            <li
+                                v-for="opt in opsiJenisFilter"
+                                :key="opt.value || 'semua'"
+                            >
+                                <button
+                                    type="button"
+                                    role="option"
+                                    :title="opt.label"
+                                    :aria-selected="
+                                        jenisCutiFilter === opt.value
+                                    "
+                                    @click="pilihJenisFilter(opt)"
+                                    :class="
+                                        jenisCutiFilter === opt.value
+                                            ? 'bg-emerald-50 text-emerald-700 font-semibold cursor-pointer'
+                                            : 'text-gray-700 hover:bg-gray-50 cursor-pointer'
+                                    "
+                                    class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm"
+                                >
+                                    {{ opt.label }}
+                                </button>
+                            </li>
+                        </ul>
+                    </div>
 
                     <!-- Dropdown Filter Status: opsi "Menunggu Lx" mengikuti
                          RUTE PERSETUJUAN pegawai yang login (levelFilterTersedia). -->
-                    <select
-                        id="filter_status"
-                        name="status"
-                        aria-label="Filter status"
-                        v-model="status"
-                        class="w-full min-h-[44px] sm:w-44 py-2.5 sm:py-2 px-3 text-base sm:text-sm border border-slate-200 rounded-xl focus:ring-green-500 focus:border-green-500 bg-white text-slate-600"
+                    <div
+                        data-dropdown
+                        class="relative w-full min-w-0 sm:w-52"
+                        @keydown.esc="tutupDropdown"
                     >
-                        <option value="">Semua Status</option>
-                        <option
-                            v-for="lvl in levelFilterTersedia"
-                            :key="lvl"
-                            :value="`menunggu_l${lvl}`"
+                        <div
+                            class="absolute inset-y-0 left-0 pl-2.5 sm:pl-3 flex items-center pointer-events-none"
                         >
-                            Menunggu L{{ lvl }}
-                        </option>
-                        <option value="disetujui">Disetujui</option>
-                        <option value="ditolak">Ditolak</option>
-                        <option value="ditangguhkan">Ditangguhkan</option>
-                        <option value="dibatalkan_reguler">Dibatalkan</option>
-                        <option value="kedaluwarsa">Kedaluwarsa</option>
-                    </select>
+                            <svg
+                                class="w-4 h-4 text-gray-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                                />
+                            </svg>
+                        </div>
+
+                        <button
+                            id="filter_status"
+                            type="button"
+                            aria-label="Filter status"
+                            aria-haspopup="listbox"
+                            :aria-expanded="dropdownAktif === 'status'"
+                            :title="statusFilterLabel"
+                            @click="toggleDropdown('status')"
+                            class="w-full min-h-[44px] text-left text-[13px] sm:text-sm border border-gray-300 bg-white cursor-pointer rounded-lg shadow-sm text-gray-600 py-2 pl-8 pr-7 sm:pl-9 sm:pr-8 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none"
+                        >
+                            <span class="block truncate sm:hidden">{{
+                                statusFilterLabelSingkat
+                            }}</span>
+                            <span class="hidden truncate sm:block">{{
+                                statusFilterLabel
+                            }}</span>
+                        </button>
+
+                        <span
+                            class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                        >
+                            <svg
+                                class="w-3.5 h-3.5 text-gray-500 transition-transform"
+                                :class="{
+                                    'rotate-180': dropdownAktif === 'status',
+                                }"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M19 9l-7 7-7-7"
+                                ></path>
+                            </svg>
+                        </span>
+
+                        <ul
+                            v-if="dropdownAktif === 'status'"
+                            role="listbox"
+                            class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                        >
+                            <li
+                                v-for="opt in opsiStatusFilter"
+                                :key="opt.value || 'semua'"
+                            >
+                                <button
+                                    type="button"
+                                    role="option"
+                                    :title="opt.label"
+                                    :aria-selected="status === opt.value"
+                                    @click="pilihStatusFilter(opt)"
+                                    :class="
+                                        status === opt.value
+                                            ? 'bg-emerald-50 text-emerald-700 font-semibold cursor-pointer'
+                                            : 'text-gray-700 hover:bg-gray-50 cursor-pointer'
+                                    "
+                                    class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm"
+                                >
+                                    {{ opt.label }}
+                                </button>
+                            </li>
+                        </ul>
+                    </div>
                 </div>
+                <!-- ================= END FILTER ================= -->
             </div>
 
             <div
                 class="bg-white shadow-sm border border-slate-200 rounded-2xl overflow-hidden"
             >
-                <!-- ================= TAMPILAN KARTU (HP, di bawah md) ================= -->
-                <div class="md:hidden divide-y divide-slate-100">
+                <!-- ================= TAMPILAN KARTU (HP & tablet, di bawah lg) =================
+                     Tabel baru dipakai mulai lg (>= 1024px) supaya kolom Aksi tidak terpotong
+                     di layar sedang. -->
+                <div class="lg:hidden divide-y divide-slate-100">
                     <div
                         v-for="item in sortedRiwayatData"
                         :key="item.id"
@@ -1391,12 +1516,12 @@ const eksekusiRevisi = () => {
                             </p>
                         </div>
 
-                        <!-- Aksi -->
-                        <div class="flex flex-wrap gap-2">
+                        <!-- Aksi: tombol sejajar satu baris, lebar dibagi rata -->
+                        <div class="flex gap-2">
                             <button
                                 type="button"
                                 @click.prevent="openDetailModal(item)"
-                                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer"
+                                class="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-semibold whitespace-nowrap transition shadow-sm cursor-pointer"
                             >
                                 <svg
                                     class="w-4 h-4 shrink-0"
@@ -1424,7 +1549,7 @@ const eksekusiRevisi = () => {
                                 v-if="item.status === 'disetujui'"
                                 :href="route('karyawan.cuti.pdf', item.id)"
                                 target="_blank"
-                                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-semibold transition shadow-sm"
+                                class="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-semibold whitespace-nowrap transition shadow-sm"
                             >
                                 <svg
                                     class="w-4 h-4 shrink-0"
@@ -1447,7 +1572,7 @@ const eksekusiRevisi = () => {
                                 v-if="isStatusBisaDirevisi(item)"
                                 type="button"
                                 @click="konfirmasiRevisi(item)"
-                                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
+                                class="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold whitespace-nowrap transition shadow-sm cursor-pointer"
                             >
                                 <svg
                                     class="w-4 h-4 shrink-0"
@@ -1477,7 +1602,7 @@ const eksekusiRevisi = () => {
                                 "
                                 type="button"
                                 @click="cancelCuti(item)"
-                                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer"
+                                class="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold whitespace-nowrap transition shadow-sm cursor-pointer"
                             >
                                 <svg
                                     class="w-4 h-4 shrink-0"
@@ -1495,12 +1620,15 @@ const eksekusiRevisi = () => {
                                 Batalkan
                             </button>
 
-                            <!-- Sudah disetujui -> Batalkan mandiri (wajib alasan) -->
+                            <!-- Sudah disetujui DAN belum dimulai -> Batalkan mandiri (wajib alasan).
+                                 Kondisi memakai flag dari server (bisa_batal_mandiri), bukan lagi
+                                 item.status === 'disetujui'. Setelah cuti dimulai, tombol ini
+                                 hilang di tampilan HP. -->
                             <button
-                                v-else-if="item.status === 'disetujui'"
+                                v-else-if="item.bisa_batal_mandiri"
                                 type="button"
                                 @click="openBatalModal(item.id)"
-                                class="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer"
+                                class="flex-1 min-w-0 inline-flex items-center justify-center gap-1.5 px-2 py-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold whitespace-nowrap transition shadow-sm cursor-pointer"
                             >
                                 <svg
                                     class="w-4 h-4 shrink-0"
@@ -1529,32 +1657,36 @@ const eksekusiRevisi = () => {
                     </p>
                 </div>
 
-                <!-- ================= TAMPILAN TABEL (layar >= md) ================= -->
-                <div class="hidden md:block overflow-x-auto">
+                <!-- ================= TAMPILAN TABEL (layar >= lg) =================
+                     Padding kolom dipadatkan, badge status boleh membungkus baris, dan kolom
+                     Aksi hanya SATU sel dengan lebar tombol tetap, sehingga seluruh isi tabel
+                     muat di kartu tanpa scroll horizontal. overflow-x-auto tetap dipasang hanya
+                     sebagai pengaman. -->
+                <div class="hidden lg:block overflow-x-auto">
                     <table class="min-w-full divide-y divide-slate-100">
                         <thead class="bg-slate-50/50">
                             <tr>
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                    class="px-4 xl:px-5 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
                                     Jenis Cuti
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                    class="px-4 xl:px-5 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
                                     Tanggal Cuti
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                    class="px-4 xl:px-5 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
                                     Durasi
                                 </th>
                                 <th
                                     scope="col"
-                                    class="px-6 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                    class="px-4 xl:px-5 py-4 text-left text-[11px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
                                     Status
                                 </th>
@@ -1564,8 +1696,7 @@ const eksekusiRevisi = () => {
                                      perlu diduplikasi di sini. -->
                                 <th
                                     scope="col"
-                                    colspan="3"
-                                    class="px-4 py-4 text-center text-[11px] font-bold text-slate-400 uppercase tracking-wider"
+                                    class="px-3 xl:px-4 py-4 text-center text-[11px] font-bold text-slate-400 uppercase tracking-wider"
                                 >
                                     Aksi
                                 </th>
@@ -1577,7 +1708,7 @@ const eksekusiRevisi = () => {
                                 :key="item.id"
                                 class="hover:bg-slate-50/70 transition-colors"
                             >
-                                <td class="px-6 py-4 whitespace-nowrap">
+                                <td class="px-4 xl:px-5 py-4 whitespace-nowrap">
                                     <span
                                         class="px-2.5 py-1 inline-flex text-xs font-semibold rounded-lg bg-blue-100 text-blue-800 border border-blue-200"
                                     >
@@ -1586,37 +1717,39 @@ const eksekusiRevisi = () => {
                                 </td>
 
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-medium"
+                                    class="px-4 xl:px-5 py-4 whitespace-nowrap text-sm text-slate-600 font-medium"
                                 >
                                     {{ formatDate(item.tanggal_mulai) }} -
                                     {{ formatDate(item.tanggal_selesai) }}
                                 </td>
 
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-slate-600 font-semibold"
+                                    class="px-4 xl:px-5 py-4 whitespace-nowrap text-sm text-slate-600 font-semibold"
                                 >
                                     {{ item.jumlah_hari }} Hari
                                 </td>
 
                                 <!-- BADGE STATUS TABEL: "ditangguhkan" /
                                      "dibatalkan_ditangguhkan" memakai warna silver/abu
-                                     (bg-slate-200), merah HANYA untuk "ditolak" murni. -->
-                                <td class="px-6 py-4 whitespace-nowrap">
+                                     (bg-slate-200), merah HANYA untuk "ditolak" murni.
+                                     Teks panjang (mis. "Menunggu Kepala Biro Perencanaan (L4)")
+                                     boleh membungkus ke baris berikutnya (max-w) agar kolom
+                                     tidak melebar. -->
+                                <td class="px-4 xl:px-5 py-4">
                                     <span
-                                        class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-bold tracking-wide uppercase border"
+                                        class="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] xl:text-xs font-bold tracking-wide uppercase border leading-tight max-w-[170px] xl:max-w-[210px] whitespace-normal"
                                         :class="statusBadgeClass(item)"
                                     >
                                         {{ getEffectiveStatusLabel(item) }}
                                     </span>
                                 </td>
 
-                                <!-- ================= KOLOM AKSI ================= -->
-                                <td
-                                    colspan="3"
-                                    class="px-4 py-4 whitespace-nowrap"
-                                >
+                                <!-- ================= KOLOM AKSI (satu sel, lebar tombol tetap) =================
+                                     Detail = ikon mata. "Cetak PDF" tampil sebagai ikon saja di
+                                     bawah 2xl (ada tooltip) dan ikon + teks di 2xl ke atas. -->
+                                <td class="px-3 xl:px-4 py-4 whitespace-nowrap">
                                     <div
-                                        class="grid grid-cols-[36px_112px_112px] gap-2.5 items-center justify-center mx-auto w-fit"
+                                        class="flex items-center justify-center gap-2"
                                     >
                                         <!-- A. Tombol Detail (Ikon Mata) -->
                                         <button
@@ -1624,7 +1757,7 @@ const eksekusiRevisi = () => {
                                             @click.prevent="
                                                 openDetailModal(item)
                                             "
-                                            class="p-2 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-xl transition shadow-sm border border-slate-200 cursor-pointer inline-flex items-center justify-center"
+                                            class="h-9 w-9 shrink-0 bg-slate-50 hover:bg-slate-200 text-slate-600 rounded-xl transition shadow-sm border border-slate-200 cursor-pointer inline-flex items-center justify-center"
                                             title="Lihat Detail & Catatan"
                                             aria-label="Lihat detail"
                                         >
@@ -1659,11 +1792,12 @@ const eksekusiRevisi = () => {
                                                 )
                                             "
                                             target="_blank"
-                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-semibold transition shadow-sm w-full"
+                                            class="inline-flex h-9 w-9 2xl:w-[104px] shrink-0 items-center justify-center gap-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 border border-indigo-100 rounded-xl text-xs font-semibold transition shadow-sm"
                                             title="Cetak PDF"
+                                            aria-label="Cetak PDF"
                                         >
                                             <svg
-                                                class="w-3.5 h-3.5 shrink-0"
+                                                class="w-4 h-4 shrink-0"
                                                 fill="none"
                                                 stroke="currentColor"
                                                 viewBox="0 0 24 24"
@@ -1675,13 +1809,32 @@ const eksekusiRevisi = () => {
                                                     d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                                                 ></path>
                                             </svg>
-                                            Cetak PDF
+                                            <span class="hidden 2xl:inline"
+                                                >Cetak PDF</span
+                                            >
                                         </a>
                                         <span
                                             v-else
-                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none w-full"
+                                            class="inline-flex h-9 w-9 2xl:w-[104px] shrink-0 items-center justify-center gap-1 bg-slate-100 text-slate-300 2xl:text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none"
+                                            title="Cetak PDF (tersedia setelah disetujui)"
+                                            aria-label="Cetak PDF tidak tersedia"
                                         >
-                                            Cetak PDF
+                                            <svg
+                                                class="w-4 h-4 shrink-0 2xl:hidden"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="2"
+                                                    d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                                ></path>
+                                            </svg>
+                                            <span class="hidden 2xl:inline"
+                                                >Cetak PDF</span
+                                            >
                                         </span>
 
                                         <!-- C. KONTROL TOMBOL: REVISI / BATALKAN -->
@@ -1691,7 +1844,7 @@ const eksekusiRevisi = () => {
                                             v-if="isStatusBisaDirevisi(item)"
                                             type="button"
                                             @click="konfirmasiRevisi(item)"
-                                            class="inline-flex items-center justify-center gap-1 px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer w-full"
+                                            class="inline-flex h-9 w-[96px] shrink-0 items-center justify-center gap-1 px-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition shadow-sm cursor-pointer"
                                             title="Revisi Pengajuan Cuti"
                                         >
                                             <svg
@@ -1722,7 +1875,7 @@ const eksekusiRevisi = () => {
                                             "
                                             type="button"
                                             @click="cancelCuti(item)"
-                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer w-full"
+                                            class="inline-flex h-9 w-[96px] shrink-0 items-center justify-center gap-1 px-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer"
                                             title="Batalkan Pengajuan"
                                         >
                                             <svg
@@ -1741,14 +1894,16 @@ const eksekusiRevisi = () => {
                                             Batalkan
                                         </button>
 
-                                        <!-- Status SUDAH DISETUJUI -->
+                                        <!-- Status SUDAH DISETUJUI DAN BELUM DIMULAI.
+                                             Kondisi memakai flag dari server
+                                             (bisa_batal_mandiri), bukan lagi
+                                             item.status === 'disetujui'. Setelah cuti dimulai,
+                                             baris ini jatuh ke tombol abu-abu (v-else) di bawah. -->
                                         <button
-                                            v-else-if="
-                                                item.status === 'disetujui'
-                                            "
+                                            v-else-if="item.bisa_batal_mandiri"
                                             type="button"
                                             @click="openBatalModal(item.id)"
-                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer w-full"
+                                            class="inline-flex h-9 w-[96px] shrink-0 items-center justify-center gap-1 px-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-xl text-xs font-semibold transition shadow-sm cursor-pointer"
                                             title="Batalkan Pengajuan"
                                         >
                                             <svg
@@ -1767,16 +1922,18 @@ const eksekusiRevisi = () => {
                                             Batalkan
                                         </button>
 
-                                        <!-- Status lain (ditolak, dibatalkan_reguler, dll.) -->
+                                        <!-- Status lain (ditolak, dibatalkan_reguler, dll.)
+                                             dan cuti disetujui yang sudah dimulai/lewat -->
                                         <span
                                             v-else
-                                            class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none w-full"
+                                            class="inline-flex h-9 w-[96px] shrink-0 items-center justify-center gap-1 px-2 bg-slate-100 text-slate-400 border border-slate-200 rounded-xl text-xs font-semibold cursor-not-allowed select-none"
                                         >
                                             Batalkan
                                         </span>
                                     </div>
                                 </td>
                             </tr>
+                            <!-- colspan = jumlah kolom tabel (5) -->
                             <tr v-if="sortedRiwayatData.length === 0">
                                 <td
                                     colspan="5"
@@ -1794,9 +1951,7 @@ const eksekusiRevisi = () => {
                 <div
                     class="px-4 sm:px-6 py-4 bg-slate-50/50 border-t border-slate-100 flex flex-col md:flex-row justify-between items-center gap-3 md:gap-4"
                 >
-                    <p
-                        class="text-xs text-slate-500 text-center md:text-left"
-                    >
+                    <p class="text-xs text-slate-500 text-center md:text-left">
                         Menampilkan halaman {{ riwayat.current_page }} dari
                         total {{ riwayat.last_page }} halaman (maksimal 5 data
                         per halaman).
@@ -1993,7 +2148,7 @@ const eksekusiRevisi = () => {
                         </div>
                     </div>
 
-                    <!-- BARU: Anak ke-berapa, hanya tampil untuk Cuti Melahirkan -->
+                    <!-- Anak ke-berapa, hanya tampil untuk Cuti Melahirkan -->
                     <div
                         v-if="
                             selectedDetail.jenis_cuti
@@ -2350,7 +2505,7 @@ const eksekusiRevisi = () => {
         </div>
     </Teleport>
 
-    <!-- MODAL PEMBATALAN MANDIRI (khusus status "Disetujui") -->
+    <!-- MODAL PEMBATALAN MANDIRI (khusus status "Disetujui" yang belum dimulai) -->
     <Teleport to="body">
         <div v-if="batalModal.show" class="relative z-[9999]">
             <div
@@ -2370,9 +2525,10 @@ const eksekusiRevisi = () => {
                         <h3 class="text-lg font-extrabold text-slate-800 mb-1">
                             Batalkan Cuti
                         </h3>
+                        <!-- Kalimat netral: saldo hanya dikembalikan untuk Cuti Tahunan. -->
                         <p class="text-xs text-slate-500 mb-4 font-medium">
-                            Saldo cuti Anda akan otomatis dikembalikan. Tindakan
-                            ini tidak dapat diubah.
+                            Untuk Cuti Tahunan, saldo cuti Anda akan otomatis
+                            dikembalikan. Tindakan ini tidak dapat diubah.
                         </p>
 
                         <label
@@ -2652,8 +2808,14 @@ const eksekusiRevisi = () => {
                                         type="date"
                                         v-model="formRevisi.tanggal_mulai"
                                         :min="minDate"
+                                        :max="maxTanggalMulaiRevisi"
                                         class="w-full text-sm border-slate-300 rounded-lg focus:ring-orange-500 focus:border-orange-500 bg-white"
                                     />
+                                    <p class="text-[10px] text-slate-400 mt-1">
+                                        Maks.
+                                        {{ MAKS_MULAI_TAHUN_KE_DEPAN }} tahun
+                                        dari hari ini
+                                    </p>
                                 </div>
                                 <div>
                                     <label
@@ -2669,8 +2831,13 @@ const eksekusiRevisi = () => {
                                         :min="
                                             formRevisi.tanggal_mulai || minDate
                                         "
+                                        :max="maxTanggalSelesaiRevisi"
                                         class="w-full text-sm border-slate-300 rounded-lg focus:ring-orange-500 focus:border-orange-500 bg-white"
                                     />
+                                    <p class="text-[10px] text-slate-400 mt-1">
+                                        Rentang maks. {{ MAKS_RENTANG_HARI }}
+                                        hari kalender
+                                    </p>
                                 </div>
                             </div>
 
@@ -2682,6 +2849,27 @@ const eksekusiRevisi = () => {
                                     <strong>{{ jumlahHariKerja }} Hari</strong>
                                 </span>
                             </div>
+
+                            <!-- [PERBAIKAN] Catatan saldo dibedakan per jenis cuti:
+                                 hanya Cuti Tahunan yang memotong saldo. -->
+                            <p
+                                v-if="
+                                    isJenisCutiTahunan(
+                                        cutiYangDirevisi?.jenis_cuti,
+                                    )
+                                "
+                                class="mt-3 text-xs text-amber-800 bg-amber-100 border border-amber-200 rounded-lg px-3 py-2"
+                            >
+                                Revisi Cuti Tahunan akan memotong saldo sesuai
+                                tanggal baru setelah disetujui.
+                            </p>
+                            <p
+                                v-else
+                                class="mt-3 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
+                            >
+                                Jenis cuti ini tidak memotong saldo cuti
+                                tahunan.
+                            </p>
 
                             <div
                                 v-if="liburBertepatan.length > 0"
@@ -2716,7 +2904,7 @@ const eksekusiRevisi = () => {
                                             libur.keterangan
                                         }}</span>
                                         ({{
-                                            new Date(
+                                            parseLocalDate(
                                                 libur.tanggal,
                                             ).toLocaleDateString("id-ID", {
                                                 day: "2-digit",

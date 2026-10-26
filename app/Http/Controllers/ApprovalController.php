@@ -105,19 +105,30 @@ class ApprovalController extends Controller
         // Hitung sisa cuti dinamis (sama persis logika Dashboard) untuk setiap item
         $tahun = date('Y');
         $antrean->getCollection()->transform(function ($item) use ($tahun) {
-            $saldo = $item->pegawai->saldoCutiTahunIni ?? null;
-            $kuotaTahunan  = $saldo->kuota_tahunan ?? 0;
-            $sisaTahunLalu = $saldo->carry_forward_normal ?? 0;
-            $cutiTerpakai = PengajuanCuti::where('pegawai_id', $item->pegawai_id)
-                ->where('jenis_cuti', 'Cuti Tahunan')
-                ->where('status', 'disetujui')
-                ->whereYear('tanggal_mulai', $tahun)
-                ->sum('jumlah_hari');
-            $totalTersedia = ($kuotaTahunan + $sisaTahunLalu) - $cutiTerpakai;
+            $saldo = SaldoCuti::where('pegawai_id', $item->pegawai_id)
+                ->where('tahun', $tahun)
+                ->first();
+            $saldoTahunLalu = SaldoCuti::where('pegawai_id', $item->pegawai_id)
+                ->where('tahun', $tahun - 1)
+                ->first();
+            $kuotaTahunan = (int) ($saldo->kuota_tahunan ?? 12);
+            $carryForward = (int) ($saldo->carry_forward_normal ?? 0);
+            $sisaDuaTahunLalu = (int) ($saldoTahunLalu->carry_forward_normal ?? 0);
+            $cutiTerpakai = SaldoCuti::terpakaiEfektif(
+                (int) $item->pegawai_id,
+                (int) $tahun,
+                $saldo
+            );
+            $bawaan = SaldoCuti::hitungBawaan(
+                $sisaDuaTahunLalu,
+                $carryForward,
+                $kuotaTahunan
+            );
+            $totalTersedia = max($kuotaTahunan + $bawaan - $cutiTerpakai, 0);
             // Tambahkan property baru ke object pegawai agar bisa dibaca di Vue
             $item->pegawai->sisa_cuti_tersedia = $totalTersedia;
             $item->pegawai->kuota_tahunan      = $kuotaTahunan;
-            $item->pegawai->sisa_tahun_lalu    = $sisaTahunLalu;
+            $item->pegawai->sisa_tahun_lalu    = $carryForward;
             $item->pegawai->cuti_terpakai      = $cutiTerpakai;
             return $item;
         });

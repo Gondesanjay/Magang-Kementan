@@ -1,13 +1,10 @@
 <?php
 
-
 namespace App\Http\Middleware;
 
-
+use App\Models\Notifikasi;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
-use App\Models\Notifikasi;
-
 
 class HandleInertiaRequests extends Middleware
 {
@@ -18,7 +15,6 @@ class HandleInertiaRequests extends Middleware
      */
     protected $rootView = 'app';
 
-
     /**
      * Determine the current asset version.
      */
@@ -26,7 +22,6 @@ class HandleInertiaRequests extends Middleware
     {
         return parent::version($request);
     }
-
 
     /**
      * Define the props that are shared by default.
@@ -36,16 +31,6 @@ class HandleInertiaRequests extends Middleware
     public function share(Request $request): array
     {
         $user = $request->user();
-
-
-        // Ambil data notifikasi jika user sudah login menggunakan model Notifikasi
-        $notifikasis = $user
-            ? Notifikasi::where('pegawai_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->take(5)
-            ->get()
-            : [];
-
 
         return [
             ...parent::share($request),
@@ -59,17 +44,25 @@ class HandleInertiaRequests extends Middleware
                     'jabatan'            => $user->jabatan,
                     'kelompok_substansi' => $user->kelompok_substansi,
                     'tim_kerja'          => $user->tim_kerja,
-                    'alamat_domisili'    => $user->alamat_domisili, // <-- FIX: kolom ini hilang, menyebabkan alamat tidak muncul setelah refresh
-                    'no_telepon'         => $user->no_telepon, // <-- FIX: kolom ini juga hilang, menyebabkan nomor telepon tidak muncul setelah refresh
+                    'alamat_domisili'    => $user->alamat_domisili,
+                    'no_telepon'         => $user->no_telepon,
                 ] : null,
             ],
-            // TAMBAHAN: Flash message untuk mendukung pop-up session (sukses/error)
+            // Flash message untuk pop-up session (sukses/error)
             'flash' => [
                 'success' => fn() => $request->session()->get('success'),
                 'error'   => fn() => $request->session()->get('error'),
             ],
-            // Bagikan props notifikasi ke seluruh frontend Vue
-            'notifikasis' => $notifikasis,
+            // Notifikasi: HANYA milik user login, 5 terbaru, dan HANYA kolom
+            // yang dipakai frontend (pegawai_id & kolom internal tidak ikut).
+            // Closure = baru dihitung saat dibutuhkan.
+            // Kalau MainLayout.vue memakai kolom lain, tambahkan di get([...]).
+            'notifikasis' => fn() => $user
+                ? Notifikasi::where('pegawai_id', $user->id)
+                ->latest()
+                ->take(5)
+                ->get(['id', 'judul', 'pesan', 'tautan', 'is_read', 'created_at'])
+                : [],
         ];
     }
 }

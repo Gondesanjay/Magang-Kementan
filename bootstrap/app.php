@@ -1,10 +1,8 @@
 <?php
 
-
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -20,10 +18,10 @@ return Application::configure(basePath: dirname(__DIR__))
             \App\Http\Middleware\CekStatusAktif::class,
         ]);
 
-
-        // Tambahkan baris alias ini:
         $middleware->alias([
             'force.password' => \App\Http\Middleware\ForceChangePassword::class,
+            // Pembatas akses per role, dipakai di routes/web.php: role:5, role:2,3,4,6
+            'role' => \App\Http\Middleware\EnsureRole::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

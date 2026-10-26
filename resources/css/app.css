@@ -8,3 +8,10 @@ input[type="password"]::-ms-reveal,
 input[type="password"]::-ms-clear {
     display: none;
 }
+
+/* Sisakan ruang untuk scrollbar di semua halaman, supaya lebar konten
+   tidak bergeser antara halaman pendek (tanpa scrollbar) dan panjang
+   (dengan scrollbar), misalnya Rekap Kuota Detail tahun 2024 vs 2026. */
+html {
+    scrollbar-gutter: stable;
+}

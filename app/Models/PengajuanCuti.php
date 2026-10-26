@@ -2,53 +2,96 @@
 
 namespace App\Models;
 
+use Carbon\Carbon;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class PengajuanCuti extends Model
 {
     protected $guarded = ['id'];
 
-    // ================= [DIUBAH] PERBAIKAN: URL LAMPIRAN =================
-    // MASALAH: Kolom 'lampiran' di database menyimpan PATH RELATIF apa
-    // adanya dari hasil Storage::store() di CutiController@store
-    // (mis. "lampiran-cuti/namafile.jpg"), BUKAN URL yang bisa langsung
-    // diakses browser.
-    //
-    // AKIBATNYA: Semua halaman yang menampilkan tautan lampiran (Dashboard,
-    // Riwayat Pengajuan Karyawan, Monitoring Cuti Atasan, Pembatalan Cuti
-    // Atasan) memakai path mentah tersebut langsung sebagai href, sehingga
-    // menghasilkan URL 404 (kehilangan prefix wajib "/storage/" yang
-    // dibutuhkan Laravel untuk mengakses disk 'public').
-    // Contoh SEBELUM: 127.0.0.1:8000/lampiran-cuti/namafile.jpg (404)
-    // Contoh SESUDAH: 127.0.0.1:8000/storage/lampiran-cuti/namafile.jpg (benar)
-    //
-    // PERBAIKAN: ditambahkan accessor getLampiranAttribute() yang otomatis
-    // mengubah path relatif menjadi URL publik yang benar SETIAP KALI
-    // atribut 'lampiran' dibaca dari model manapun — tanpa mengubah apa
-    // yang tersimpan di kolom database itu sendiri. Karena semua
-    // controller (CutiController, MonitoringCutiController,
-    // PembatalanController, dst) memakai model PengajuanCuti yang sama,
-    // perbaikan satu accessor ini otomatis berlaku ke seluruh halaman
-    // tanpa perlu mengubah kode di controller atau file Vue manapun.
-    //
-    // CATATAN: pastikan symlink storage sudah dibuat dengan menjalankan
-    // `php artisan storage:link` di root project (sekali saja), supaya
-    // folder public/storage benar-benar mengarah ke storage/app/public.
-    public function getLampiranAttribute($value)
+    public const STATUS_BISA_DITANGGUHKAN = [
+        'menunggu_l1',
+        'menunggu_l2',
+        'menunggu_l3',
+        'menunggu_l4',
+        'disetujui',
+    ];
+
+    private static function hariIni(): string
     {
-        return $value ? Storage::url($value) : null;
+        return now('Asia/Jakarta')->toDateString();
+    }
+
+    public function scopeBisaDitangguhkan(Builder $q): Builder
+    {
+        return $q->whereIn('status', self::STATUS_BISA_DITANGGUHKAN)
+            ->whereDate('tanggal_mulai', '>', self::hariIni());
+    }
+
+    public function alasanTidakBisaDitangguhkan(): ?string
+    {
+        if (!in_array($this->status, self::STATUS_BISA_DITANGGUHKAN, true)) {
+            return 'Cuti ini sudah ditolak atau sudah dibatalkan/ditangguhkan sebelumnya.';
+        }
+        if (Carbon::parse($this->tanggal_mulai)->toDateString() <= self::hariIni()) {
+            return 'Cuti sudah dimulai atau sudah lewat, tidak dapat ditangguhkan.';
+        }
+        return null;
+    }
+
+    public function bisaDitangguhkan(): bool
+    {
+        return $this->alasanTidakBisaDitangguhkan() === null;
+    }
+
+    public function bisaDirevisi(): bool
+    {
+        return $this->status === 'dibatalkan_ditangguhkan';
+    }
+
+    // ================= [DIUBAH] URL LAMPIRAN LEWAT ROUTE TERPROTEKSI =================
+    // SEBELUMNYA: accessor ini mengubah path relatif (mis. "lampiran-cuti/x.jpg")
+    // menjadi URL publik "/storage/lampiran-cuti/x.jpg" lewat Storage::url().
+    // Alamat itu bisa dibuka SIAPA SAJA yang tahu URL-nya, tanpa login — tidak
+    // aman untuk dokumen sensitif (mis. surat dokter).
+    //
+    // SEKARANG: accessor mengembalikan alamat route 'lampiran.unduh'
+    // (LampiranController@show) yang mengecek login & hak akses (pemilik
+    // cuti, atasan yang berwenang, atau Admin HR) sebelum mengirim file.
+    //
+    // Karena SEMUA halaman (Dashboard, Riwayat, Monitoring Cuti, Rekap Kuota,
+    // Penangguhan) sudah memakai field `lampiran` hasil accessor ini sebagai
+    // href, perubahan satu accessor ini otomatis berlaku ke seluruh halaman
+    // tanpa mengubah file Vue.
+    //
+    // Alamat dibuat RELATIF (route(..., false)) supaya tetap jalan walau
+    // APP_URL berbeda dengan alamat yang dipakai di browser (cookie login
+    // terikat ke host).
+    //
+    // CATATAN: untuk membaca path asli di database (mis. saat mengunduh atau
+    // menghapus file) pakai $pengajuan->getRawOriginal('lampiran'), BUKAN
+    // $pengajuan->lampiran (yang kini berisi alamat route).
+    public function getLampiranAttribute(mixed $value): ?string
+    {
+        if (!$value || !$this->getKey()) {
+            return null;
+        }
+
+        return route('lampiran.unduh', ['id' => $this->getKey()], false);
     }
     // ================= [END DIUBAH] =================
 
-    // Tambahkan relasi ke tabel pegawais
-    public function pegawai()
+    // Relasi ke tabel pegawais
+    public function pegawai(): BelongsTo
     {
         return $this->belongsTo(Pegawai::class, 'pegawai_id');
     }
 
-    // Tambahkan 2 fungsi ini di dalam class PengajuanCuti
-    public function atasanL1()
+    public function atasanL1(): BelongsTo
     {
         return $this->belongsTo(Pegawai::class, 'atasan_l1_id');
     }
@@ -56,42 +99,34 @@ class PengajuanCuti extends Model
     // ================= [BARU] PERBAIKAN RELASI atasanL2 =================
     // Menambahkan method relasi untuk atasanL2 yang sebelumnya terlewat.
     // Ini memperbaiki error RelationNotFoundException di DashboardController
-    // dan memastikan data nama atasan L2 bisa di-load dan ditampilkan 
+    // dan memastikan data nama atasan L2 bisa di-load dan ditampilkan
     // secara konsisten di modal Vue frontend.
-    public function atasanL2()
+    public function atasanL2(): BelongsTo
     {
         return $this->belongsTo(Pegawai::class, 'atasan_l2_id');
     }
     // ================= [END BARU] =================
 
-    public function atasanL3()
+    public function atasanL3(): BelongsTo
     {
         return $this->belongsTo(Pegawai::class, 'atasan_l3_id');
     }
 
-    public function atasanL4()
+    public function atasanL4(): BelongsTo
     {
         return $this->belongsTo(Pegawai::class, 'atasan_l4_id');
     }
 
-    public function approvalLogs()
+    public function approvalLogs(): HasMany
     {
         return $this->hasMany(ApprovalLog::class, 'pengajuan_id')
             ->with('approver')
             ->orderBy('level_approval');
     }
 
-    // ================= [BARU] RELASI KE CUTI DITANGGUHKAN =================
-    // Satu pengajuan cuti yang ditangguhkan oleh L4 (lewat
-    // PembatalanController@process) akan punya SATU baris terkait di
-    // tabel `cuti_ditangguhkans` — dibuat pada saat penangguhan terjadi,
-    // menyimpan berapa hari yang ditangguhkan dari pengajuan ini beserta
-    // status apakah sudah dipakai lagi di tahun berikutnya atau belum.
-    // Dipakai untuk perhitungan carry-over saldo cuti tahunan Jalur
-    // Khusus (b) — lihat CutiDitangguhkan.php untuk detail lengkap.
-    public function cutiDitangguhkan()
+    // This record is retained only for reporting suspended approved annual leave.
+    public function cutiDitangguhkan(): HasOne
     {
         return $this->hasOne(CutiDitangguhkan::class, 'pengajuan_asal_id');
     }
-    // ================= [END BARU] =================
 }

@@ -60,7 +60,7 @@ class MonitoringCutiController extends Controller
 {
     // ================= HELPER BARU: RUMUS SALDO CUTI TAHUNAN =================
     // SATU-SATUNYA tempat rumus saldo di controller ini.
-    // $terpakaiMurni = total hari Cuti Tahunan 'disetujui' pada tahun tsb.
+    // $terpakaiMurni = total hari Cuti Tahunan berstatus disetujui.
     // koreksi_saldo: NULL = ikut sistem; angka (termasuk 0) = override Admin HR.
     private function hitungInfoSaldo(?SaldoCuti $saldo, ?SaldoCuti $saldoTahunLalu, int $terpakaiMurni): array
     {
@@ -73,9 +73,11 @@ class MonitoringCutiController extends Controller
             ? max(0, (int) $koreksi)
             : max(0, $terpakaiMurni);
 
-        $bawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
-            ? 12
-            : min(6, $sisaTahunLalu);
+        $bawaanEligible = SaldoCuti::hitungBawaan(
+            $sisaDuaTahunLalu,
+            $sisaTahunLalu,
+            $kuota
+        );
 
         $sisaHakTahunIni = max($kuota - $terpakai, 0);
         $totalTersedia   = max(($kuota + $bawaanEligible) - $terpakai, 0);
@@ -93,11 +95,7 @@ class MonitoringCutiController extends Controller
 
     private function hitungTerpakaiMurni(int $pegawaiId, int $tahun): int
     {
-        return (int) PengajuanCuti::where('pegawai_id', $pegawaiId)
-            ->where('jenis_cuti', 'Cuti Tahunan')
-            ->where('status', 'disetujui')
-            ->whereYear('tanggal_mulai', $tahun)
-            ->sum('jumlah_hari');
+        return SaldoCuti::terpakaiMurni($pegawaiId, $tahun);
     }
     // ================= END HELPER RUMUS SALDO =================
 
@@ -110,7 +108,7 @@ class MonitoringCutiController extends Controller
     //     Substansi miliknya sendiri (listTimKerja / opsi_tim_kerja).
     //   L3, L4, HR (role_id 4, 6, 5) : dropdown Kelompok/Subbagian, lintas
     //     kelompok (listKelompok).
-    private function buildFilterPropsUntukAtasan($user): array
+    private function buildFilterPropsUntukAtasan(Pegawai $user): array
     {
         $listTimKerja = [];
         $listKelompok = [];
@@ -160,7 +158,7 @@ class MonitoringCutiController extends Controller
         // ke frontend. Relasi 'approvalLogs.approver' supaya riwayat aksi
         // tiap atasan (level_approval, keputusan setuju/tolak, catatan,
         // nama approver) ikut terkirim ke Vue sebagai `approval_logs`.
-        $query = PengajuanCuti::with(['pegawai.saldoCutiTahunIni', 'approvalLogs.approver']);
+        $query = PengajuanCuti::with(['pegawai.saldoCutiTahunIni', 'approvalLogs.approver:id,nama,jabatan']);
 
         // --- BATASAN WILAYAH WAJIB ---
         // L1 (role_id 2) dibatasi ke Tim Kerja miliknya sendiri — bukan
@@ -298,8 +296,8 @@ class MonitoringCutiController extends Controller
             : PengajuanCuti::selectRaw('pegawai_id, SUM(jumlah_hari) as total_terpakai')
             ->whereIn('pegawai_id', $pegawaiIdsHalamanIni)
             ->where('jenis_cuti', 'Cuti Tahunan')
-            ->where('status', 'disetujui')
             ->whereYear('tanggal_mulai', $tahun)
+            ->where('status', 'disetujui')
             ->groupBy('pegawai_id')
             ->pluck('total_terpakai', 'pegawai_id');
 
@@ -517,6 +515,7 @@ class MonitoringCutiController extends Controller
                     'pegawai_id' => $targetUserId,
                     'judul'      => 'Pengajuan Cuti Ditolak',
                     'pesan'      => 'Pengajuan Anda ditolak oleh ' . $namaApprover . '. Alasan: ' . $alasanPenolakan,
+                    'tautan'     => route('karyawan.riwayat'), // BARU
                     'is_read'    => false,
                 ]);
 
@@ -654,6 +653,7 @@ class MonitoringCutiController extends Controller
                     'pegawai_id' => $targetUserId,
                     'judul'      => 'Status Cuti Diperbarui',
                     'pesan'      => $statusPesan,
+                    'tautan'     => route('karyawan.riwayat'), // BARU
                     'is_read'    => false,
                 ]);
             }

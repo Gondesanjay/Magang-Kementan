@@ -4,50 +4,32 @@ namespace App\Http\Controllers;
 
 use App\Models\ApprovalLog;
 use App\Models\CutiDitangguhkan;
+use App\Models\Notifikasi; // BARU
 use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
+use Carbon\Carbon; // BARU
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 
 class PembatalanController extends Controller
 {
-    // Status yang TIDAK BOLEH ditangguhkan sama sekali, baik di index()
-    // maupun di process(). Selain status-status ini (termasuk
-    // menunggu_l1/l2/l3/l4 dan disetujui), cuti boleh ditangguhkan L4.
-    private const STATUS_TIDAK_BISA_DITANGGUHKAN = [
-        'ditolak',
-        'dibatalkan_reguler',
-        'dibatalkan_ditangguhkan',
-    ];
+    private const ROLE_PENANGGUH = 6;
 
     /**
      * Menampilkan daftar cuti yang bisa ditangguhkan.
-     *
-     * Aturan status: L4 boleh menangguhkan cuti di SEMUA status proses
-     * approval (menunggu_l1..l4) maupun yang sudah 'disetujui'. Penangguhan
-     * HANYA tidak diperbolehkan untuk 'ditolak', 'dibatalkan_reguler', atau
-     * 'dibatalkan_ditangguhkan'.
-     *
-     * Filter kelompok memakai kolom `kelompok_substansi` di tabel pegawai,
-     * sama seperti halaman Monitoring Cuti (RekapKuotaDetail). Tidak ada
-     * lagi daftar NIP di Vue maupun di repo. Penyaringan dilakukan di
-     * database, dan daftar opsi dropdown dikirim dari sini sebagai array
-     * string ('daftarKelompokSubstansi').
      */
     public function index(Request $request)
     {
+        abort_unless((int) $request->user()->role_id === self::ROLE_PENANGGUH, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
+
         $search = $request->input('search');
         $kelompok = $request->input('kelompok_substansi');
 
         $daftarCuti = PengajuanCuti::with('pegawai')
-            ->whereIn('status', [
-                'menunggu_l1',
-                'menunggu_l2',
-                'menunggu_l3',
-                'menunggu_l4',
-                'disetujui',
-            ])
+            ->bisaDitangguhkan()
             ->when($search, function ($query) use ($search) {
                 $query->whereHas('pegawai', function ($q) use ($search) {
                     $q->where('nama', 'like', "%{$search}%")
@@ -59,11 +41,13 @@ class PembatalanController extends Controller
                     $q->where('kelompok_substansi', $kelompok);
                 });
             })
-            ->latest()
-            ->get();
+            ->orderBy('tanggal_mulai')
+            ->get()
+            ->each(function (PengajuanCuti $pengajuan) {
+                $pengajuan->bisa_ditangguhkan = $pengajuan->bisaDitangguhkan();
+                $pengajuan->alasan_tidak_bisa = $pengajuan->alasanTidakBisaDitangguhkan();
+            });
 
-        // Isi dropdown: nama kelompok unik dari data pegawai (sama dengan
-        // Monitoring Cuti). Nilai kosong / '-' (mis. Kepala Biro) dibuang.
         $daftarKelompokSubstansi = Pegawai::query()
             ->whereNotNull('kelompok_substansi')
             ->where('kelompok_substansi', '!=', '')
@@ -80,87 +64,88 @@ class PembatalanController extends Controller
     }
 
     /**
-     * Memproses eksekusi penangguhan oleh L4.
-     *
-     * Validasi status dilakukan di backend (bukan cuma di index()), supaya
-     * request langsung ke endpoint ini untuk pengajuan berstatus
-     * STATUS_TIDAK_BISA_DITANGGUHKAN tetap ditolak.
-     *
-     * Tidak ada pembatasan kelompok_substansi: L4 (Kepala Biro, role_id 6)
-     * membawahi seluruh kelompok, sehingga cukup abort_unless(role_id === 6).
+     * Memproses eksekusi penangguhan oleh Kepala Biro.
      */
-    public function process(Request $request, $id)
+    public function process(Request $request, int $id)
     {
-        $user = auth()->user();
+        $user = $request->user();
 
-        abort_unless($user->role_id === 6, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
+        abort_unless((int) $user->role_id === self::ROLE_PENANGGUH, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
 
         $request->validate([
             'alasan' => ['required', 'string', 'max:255'],
+        ], [
+            'alasan.required' => 'Alasan penangguhan wajib diisi.',
         ]);
 
-        $pengajuan = PengajuanCuti::with('pegawai')->findOrFail($id);
+        DB::transaction(function () use ($request, $user, $id) {
+            $pengajuan = PengajuanCuti::with('pegawai')->lockForUpdate()->findOrFail($id);
+            $statusSebelum = $pengajuan->status;
+            $alasanTidakBisa = $pengajuan->alasanTidakBisaDitangguhkan();
 
-        if (in_array($pengajuan->status, self::STATUS_TIDAK_BISA_DITANGGUHKAN, true)) {
-            return back()->with(
-                'error',
-                'Cuti ini sudah ditolak atau sudah dibatalkan/ditangguhkan sebelumnya, sehingga tidak dapat ditangguhkan lagi.'
-            );
-        }
-
-        // Saldo cuti baru dipotong saat status mencapai 'disetujui'. Jadi
-        // saldo HANYA dikembalikan jika status SEBELUM ditangguhkan adalah
-        // 'disetujui'. Untuk menunggu_l1..l4, saldo belum pernah dipotong.
-        if ($pengajuan->status === 'disetujui') {
-            $saldo = SaldoCuti::where('pegawai_id', $pengajuan->pegawai_id)
-                ->where('tahun', date('Y', strtotime($pengajuan->tanggal_mulai)))
-                ->first();
-
-            if ($saldo) {
-                $saldo->increment('sisa', $pengajuan->jumlah_hari);
+            if ($alasanTidakBisa !== null) {
+                throw ValidationException::withMessages([
+                    'status' => [$alasanTidakBisa],
+                ]);
             }
-        }
 
-        // Sisipkan alasan penangguhan ke dalam keterangan asli
-        $keteranganBaru = $pengajuan->keterangan
-            . ' | [DITANGGUHKAN/DIBATALKAN ATASAN: '
-            . $request->alasan
-            . ']';
+            $keteranganBaru = trim((string) $pengajuan->keterangan) === ''
+                ? '[DITANGGUHKAN: ' . $request->alasan . ']'
+                : $pengajuan->keterangan . ' | [DITANGGUHKAN: ' . $request->alasan . ']';
 
-        // Ubah status pengajuan menjadi ditangguhkan
-        $pengajuan->update([
-            'status' => 'dibatalkan_ditangguhkan',
-            'keterangan' => $keteranganBaru,
-        ]);
+            $pengajuan->update([
+                'status' => 'dibatalkan_ditangguhkan',
+                'keterangan' => $keteranganBaru,
+            ]);
 
-        // Catat aksi penangguhan ke approval_logs.
-        // level_approval = 5 adalah PENANDA KHUSUS (bukan bagian dari rantai
-        // L1-L4), supaya tidak bentrok dengan log approval L4 sebelumnya.
-        ApprovalLog::create([
-            'pengajuan_id' => $pengajuan->id,
-            'approver_id' => $user->id,
-            'level_approval' => 5,
-            'keputusan' => 'tangguh',
-            'catatan' => $request->alasan,
-            'tanggal_keputusan' => now(),
-        ]);
+            ApprovalLog::create([
+                'pengajuan_id' => $pengajuan->id,
+                'approver_id' => $user->id,
+                'level_approval' => 5,
+                'keputusan' => 'tangguh',
+                'catatan' => $request->alasan,
+                'tanggal_keputusan' => now(),
+            ]);
 
-        // Catat ke cuti_ditangguhkan: sumber kebenaran carry-over saldo
-        // tahunan "Jalur Khusus (b)" (GenerateSaldoCutiTahunBaru &
-        // AdminController::hitungCarryForwardEligible()). Hari yang tercatat
-        // di sini SELALU dibawa penuh ke tahun berikutnya.
-        // updateOrCreate dipakai supaya tidak ada baris ganda.
-        CutiDitangguhkan::updateOrCreate(
-            ['pengajuan_asal_id' => $pengajuan->id],
-            [
-                'pegawai_id' => $pengajuan->pegawai_id,
-                'jumlah_hari' => $pengajuan->jumlah_hari,
-                'tahun_asal' => (int) date('Y', strtotime($pengajuan->tanggal_mulai)),
-                'tahun_penggunaan' => null,
-                'status_pakai' => 'belum_dipakai',
-                'alasan_penangguhan' => $request->alasan,
-            ]
-        );
+            if (
+                strtolower(trim((string) $pengajuan->jenis_cuti)) === 'cuti tahunan'
+                && $statusSebelum === 'disetujui'
+            ) {
+                $tahunAsal = (int) date('Y', strtotime($pengajuan->tanggal_mulai));
+                SaldoCuti::where('pegawai_id', $pengajuan->pegawai_id)
+                    ->where('tahun', $tahunAsal)
+                    ->increment('sisa', (int) $pengajuan->jumlah_hari);
+
+                // Catatan ini hanya untuk pelaporan; bukan carry-over dan saldo sudah dikembalikan.
+                CutiDitangguhkan::updateOrCreate(
+                    ['pengajuan_asal_id' => $pengajuan->id],
+                    [
+                        'pegawai_id' => $pengajuan->pegawai_id,
+                        'tahun_asal' => $tahunAsal,
+                        'jumlah_hari' => (int) $pengajuan->jumlah_hari,
+                        'status_pakai' => 'belum_dipakai',
+                        'alasan_penangguhan' => $request->alasan,
+                    ]
+                );
+            }
+
+            // BARU: beri tahu pegawai pemilik cuti (notifikasi lonceng + push lewat
+            // hook di model Notifikasi). Sebelumnya penangguhan tidak memberi
+            // notifikasi sama sekali. Teks sengaja tidak memuat kata "batal"/"tolak"
+            // supaya warna badge di lonceng tetap kuning (penangguhan).
+            if ($pengajuan->pegawai) {
+                Notifikasi::create([
+                    'pegawai_id' => $pengajuan->pegawai_id,
+                    'judul'      => 'Cuti Ditangguhkan',
+                    'pesan'      => 'Cuti Anda tanggal ' . Carbon::parse($pengajuan->tanggal_mulai)->format('d/m/Y')
+                        . ' ditangguhkan oleh ' . ($user->nama ?? 'Kepala Biro')
+                        . '. Alasan: ' . $request->alasan
+                        . '. Anda dapat mengajukan revisi tanggal di Riwayat Pengajuan.',
+                    'tautan'     => route('karyawan.riwayat', [], false),
+                    'is_read'    => false,
+                ]);
+            }
+        });
 
         return back()->with('success', 'Cuti berhasil ditangguhkan.');
     }

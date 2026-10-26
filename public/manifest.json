@@ -1,0 +1,23 @@
+{
+    "name": "AgriLeave - Portal Cuti Biro Perencanaan",
+    "short_name": "AgriLeave",
+    "description": "Portal cuti digital terintegrasi Biro Perencanaan, Kementerian Pertanian",
+    "start_url": "/dashboard",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#ffffff",
+    "theme_color": "#16a34a",
+    "icons": [
+        {
+            "src": "/images/favicon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "/images/apple-touch-icon.png",
+            "sizes": "180x180",
+            "type": "image/png"
+        }
+    ]
+}

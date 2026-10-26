@@ -1,6 +1,11 @@
 <script setup>
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { Link, usePage, router } from "@inertiajs/vue3";
+import axios from "axios"; // BARU: untuk kirim token FCM ke Laravel
+// Firebase Cloud Messaging (push notification browser)
+// Pastikan resources/js/firebase.js mengekspor `messaging`.
+import { getToken, onMessage } from "firebase/messaging";
+import { messaging } from "@/firebase";
 
 const page = usePage();
 const user = computed(() => page.props.auth.user);
@@ -30,9 +35,356 @@ watch(isMobileOpen, (open) => {
     document.body.style.overflow = open ? "hidden" : "";
 });
 
-onBeforeUnmount(() => {
-    document.body.style.overflow = "";
+// ================= BOTTOM NAVIGATION (KHUSUS MOBILE) =================
+// Menu bawah menyesuaikan kebutuhan inti tiap role:
+//   - Role 1 (Karyawan)        : Beranda, Ajukan, Riwayat, Profil
+//   - Role 2/3/4 (Atasan L1-3) : Beranda, Approval, Kalender Tim, Profil
+//   - Role 6 (Kepala Biro)     : Beranda, Approval, Tangguhkan, Kalender Tim, Profil
+//   - Role 5 (Admin SDM)       : Beranda, Pegawai, Rekap, Profil
+// Menu yang tidak tampil di bottom bar tetap bisa dibuka lewat sidebar (hamburger).
+
+// Kumpulan ikon (Heroicons outline) agar definisi menu di bawah tetap ringkas
+const ICONS = {
+    beranda:
+        "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6",
+    ajukan: "M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z",
+    riwayat: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
+    approval:
+        "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4",
+    tangguhkan:
+        "M20.618 5.984A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z",
+    kalender:
+        "M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z",
+    pegawai:
+        "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z",
+    rekap: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+    profil: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+};
+
+const bottomNavItems = computed(() => {
+    const roleId = user.value?.role_id;
+
+    const beranda = {
+        key: "beranda",
+        label: "Beranda",
+        href: route("dashboard"),
+        active: isActive("dashboard"),
+        icon: ICONS.beranda,
+    };
+
+    const profil = {
+        key: "profil",
+        label: "Profil",
+        href: route("profile.edit"),
+        active: isActive("profile.edit"),
+        icon: ICONS.profil,
+    };
+
+    const approval = {
+        key: "approval",
+        label: "Approval",
+        href: route("atasan.approval"),
+        active: isActive("atasan.approval"),
+        icon: ICONS.approval,
+    };
+
+    const kalenderTim = {
+        key: "kalender",
+        label: "Kalender Tim",
+        href: route("karyawan.kalender"),
+        active: isActive("karyawan.kalender"),
+        icon: ICONS.kalender,
+    };
+
+    // Role 1 - Karyawan / Staf
+    if (roleId === 1) {
+        return [
+            beranda,
+            {
+                key: "ajukan",
+                label: "Ajukan",
+                href: route("karyawan.ajukan"),
+                active: isActive("karyawan.ajukan"),
+                icon: ICONS.ajukan,
+            },
+            {
+                key: "riwayat",
+                label: "Riwayat",
+                href: route("karyawan.riwayat"),
+                active: isActive("karyawan.riwayat"),
+                icon: ICONS.riwayat,
+            },
+            profil,
+        ];
+    }
+
+    // Role 6 - Atasan L4 / Kepala Biro (5 menu, ada menu eksklusif Tangguhkan)
+    if (roleId === 6) {
+        return [
+            beranda,
+            approval,
+            {
+                key: "tangguhkan",
+                label: "Tangguhkan",
+                href: route("atasan.penangguhan"),
+                active: isActive("atasan.penangguhan"),
+                icon: ICONS.tangguhkan,
+            },
+            kalenderTim,
+            profil,
+        ];
+    }
+
+    // Role 2, 3, 4 - Atasan L1 - L3
+    if ([2, 3, 4].includes(roleId)) {
+        return [beranda, approval, kalenderTim, profil];
+    }
+
+    // Role 5 - Admin SDM
+    if (roleId === 5) {
+        return [
+            beranda,
+            {
+                key: "pegawai",
+                label: "Pegawai",
+                href: route("admin.pegawai"),
+                active: isActive("admin.pegawai"),
+                icon: ICONS.pegawai,
+            },
+            {
+                key: "rekap",
+                label: "Rekap",
+                href: route("admin.rekap"),
+                // Menu Rekap tetap menyala di kedua halaman rekap
+                active: isActive("admin.rekap") || isActive("admin.monitoring"),
+                icon: ICONS.rekap,
+            },
+            profil,
+        ];
+    }
+
+    // Fallback (role tidak dikenal): menu minimal yang aman
+    return [beranda, profil];
 });
+
+// Kolom grid menyesuaikan jumlah menu (Tailwind butuh class statis)
+const bottomNavGridClass = computed(() => {
+    const total = bottomNavItems.value.length;
+    if (total >= 5) return "grid-cols-5";
+    if (total === 4) return "grid-cols-4";
+    return "grid-cols-2";
+});
+
+// Tab di dalam menu "Rekap" (khusus Admin HR / role 5, tampil di HP):
+// memisahkan "Rekap Kuota Detail" dan "Rekap Laporan" yang sebelumnya
+// hanya bisa dibuka lewat sidebar.
+const rekapTabs = computed(() => {
+    if (user.value?.role_id !== 5) return [];
+    return [
+        {
+            key: "kuota",
+            label: "Rekap Kuota",
+            href: route("admin.monitoring"),
+            active: isActive("admin.monitoring"),
+        },
+        {
+            key: "laporan",
+            label: "Rekap Laporan",
+            href: route("admin.rekap"),
+            active: isActive("admin.rekap"),
+        },
+    ];
+});
+const showRekapTabs = computed(
+    () => rekapTabs.value.length > 0 && rekapTabs.value.some((t) => t.active),
+);
+// ================= END BOTTOM NAVIGATION =================
+
+// ================= TIMEOUT SESI IDLE =================
+// Harus LEBIH KECIL dari SESSION_LIFETIME di .env (menit).
+// Test: SESSION_LIFETIME=30 -> 30 menit. Produksi: 30 menit.
+const IDLE_LIMIT_MS = 29 * 60 * 1000;
+let idleTimer = null;
+let lastActivity = Date.now();
+let sedangLogout = false;
+
+const logoutKarenaIdle = () => {
+    if (sedangLogout) return;
+    sedangLogout = true;
+    router.post(
+        route("logout"),
+        { fcm_token: fcmTokenSaatIni.value }, // BARU
+        {
+            onFinish: () => {
+                window.location.href = route("login");
+            },
+        },
+    );
+};
+
+const resetIdleTimer = () => {
+    lastActivity = Date.now();
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(logoutKarenaIdle, IDLE_LIMIT_MS);
+};
+
+// Laptop sleep / tab di latar belakang bisa menunda setTimeout.
+const cekSetelahTabAktif = () => {
+    if (document.visibilityState !== "visible") return;
+    if (Date.now() - lastActivity >= IDLE_LIMIT_MS) {
+        logoutKarenaIdle();
+    }
+};
+
+const eventAktivitas = [
+    "mousemove",
+    "mousedown",
+    "keydown",
+    "scroll",
+    "touchstart",
+];
+
+// ================= FCM / PUSH NOTIFICATION =================
+// Minta izin + ambil FCM token + simpan ke Laravel.
+// Dipicu tombol (bukan otomatis), karena Chrome memblokir prompt tanpa gesture user.
+// VAPID key dari .env: VITE_FIREBASE_VAPID_KEY=...
+const fcmStatus = ref(""); // pesan singkat untuk UI
+const fcmLoading = ref(false);
+const fcmTokenSiap = ref(false);
+
+// BARU: token FCM milik browser ini. Dikirim saat logout supaya server
+// hanya menghapus token perangkat INI (perangkat lain milik user tetap aktif).
+const bacaTokenTersimpan = () => {
+    try {
+        return localStorage.getItem("fcm_token") || "";
+    } catch (e) {
+        return "";
+    }
+};
+const fcmTokenSaatIni = ref(bacaTokenTersimpan());
+
+// Daftarkan service worker, ambil token, simpan ke database.
+const ambilDanSimpanToken = async () => {
+    const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
+    if (!vapidKey) {
+        throw new Error("VITE_FIREBASE_VAPID_KEY belum diisi di .env");
+    }
+
+    const registration = await navigator.serviceWorker.register(
+        "/firebase-messaging-sw.js",
+    );
+    // Tunggu service worker benar-benar aktif, kalau tidak getToken bisa gagal
+    // dengan "no active Service Worker" (terutama saat pertama kali).
+    await navigator.serviceWorker.ready;
+
+    const currentToken = await getToken(messaging, {
+        vapidKey,
+        serviceWorkerRegistration: registration,
+    });
+
+    if (!currentToken) return false;
+
+    fcmTokenSaatIni.value = currentToken; // BARU
+    try {
+        localStorage.setItem("fcm_token", currentToken);
+    } catch (e) {
+        // penyimpanan lokal tidak tersedia, abaikan
+    }
+    await axios.post("/fcm-token", { token: currentToken });
+    return true;
+};
+
+const requestNotificationPermission = async () => {
+    if (fcmLoading.value) return;
+    fcmLoading.value = true;
+    fcmStatus.value = "";
+
+    try {
+        if (typeof window === "undefined" || !("Notification" in window)) {
+            fcmStatus.value = "Browser tidak mendukung notifikasi.";
+            return;
+        }
+
+        const permission = await Notification.requestPermission();
+
+        if (permission !== "granted") {
+            fcmStatus.value = "Izin notifikasi ditolak.";
+            return;
+        }
+
+        const berhasil = await ambilDanSimpanToken();
+        fcmTokenSiap.value = berhasil;
+        fcmStatus.value = berhasil
+            ? "Notifikasi berhasil diaktifkan."
+            : "Gagal mengambil token perangkat.";
+    } catch (error) {
+        console.error("Terjadi kesalahan saat mengatur notifikasi:", error);
+        fcmStatus.value = "Gagal mengaktifkan notifikasi.";
+    } finally {
+        fcmLoading.value = false;
+    }
+};
+
+// Kalau izin sudah pernah diberikan, sinkronkan token diam-diam tiap halaman dibuka
+// (token bisa berganti), tanpa pop-up. Tombol otomatis tampil "Notifikasi aktif".
+const sinkronkanTokenJikaSudahIzin = async () => {
+    if (!("Notification" in window) || Notification.permission !== "granted") {
+        return;
+    }
+    try {
+        fcmTokenSiap.value = await ambilDanSimpanToken();
+    } catch (error) {
+        console.error("Gagal sinkron token FCM:", error);
+    }
+};
+// BARU: pesan yang masuk saat halaman ini masih terlihat (foreground).
+// Lonceng selalu disegarkan. Pop-up sistem hanya ditampilkan kalau halaman
+// sedang tidak difokuskan (mis. jendela terlihat tapi pengguna ada di jendela lain).
+let hentikanFcmForeground = null;
+
+const tampilkanNotifForeground = async (payload) => {
+    const d = payload?.data || {};
+
+    router.reload({ only: ["notifikasis"], preserveScroll: true });
+
+    if (!("Notification" in window) || Notification.permission !== "granted") {
+        return;
+    }
+    if (document.visibilityState === "visible" && document.hasFocus()) return;
+
+    try {
+        const reg = await navigator.serviceWorker.ready;
+        await reg.showNotification(d.title || "AgriLeave", {
+            body: d.body || "",
+            icon: "/favicon.ico",
+            data: { url: d.url || "/dashboard" },
+        });
+    } catch (e) {
+        console.error("Gagal menampilkan notifikasi foreground:", e);
+    }
+};
+// ================= END FCM / PUSH NOTIFICATION =================
+
+onMounted(() => {
+    eventAktivitas.forEach((e) =>
+        window.addEventListener(e, resetIdleTimer, { passive: true }),
+    );
+    document.addEventListener("visibilitychange", cekSetelahTabAktif);
+    resetIdleTimer();
+    sinkronkanTokenJikaSudahIzin(); // BARU
+    hentikanFcmForeground = onMessage(messaging, tampilkanNotifForeground); // BARU
+});
+
+onBeforeUnmount(() => {
+    clearTimeout(idleTimer);
+    eventAktivitas.forEach((e) =>
+        window.removeEventListener(e, resetIdleTimer),
+    );
+    document.removeEventListener("visibilitychange", cekSetelahTabAktif);
+    document.body.style.overflow = "";
+    if (hentikanFcmForeground) hentikanFcmForeground(); // BARU
+});
+// ================= END TIMEOUT SESI IDLE =================
 
 const closeDropdowns = () => {
     isNotifOpen.value = false;
@@ -641,6 +993,7 @@ const approvalMenuLabel = computed(() =>
                     :href="route('logout')"
                     method="post"
                     as="button"
+                    :data="{ fcm_token: fcmTokenSaatIni }"
                     :title="!showLabel ? 'Logout' : ''"
                     :class="[
                         'w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-800/60 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/50 rounded-xl text-sm font-medium transition-all duration-200',
@@ -1153,6 +1506,42 @@ const approvalMenuLabel = computed(() =>
                                     </svg>
                                     Profil & Pengaturan
                                 </Link>
+                                <button
+                                    type="button"
+                                    @click="requestNotificationPermission"
+                                    :disabled="fcmLoading || fcmTokenSiap"
+                                    class="w-full flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-600 hover:text-green-600 hover:bg-slate-50 transition-colors text-left disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    <svg
+                                        class="w-4 h-4 shrink-0"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
+                                        ></path>
+                                    </svg>
+                                    <span class="min-w-0">
+                                        <span class="block">
+                                            {{
+                                                fcmLoading
+                                                    ? "Mengaktifkan..."
+                                                    : fcmTokenSiap
+                                                      ? "Notifikasi aktif"
+                                                      : "Aktifkan Notifikasi"
+                                            }}
+                                        </span>
+                                        <span
+                                            v-if="fcmStatus"
+                                            class="block text-[10px] font-normal text-slate-400 mt-0.5 truncate"
+                                            >{{ fcmStatus }}</span
+                                        >
+                                    </span>
+                                </button>
                                 <Link
                                     :href="route('profile.edit') + '#password'"
                                     class="flex items-center gap-3 px-4 py-2.5 text-sm font-medium text-slate-600 hover:text-green-600 hover:bg-slate-50 transition-colors"
@@ -1177,6 +1566,7 @@ const approvalMenuLabel = computed(() =>
                                     :href="route('logout')"
                                     method="post"
                                     as="button"
+                                    :data="{ fcm_token: fcmTokenSaatIni }"
                                     class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors text-left font-medium cursor-pointer"
                                 >
                                     <svg
@@ -1204,19 +1594,91 @@ const approvalMenuLabel = computed(() =>
             <main
                 class="flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto relative z-10"
             >
+                <!-- TAB REKAP (HP, Admin HR): pindah antara Rekap Kuota & Rekap Laporan -->
+                <div
+                    v-if="showRekapTabs"
+                    class="md:hidden mb-4 flex w-full rounded-xl border border-slate-200 bg-white p-1 shadow-sm"
+                    role="tablist"
+                    aria-label="Pilih jenis rekap"
+                >
+                    <Link
+                        v-for="tab in rekapTabs"
+                        :key="tab.key"
+                        :href="tab.href"
+                        role="tab"
+                        :aria-selected="tab.active"
+                        class="flex-1 rounded-lg px-3 py-2 text-center text-xs font-bold transition-all"
+                        :class="
+                            tab.active
+                                ? 'bg-green-600 text-white shadow-sm'
+                                : 'text-slate-500 hover:text-slate-700'
+                        "
+                    >
+                        {{ tab.label }}
+                    </Link>
+                </div>
+
                 <transition name="fade" mode="out-in">
                     <slot />
                 </transition>
             </main>
 
-            <!-- FOOTER BAWAH KACA -->
+            <!-- FOOTER BAWAH KACA
+                 pb-20 hanya di HP: memberi ruang agar footer tidak tertutup
+                 Bottom Navigation yang fixed di bawah layar. -->
             <footer
-                class="border-t border-slate-200/50 py-4 px-4 text-center text-[11px] font-medium text-slate-500 shrink-0 bg-white/40 backdrop-blur-sm relative z-10"
+                class="border-t border-slate-200/50 py-4 pb-20 md:pb-4 px-4 text-center text-[11px] font-medium text-slate-500 shrink-0 bg-white/40 backdrop-blur-sm relative z-10"
             >
-                &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro
-                Organisasi dan SDM Aparatur.
+                &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro Perencanaan.
             </footer>
         </div>
+
+        <!-- BOTTOM NAVIGATION (khusus HP)
+             Fixed di bawah layar. Isi menu menyesuaikan role (4 menu, atau 5 menu
+             untuk Kepala Biro / role 6). Disembunyikan di md ke atas.
+             z-30 supaya tetap di bawah drawer sidebar (z-50) & backdrop (z-40).
+             pb safe-area agar tidak tertutup home-indicator iPhone. -->
+        <nav
+            v-if="user"
+            class="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(15,23,42,0.06)] pb-[env(safe-area-inset-bottom)]"
+            aria-label="Navigasi bawah"
+        >
+            <ul class="grid" :class="bottomNavGridClass">
+                <li v-for="item in bottomNavItems" :key="item.key">
+                    <Link
+                        :href="item.href"
+                        :aria-current="item.active ? 'page' : undefined"
+                        class="relative flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-semibold transition-colors"
+                        :class="
+                            item.active
+                                ? 'text-green-600'
+                                : 'text-slate-400 hover:text-slate-600'
+                        "
+                    >
+                        <span
+                            v-if="item.active"
+                            class="absolute top-0 h-0.5 w-8 rounded-b-full bg-green-500"
+                        ></span>
+                        <svg
+                            class="w-6 h-6"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                :stroke-width="item.active ? 2.25 : 1.75"
+                                :d="item.icon"
+                            ></path>
+                        </svg>
+                        <span class="truncate max-w-full px-1">{{
+                            item.label
+                        }}</span>
+                    </Link>
+                </li>
+            </ul>
+        </nav>
     </div>
 </template>
 

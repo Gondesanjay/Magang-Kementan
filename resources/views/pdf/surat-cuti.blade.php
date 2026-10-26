@@ -83,24 +83,45 @@
         }
 
 
-        /* PERBAIKAN KERAPIAN FORMAT: font-size nama penandatangan diperkecil
-           lagi ke 10pt (dari semula 11pt) karena nama yang lebih panjang
-           bergelar masih terpotong jadi dua baris di 11pt. Ukuran 10pt dipastikan
-           cukup untuk memuat nama panjang dalam satu baris di lebar
-           kolom tanda tangan (50% halaman), sekaligus tetap proporsional
-           dengan teks jabatan di atasnya. */
+        /* Nama penandatangan 10pt supaya nama bergelar panjang muat satu baris
+           di lebar kolom tanda tangan (50% halaman). */
         .signature-name {
             text-decoration: underline;
             font-weight: bold;
             font-size: 10pt;
             white-space: nowrap;
-            margin-top: 80px;
+            margin-top: 10px;
         }
     </style>
 </head>
 
 
 <body>
+
+    {{--
+        Helper path tanda tangan (dipakai blok L3 dan L4).
+        Mengembalikan path file lokal untuk DomPDF, atau null kalau tidak ada.
+        Urutan: 1) signature_path milik pejabat, 2) gambar default, 3) null.
+        is_file() (bukan file_exists) supaya path kosong yang menunjuk ke
+        folder "storage/" tidak dianggap sebagai file gambar.
+    --}}
+    @php
+    $cariTandaTangan = function ($pejabat, string $fileDefault) {
+    if ($pejabat && !empty($pejabat->signature_path)) {
+    $pathPejabat = public_path('storage/' . ltrim($pejabat->signature_path, '/'));
+    if (is_file($pathPejabat)) {
+    return $pathPejabat;
+    }
+    }
+
+    $pathDefault = public_path('storage/signatures/' . $fileDefault);
+
+    return is_file($pathDefault) ? $pathDefault : null;
+    };
+
+    $ttdKasubag = $cariTandaTangan($kasubag ?? null, 'kasubag.png');
+    $ttdKabiro = $cariTandaTangan($kabiro ?? null, 'kabiro.png');
+    @endphp
 
 
     <div class="title">LEMBAR PERSETUJUAN CUTI</div>
@@ -176,6 +197,38 @@
     <p style="margin-top: 30px; font-size: 10pt; font-style: italic;">
         Cuti ini disetujui otomatis oleh sistem karena pemohon adalah Kepala Biro Perencanaan selaku pejabat yang berwenang memberikan cuti.
     </p>
+
+    @elseif(!empty($pemohonKasubag))
+    {{-- Pemohon = Kasubag TU (L3): rantai approval hanya L4, jadi hanya blok Kepala Biro --}}
+    <table class="signature-table">
+        <tr>
+            <td></td>
+            <td>
+                <div class="signature-date">
+                    Jakarta, {{ \Carbon\Carbon::now()->locale('id')->translatedFormat('d F Y') }}
+                </div>
+                Mengetahui,<br>
+                Pejabat Yang Berwenang Memberikan Cuti<br>
+                Kepala Biro Perencanaan
+
+                <div style="height: 70px; margin: 10px 0;">
+                    @if($ttdKabiro)
+                    <img src="{{ $ttdKabiro }}" style="height: 70px;">
+                    @else
+                    <span style="font-size: 10pt; color: #555; font-style: italic;">(Tanda Tangan)</span>
+                    @endif
+                </div>
+
+                <div class="signature-name" style="margin-top: 10px;">
+                    {{ $kabiro ? $kabiro->nama : '(Kepala Biro belum ditentukan)' }}
+                </div>
+                @if($kabiro)
+                NIP. {{ $kabiro->nip }}
+                @endif
+            </td>
+        </tr>
+    </table>
+
     @else
     <table class="signature-table">
         <tr>
@@ -185,29 +238,21 @@
                 Atasan Langsung,<br>
                 Kepala Subbagian Tata Usaha
 
-
-                <!-- AREA GAMBAR TANDA TANGAN L3 -->
                 <div style="height: 70px; margin: 10px 0;">
-                    @if($kasubag && !empty($kasubag->signature_path) && file_exists(public_path('storage/' . $kasubag->signature_path)))
-                    <img src="{{ public_path('storage/' . $kasubag->signature_path) }}" style="height: 70px; width: 140px; object-fit: contain;">
-                    @elseif(file_exists(public_path('storage/signatures/kasubag.png')))
-                    <img src="{{ public_path('storage/signatures/kasubag.png') }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    @if($ttdKasubag)
+                    <img src="{{ $ttdKasubag }}" style="height: 70px;">
                     @else
-                    <!-- Jika file benar-benar tidak ada, kosongkan saja atau berikan teks pengganti -->
                     <span style="font-size: 10pt; color: #555; font-style: italic;">(Tanda Tangan)</span>
                     @endif
                 </div>
 
-
-                <!-- Nama dan NIP diambil dari data pejabat aktif bila tersedia. -->
-                <div class="signature-name">
+                <div class="signature-name" style="margin-top: 10px;">
                     {{ $kasubag ? $kasubag->nama : '(Kasubag TU belum ditentukan)' }}
                 </div>
                 @if($kasubag)
                 NIP. {{ $kasubag->nip }}
                 @endif
             </td>
-
 
             <!-- Kolom Kanan: Pejabat Berwenang (L4 - Kepala Biro Perencanaan) -->
             <td>
@@ -218,21 +263,15 @@
                 Pejabat Yang Berwenang Memberikan Cuti<br>
                 Kepala Biro Perencanaan
 
-
-                <!-- AREA GAMBAR TANDA TANGAN L4 -->
                 <div style="height: 70px; margin: 10px 0;">
-                    @if($kabiro && file_exists(public_path('storage/' . $kabiro->signature_path)))
-                    <!-- Jika ada gambar di database -->
-                    <img src="{{ public_path('storage/' . $kabiro->signature_path) }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    @if($ttdKabiro)
+                    <img src="{{ $ttdKabiro }}" style="height: 70px;">
                     @else
-                    <!-- Fallback / Gambar Default Statis -->
-                    <img src="{{ public_path('storage/signatures/kabiro.png') }}" style="height: 70px; width: 140px; object-fit: contain;">
+                    <span style="font-size: 10pt; color: #555; font-style: italic;">(Tanda Tangan)</span>
                     @endif
                 </div>
 
-
-                <!-- Nama dan NIP diambil dari data pejabat aktif bila tersedia. -->
-                <div class="signature-name">
+                <div class="signature-name" style="margin-top: 10px;">
                     {{ $kabiro ? $kabiro->nama : '(Kepala Biro belum ditentukan)' }}
                 </div>
                 @if($kabiro)

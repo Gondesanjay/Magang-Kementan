@@ -1,17 +1,13 @@
 <?php
 
-
 namespace App\Http\Controllers;
-
 
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
 use Inertia\Response;
-
 
 class ProfileController extends Controller
 {
@@ -22,74 +18,48 @@ class ProfileController extends Controller
         ]);
     }
 
-
     public function update(Request $request): RedirectResponse
     {
-        // 1. Validasi Manual yang ketat (alamat_domisili & no_telepon)
         $request->validate([
             'nama' => ['required', 'string', 'max:255'],
             'alamat_domisili' => ['nullable', 'string', 'max:500'],
-            'no_telepon' => ['nullable', 'string', 'max:15'], // <-- TAMBAHAN: Nomor Telepon
+            'no_telepon' => ['nullable', 'string', 'max:15'],
             'foto_profil' => ['nullable', 'image', 'mimes:jpeg,png,jpg', 'max:2048'],
         ]);
-
 
         $pegawai = $request->user();
         $pegawai->nama = $request->nama;
         $pegawai->alamat_domisili = $request->alamat_domisili;
 
-
-        // FIX: Hanya timpa no_telepon jika memang dikirim di request.
-        // Sebelumnya baris ini selalu dijalankan tanpa syarat, sehingga
-        // form yang tidak menyertakan field no_telepon (mis. form ganti
-        // foto saja) mengirim null dan menimpa nilai lama di database.
-        // Ini menyebabkan error "Column 'no_telepon' cannot be null" pada
-        // pegawai yang kolom no_telepon-nya sebelumnya sudah kosong.
+        // Hanya ubah no_telepon jika field dikirim (hindari menimpa null).
         if ($request->filled('no_telepon')) {
             $pegawai->no_telepon = $request->no_telepon;
         }
 
-
-        // 2. Jika ada file foto yang dikirim, simpan!
         if ($request->hasFile('foto_profil')) {
-            // Hapus fisik foto lama agar storage tidak penuh
             if ($pegawai->foto_profil) {
                 Storage::disk('public')->delete($pegawai->foto_profil);
             }
 
-
-            // Simpan foto baru
             $file = $request->file('foto_profil');
             $filename = time() . '_' . $file->getClientOriginalName();
             $path = $file->storeAs('profile-photos', $filename, 'public');
 
-
-            $pegawai->foto_profil = $path; // Masukkan nama file ke objek pegawai
+            $pegawai->foto_profil = $path;
         }
 
-
-        // 3. Simpan permanen ke database
         $pegawai->save();
-
 
         return Redirect::route('profile.edit');
     }
 
-
+    /**
+     * Penghapusan akun mandiri dinonaktifkan.
+     * Data pegawai dikelola Admin HR (soft delete di Kelola Pegawai).
+     * Route DELETE /profile juga sebaiknya dihapus di web.php.
+     */
     public function destroy(Request $request): RedirectResponse
     {
-        $request->validate([
-            'password' => ['required', 'current_password'],
-        ]);
-
-
-        $user = $request->user();
-        Auth::logout();
-        $user->delete();
-        $request->session()->invalidate();
-        $request->session()->regenerateToken();
-
-
-        return Redirect::to('/');
+        abort(403, 'Penghapusan akun tidak diizinkan. Hubungi Admin HR bila perlu nonaktifkan akun.');
     }
 }

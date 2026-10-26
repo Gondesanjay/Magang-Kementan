@@ -23,6 +23,60 @@ use Carbon\Carbon;
 // perbaikan field 'alasan' & level_saat_ini) ada di app/Http/Controllers/
 // MonitoringCutiController.php (controller SISI ATASAN), bukan di sini.
 //
+// ================= PERBAIKAN (LAMPIRAN DISK PRIVATE) =================
+// Lampiran disimpan di disk 'local' (storage/app/private), bukan 'public'.
+// Unduh hanya lewat route lampiran.unduh + LampiranController (cek hak akses).
+// Path di DB tetap relatif (lampiran-cuti/...), accessor model mengubahnya
+// menjadi URL route. Hapus file yatim memakai getRawOriginal / path mentah.
+// ================= END LAMPIRAN DISK PRIVATE =================
+//
+// ================= PERBAIKAN TERBARU (MASA KERJA / TANGGAL MASUK EFEKTIF) =================
+// BUG: masa kerja untuk syarat Cuti Besar dihitung langsung dari kolom
+// tanggal_masuk. Kalau kolom itu kosong / placeholder (0000-00-00) / tidak
+// bisa di-parse, hasilnya 0 tahun dan opsi Cuti Besar terkunci keliru.
+// downloadPdf() juga memakai Carbon::parse(null) yang menghasilkan "sekarang",
+// sehingga PDF mencetak masa kerja "0 Tahun / 0 Bulan".
+//
+// PERBAIKAN: helper tanggalMasukEfektif() dengan prioritas
+//   1) kolom tanggal_masuk (jika valid: tahun >= 1950 dan bukan masa depan)
+//   2) cadangan: TMT dari NIP 18 digit (digit 9-12 = tahun, 13-14 = bulan)
+// hitungMasaKerjaTahun() dan downloadPdf() sama-sama memakai helper ini.
+// CATATAN: kalau tanggal_masuk TERISI tapi salah (mis. tanggal akun dibuat),
+// helper tetap mempercayainya. Datanya harus dikoreksi di Kelola Pegawai.
+//
+// ================= PERBAIKAN TERBARU (ATURAN TUNGGAL BATAL MANDIRI) =================
+// Aturan "boleh dibatalkan mandiri atau tidak" sekarang hanya ada di SATU
+// tempat: bisaDibatalkanMandiri() = cuti berstatus 'disetujui' DAN tanggal
+// mulainya masih SESUDAH hari ini.
+//   - batalkanMandiri() memakai helper ini (penjaga akhir di server).
+//   - history() mengirim flag 'bisa_batal_mandiri' (true/false) pada setiap
+//     baris riwayat, dan RiwayatPengajuan.vue memakainya untuk menampilkan
+//     atau menyembunyikan tombol Batalkan. Jadi tampilan dan server tidak
+//     mungkin berbeda, dan jam perangkat karyawan tidak berpengaruh.
+//   - Contoh cuti 13-19 Okt: sampai 12 Okt tombol tampil dan berfungsi;
+//     mulai 13 Okt (hari pertama cuti) tombol tidak aktif dan server menolak.
+//   - Pastikan 'timezone' di config/app.php bernilai 'Asia/Jakarta'.
+//
+// ================= PERBAIKAN TERBARU (REVIEW CONTROLLER) =================
+//   1. LAMPIRAN: validasi store() kini punya pesan kustom berbahasa Indonesia
+//      (lihat pesanValidasiLampiran()). Jika transaksi gagal karena error
+//      APA PUN (bukan hanya ValidationException), file lampiran yang sudah
+//      terunggah dihapus supaya tidak jadi file yatim.
+//   2. KALENDER TIM: teamCalendar() menerima parameter ?bulan=YYYY-MM dan
+//      mengirim cuti yang beririsan dengan bulan itu (termasuk yang sudah
+//      lewat), bukan lagi hanya cuti mendatang. Pembedaan lampau/mendatang
+//      dilakukan di KalenderTim.vue. Prop 'bulan' ikut dikirim.
+//   3. BATAL MANDIRI: batalkanMandiri() menolak pembatalan cuti yang sudah
+//      dimulai atau sudah lewat, supaya saldo cuti lampau tidak bisa pulih.
+//   4. SALDO DI store(): pengecekan saldo diulang DI DALAM transaksi setelah
+//      baris pegawai dikunci (lockForUpdate), sehingga dua request bersamaan
+//      dengan tanggal berbeda tidak bisa sama-sama lolos.
+//   5. SALDO DI revisi(): pengecekan saldo Cuti Tahunan kini berlaku untuk
+//      SEMUA role (sebelumnya hanya jalur Kepala Biro).
+//   6. NOTIFIKASI: penerima notifikasi dicari lewat cariAtasanTujuan().
+//      Untuk L1 (role_id 2) dicari per tim_kerja (sesuai wewenang di
+//      MonitoringCutiController::process()), bukan per kelompok_substansi.
+//
 // ================= PERBAIKAN BARU (PENGAJUAN GANDA / TANGGAL BENTROK) =================
 // BUG: pegawai bisa mengajukan cuti berkali-kali untuk tanggal yang sama atau
 // rentang yang tumpang tindih (contoh nyata: pegawai_id 5, id 76-79, semuanya
@@ -62,7 +116,7 @@ use Carbon\Carbon;
 //     supaya blok tanda tangan L3/L4 tidak ditampilkan untuk surat L4.
 // ================= END PERBAIKAN L4 =================
 //
-// ================= PERBAIKAN TERBARU (SINKRONISASI RUMUS SALDO) =================
+// ================= PERBAIKAN (SINKRONISASI RUMUS SALDO) =================
 // BUG: create(), store(), history(), dan downloadPdf() masing-masing menghitung
 // saldo sendiri dengan rumus (kuota + carry_forward_normal) - terpakai, yaitu
 // carry-forward dipakai UTUH tanpa batas bawaan 6 hari dan tanpa koreksi_saldo
@@ -80,7 +134,7 @@ use Carbon\Carbon;
 //   sisa            = total tersedia - cuti yang masih menunggu persetujuan
 // ================= END PERBAIKAN SINKRONISASI RUMUS SALDO =================
 //
-// ================= PERBAIKAN BARU (SALDO TAHUN BELUM ADA, KHUSUS CUTI TAHUNAN) =================
+// ================= PERBAIKAN (SALDO TAHUN BELUM ADA, KHUSUS CUTI TAHUNAN) =================
 // ATURAN: Cuti Tahunan HANYA boleh diajukan untuk tahun yang saldonya
 // (baris saldo_cutis) sudah dibuat Admin HR lewat Generate Saldo Tahun Baru.
 // Kalau rentang tanggal cuti menyentuh tahun yang belum punya baris saldo
@@ -94,7 +148,7 @@ use Carbon\Carbon;
 //   - Helper: tahunTanpaSaldo().
 // ================= END PERBAIKAN SALDO TAHUN BELUM ADA =================
 //
-// ================= PERBAIKAN BARU (ANAK KE-BERAPA UNTUK CUTI MELAHIRKAN) =================
+// ================= PERBAIKAN (ANAK KE-BERAPA UNTUK CUTI MELAHIRKAN) =================
 // Sebelumnya field "Anak ke-berapa" ada di form (AjukanCuti.vue) tetapi
 // TIDAK divalidasi dan TIDAK disimpan oleh store(), sehingga datanya hilang
 // dan tidak bisa ditampilkan di modal Detail Cuti (Dashboard / Riwayat).
@@ -131,10 +185,15 @@ use Carbon\Carbon;
 // $item->pegawai->nama_l1 / nama_l2 untuk setiap baris riwayat. Dihitung
 // sekali di luar loop karena halaman ini selalu berisi pengajuan $user.
 //
-// ================= PERBAIKAN (KALENDER TIM: CUTI SENDIRI IKUT TAMPIL) =================
-// teamCalendar(): pengajuan REKAN hanya 'disetujui'; pengajuan MILIK SENDIRI
-// juga hanya 'disetujui'. Prop 'userPegawaiId' dikirim supaya KalenderTim.vue
-// bisa menandai entri sendiri dengan "(Anda)".
+// ================= PERBAIKAN (KALENDER TIM) =================
+// teamCalendar(): hanya pengajuan berstatus 'disetujui' (rekan maupun milik
+// sendiri). Data dikirim PER BULAN (?bulan=YYYY-MM) dan MENCAKUP cuti yang
+// sudah lewat. Prop 'userPegawaiId' dikirim supaya KalenderTim.vue bisa
+// menandai entri sendiri dengan "(Anda)".
+// Prop 'disetujuiBulanIni' = jumlah pengajuan disetujui yang beririsan
+// dengan bulan yang sedang dilihat (sudah sesuai role & bulan).
+// Field privat (keterangan, alamat_cuti, no_telp, lampiran, dll.) di-hide
+// lewat makeHidden() supaya tidak bocor di response Inertia.
 //
 // ================= PERBAIKAN (FILTER STATUS RIWAYAT + rute_level) =================
 // 1. FILTER STATUS di history() memakai STATUS EFEKTIF (sama dengan tabel &
@@ -160,6 +219,54 @@ class CutiController extends Controller
     // diajukan lagi.
     private const STATUS_AKTIF = ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4', 'disetujui'];
 
+
+    // Batas keamanan: cegah loop hitungHariKerja pada tanggal ekstrem (mis. tahun 9999).
+    private const MAKS_RENTANG_HARI = 92;           // hari kalender (mulai → selesai, inklusif)
+    private const MAKS_MULAI_TAHUN_KE_DEPAN = 2;   // tanggal mulai maksimal N tahun dari hari ini
+
+    /**
+     * Tolak rentang cuti yang tidak wajar SEBELUM hitungHariKerja / transaksi DB.
+     */
+    private function pastikanRentangWajar(
+        string $mulai,
+        string $selesai,
+        string $fieldError = 'tanggal_selesai'
+    ): void {
+        try {
+            $tMulai = Carbon::parse($mulai)->startOfDay();
+            $tSelesai = Carbon::parse($selesai)->startOfDay();
+        } catch (\Throwable $e) {
+            throw ValidationException::withMessages([
+                'tanggal_mulai' => 'Tanggal cuti tidak valid.',
+            ]);
+        }
+
+        if ($tSelesai->lt($tMulai)) {
+            throw ValidationException::withMessages([
+                'tanggal_selesai' => 'Tanggal selesai tidak boleh sebelum tanggal mulai.',
+            ]);
+        }
+
+        $batasMulai = Carbon::today()->addYears(self::MAKS_MULAI_TAHUN_KE_DEPAN);
+        if ($tMulai->gt($batasMulai)) {
+            throw ValidationException::withMessages([
+                'tanggal_mulai' => 'Tanggal mulai terlalu jauh ke depan. Maksimal '
+                    . self::MAKS_MULAI_TAHUN_KE_DEPAN . ' tahun dari hari ini.',
+            ]);
+        }
+
+        // +1 karena rentang inklusif (1 Jan–1 Jan = 1 hari)
+        $hariKalender = $tMulai->diffInDays($tSelesai) + 1;
+        if ($hariKalender > self::MAKS_RENTANG_HARI) {
+            throw ValidationException::withMessages([
+                $fieldError => 'Rentang cuti terlalu panjang. Maksimal '
+                    . self::MAKS_RENTANG_HARI
+                    . " hari kalender, Anda memilih {$hariKalender} hari.",
+            ]);
+        }
+    }
+
+
     private function normalizeJenisCuti(?string $value)
     {
         if ($value === null) {
@@ -181,7 +288,45 @@ class CutiController extends Controller
         return $map[$lower] ?? $normalized;
     }
 
-    // ================= HELPER BARU: HITUNG SALDO CUTI TAHUNAN =================
+    // ================= HELPER: PESAN VALIDASI PENGAJUAN =================
+    // Pesan berbahasa Indonesia untuk store() (dan field lampiran).
+    // 'lampiran.uploaded' muncul bila file ditolak PHP (melebihi
+    // upload_max_filesize di php.ini) sebelum sempat divalidasi Laravel.
+    private function pesanValidasiLampiran(): array
+    {
+        return [
+            // Jenis & anak ke-
+            'jenis_cuti.required' => 'Jenis cuti wajib dipilih.',
+            'jenis_cuti.in'       => 'Jenis cuti tidak valid.',
+            'anak_ke.required_if' => 'Kolom anak ke- wajib diisi untuk Cuti Melahirkan.',
+            'anak_ke.integer'     => 'Kolom anak ke- harus berupa angka.',
+            'anak_ke.min'         => 'Kolom anak ke- minimal 1.',
+            'anak_ke.max'         => 'Kolom anak ke- maksimal 20.',
+
+            // Tanggal
+            'tanggal_mulai.required'       => 'Tanggal mulai wajib diisi.',
+            'tanggal_mulai.date'           => 'Tanggal mulai tidak valid.',
+            'tanggal_mulai.after_or_equal' => 'Tanggal mulai tidak boleh sebelum hari ini.',
+            'tanggal_selesai.required'     => 'Tanggal selesai wajib diisi.',
+            'tanggal_selesai.date'         => 'Tanggal selesai tidak valid.',
+            'tanggal_selesai.after_or_equal' => 'Tanggal selesai tidak boleh sebelum tanggal mulai.',
+
+            // Keterangan, alamat, telepon
+            'keterangan.required'  => 'Keterangan / alasan cuti wajib diisi.',
+            'alamat_cuti.required' => 'Alamat selama cuti wajib diisi.',
+            'no_telp.required'     => 'Nomor telepon wajib diisi.',
+            'no_telp.max'          => 'Nomor telepon maksimal 20 karakter.',
+
+            // Lampiran
+            'lampiran.file'     => 'Lampiran harus berupa file.',
+            'lampiran.mimes'    => 'Format lampiran harus PDF, JPG, atau PNG.',
+            'lampiran.max'      => 'Ukuran lampiran maksimal 2 MB.',
+            'lampiran.uploaded' => 'Lampiran gagal diunggah. Pastikan ukurannya tidak lebih dari 2 MB.',
+        ];
+    }
+    // ================= END HELPER PESAN VALIDASI PENGAJUAN =================
+
+    // ================= HELPER: HITUNG SALDO CUTI TAHUNAN =================
     // SATU-SATUNYA tempat perhitungan saldo di controller ini. Rumus sama
     // dengan DashboardController::hitungSaldoPegawai() dan
     // RekapKuotaDetailController::hitungKuota() (halaman admin).
@@ -190,8 +335,11 @@ class CutiController extends Controller
     //   kuota_tahunan, carry_forward_normal, sisa_dua_tahun_lalu,
     //   saldo_bawaan_eligible, cuti_terpakai (efektif, ikut koreksi Admin HR),
     //   cuti_menunggu, total_cuti_tersedia, sisa_cuti (= total - menunggu)
-    private function hitungSaldoCuti(int $pegawaiId, int $tahun, int $kuotaDefault = 12): array
-    {
+    private function hitungSaldoCuti(
+        int $pegawaiId,
+        int $tahun,
+        int $kuotaDefault = 12
+    ): array {
         $saldo = SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
         $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun - 1)->first();
 
@@ -202,9 +350,11 @@ class CutiController extends Controller
         // Ikut koreksi_saldo Admin HR (NULL = ikut sistem).
         $terpakai = (int) SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
 
-        $bawaanEligible = ($sisaDuaTahunLalu === 12 && $sisaTahunLalu === 12)
-            ? 12
-            : min(6, $sisaTahunLalu);
+        $bawaanEligible = SaldoCuti::hitungBawaan(
+            $sisaDuaTahunLalu,
+            $sisaTahunLalu,
+            $kuota
+        );
 
         $menunggu = (int) PengajuanCuti::where('pegawai_id', $pegawaiId)
             ->where('jenis_cuti', 'Cuti Tahunan')
@@ -227,20 +377,48 @@ class CutiController extends Controller
     }
     // ================= END HELPER HITUNG SALDO CUTI =================
 
+    // ================= HELPER: TANGGAL MASUK EFEKTIF =================
+    // Prioritas: kolom tanggal_masuk (jika valid). Cadangan: TMT dari NIP
+    // (digit 9-12 = tahun, digit 13-14 = bulan).
+    // Kolom yang terisi tetap dipercaya, jadi tanggal yang SALAH tapi terisi
+    // (mis. tanggal akun dibuat) harus dikoreksi di data pegawai.
+    private function tanggalMasukEfektif(Pegawai $pegawai): ?Carbon
+    {
+        if (!empty($pegawai->tanggal_masuk)) {
+            try {
+                $tgl = Carbon::parse($pegawai->tanggal_masuk);
+                // Abaikan placeholder seperti 0000-00-00 dan tanggal masa depan.
+                if ($tgl->year >= 1950 && !$tgl->isFuture()) {
+                    return $tgl->startOfDay();
+                }
+            } catch (\Exception $e) {
+                // jatuh ke cadangan NIP
+            }
+        }
+
+        $nip = preg_replace('/\D/', '', (string) $pegawai->nip);
+        if (strlen($nip) === 18) {
+            $tahun = (int) substr($nip, 8, 4);
+            $bulan = (int) substr($nip, 12, 2);
+            if ($tahun >= 1950 && $bulan >= 1 && $bulan <= 12) {
+                return Carbon::create($tahun, $bulan, 1)->startOfDay();
+            }
+        }
+
+        return null;
+    }
+    // ================= END HELPER TANGGAL MASUK EFEKTIF =================
+
     // ================= HELPER: MASA KERJA (SYARAT CUTI BESAR) =================
     private function hitungMasaKerjaTahun(Pegawai $pegawai): int
     {
-        if (empty($pegawai->tanggal_masuk)) {
+        $tanggalMasuk = $this->tanggalMasukEfektif($pegawai);
+
+        if (!$tanggalMasuk) {
             return 0;
         }
 
-        try {
-            $tanggalMasuk = Carbon::parse($pegawai->tanggal_masuk);
-        } catch (\Exception $e) {
-            return 0;
-        }
-
-        return (int) $tanggalMasuk->diffInYears(Carbon::now());
+        return (int) floor($tanggalMasuk->diffInYears(Carbon::now()));
     }
     // ================= END HELPER MASA KERJA =================
 
@@ -278,7 +456,7 @@ class CutiController extends Controller
     }
     // ================= END HELPER HARI LIBUR =================
 
-    // ================= HELPER BARU: PENGAJUAN GANDA / TANGGAL BENTROK =================
+    // ================= HELPER: PENGAJUAN GANDA / TANGGAL BENTROK =================
     // Mengembalikan pengajuan AKTIF milik pegawai yang rentang tanggalnya
     // bersinggungan dengan [$mulai, $selesai], atau null kalau tidak ada.
     // Dua rentang bentrok jika: mulai_baru <= selesai_lama DAN selesai_baru >= mulai_lama.
@@ -305,6 +483,21 @@ class CutiController extends Controller
             . 'Batalkan pengajuan tersebut terlebih dahulu atau pilih tanggal lain.';
     }
     // ================= END HELPER PENGAJUAN GANDA =================
+
+    // ================= [BARU] HELPER: ATURAN TUNGGAL BATAL MANDIRI =================
+    // SATU-SATUNYA tempat yang menentukan apakah sebuah cuti boleh dibatalkan
+    // mandiri oleh pegawai: statusnya 'disetujui' DAN tanggal mulainya masih
+    // SESUDAH hari ini (cuti belum dimulai).
+    // Dipakai oleh:
+    //   - history()          -> flag 'bisa_batal_mandiri' untuk tombol di Vue
+    //   - batalkanMandiri()  -> penjaga akhir di server
+    // Dengan satu aturan ini, tampilan dan server tidak mungkin berbeda.
+    private function bisaDibatalkanMandiri(PengajuanCuti $cuti): bool
+    {
+        return $cuti->status === 'disetujui'
+            && Carbon::parse($cuti->tanggal_mulai)->startOfDay()->gt(Carbon::today());
+    }
+    // ================= END HELPER ATURAN BATAL MANDIRI =================
 
     // ================= HELPER: SALDO TAHUN BELUM ADA (KHUSUS CUTI TAHUNAN) =================
     // Mengembalikan tahun PERTAMA dalam rentang tanggal cuti yang belum punya
@@ -379,9 +572,35 @@ class CutiController extends Controller
     }
     // ================= END HELPER CEK L1 PER TIM KERJA =================
 
+    // ================= [BARU] HELPER: CARI PENERIMA NOTIFIKASI ATASAN =================
+    // L1 (role_id 2) di-scope per tim_kerja, selaras dengan wewenang L1 di
+    // MonitoringCutiController::process(). Level lain dicari per
+    // kelompok_substansi dengan cadangan ke siapa pun yang berperan sama
+    // (L3/L4 hanya satu orang untuk seluruh biro).
+    // Untuk L1 TIDAK ada cadangan lintas tim: tentukanLevelAwalCuti() hanya
+    // memilih L1 bila tim_kerja pemohon memang punya Ketua Tim Kerja.
+    private function cariAtasanTujuan(Pegawai $pemohon, int $targetRole): ?Pegawai
+    {
+        if ($targetRole === 2) {
+            if (empty($pemohon->tim_kerja)) {
+                return null;
+            }
+
+            return Pegawai::where('role_id', 2)
+                ->where('tim_kerja', $pemohon->tim_kerja)
+                ->first();
+        }
+
+        return Pegawai::where('role_id', $targetRole)
+            ->where('kelompok_substansi', $pemohon->kelompok_substansi)
+            ->first()
+            ?? Pegawai::where('role_id', $targetRole)->first();
+    }
+    // ================= END HELPER CARI PENERIMA NOTIFIKASI =================
+
     private function tentukanLevelAwalCuti(Pegawai $user): array
     {
-        // [BARU] L4 (Kepala Biro) tidak punya atasan -> langsung disetujui.
+        // L4 (Kepala Biro) tidak punya atasan -> langsung disetujui.
         if ((int) $user->role_id === 6) {
             return ['status' => 'disetujui', 'level' => 6, 'target_role' => 5];
         }
@@ -412,7 +631,7 @@ class CutiController extends Controller
         // ================= END CASCADE L1 -> L2 -> L3 =================
     }
 
-    // ================= HELPER BARU: PERSETUJUAN OTOMATIS KEPALA BIRO (L4) =================
+    // ================= HELPER: PERSETUJUAN OTOMATIS KEPALA BIRO (L4) =================
     // Dipanggil DI DALAM DB::transaction. Meniru efek approval final L4 di
     // MonitoringCutiController::process(): status disetujui, kolom legacy
     // `sisa` dikurangi (hanya Cuti Tahunan, tidak pernah di bawah 0),
@@ -496,7 +715,7 @@ class CutiController extends Controller
         $user = Auth::user();
         $tahunCuti = (int) date('Y');
 
-        // [DIUBAH] Rumus saldo lewat helper bersama (sama dengan Dashboard).
+        // Rumus saldo lewat helper bersama (sama dengan Dashboard).
         $saldoInfo = $this->hitungSaldoCuti($user->id, $tahunCuti, (int) ($user->jatah_cuti ?? 12));
 
         $hariLiburs = HariLibur::orderBy('tanggal')
@@ -512,7 +731,7 @@ class CutiController extends Controller
         $masaKerjaTahun = $this->hitungMasaKerjaTahun($user);
         $bolehCutiBesar = $masaKerjaTahun >= self::MASA_KERJA_MINIMAL_CUTI_BESAR;
 
-        // [BARU] Rentang pengajuan aktif milik user, untuk peringatan dini
+        // Rentang pengajuan aktif milik user, untuk peringatan dini
         // bentrok tanggal di form (backend tetap penjaga akhir).
         $rentangAktif = PengajuanCuti::where('pegawai_id', $user->id)
             ->whereIn('status', self::STATUS_AKTIF)
@@ -530,12 +749,14 @@ class CutiController extends Controller
             'sisa_cuti' => (int) $saldoInfo['sisa_cuti'],
             'total_cuti_tersedia' => (int) $saldoInfo['total_cuti_tersedia'],
             'hariLiburs' => $hariLiburs,
+            // Dipakai AjukanCuti.vue sebagai sumber utama masa kerja
+            // (konsisten dengan validasi store()).
             'masa_kerja_tahun' => $masaKerjaTahun,
             'boleh_cuti_besar' => $bolehCutiBesar,
             'masa_kerja_minimal_cuti_besar' => self::MASA_KERJA_MINIMAL_CUTI_BESAR,
             // Tahun yang sudah punya baris saldo (peringatan dini di form).
             'tahun_saldo_tersedia' => $this->tahunSaldoTersedia($user->id),
-            // [BARU] Pengajuan aktif (peringatan dini bentrok tanggal).
+            // Pengajuan aktif (peringatan dini bentrok tanggal).
             'pengajuan_aktif' => $rentangAktif,
         ]);
     }
@@ -552,8 +773,11 @@ class CutiController extends Controller
             'keterangan' => ['required', 'string'],
             'alamat_cuti' => ['required', 'string'],
             'no_telp' => ['required', 'string', 'max:20'],
+            // Lampiran OPSIONAL: PDF/JPG/PNG, maksimal 2 MB (2048 KB).
             'lampiran' => ['nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:2048'],
-        ]);
+        ], $this->pesanValidasiLampiran());
+
+        $this->pastikanRentangWajar($request->tanggal_mulai, $request->tanggal_selesai);
 
         /** @var \App\Models\Pegawai $user */
         $user = Auth::user();
@@ -598,7 +822,7 @@ class CutiController extends Controller
         }
         // ================= END PERHITUNGAN HARI KERJA =================
 
-        // ================= [BARU] VALIDASI: PENGAJUAN GANDA / TANGGAL BENTROK =================
+        // ================= VALIDASI: PENGAJUAN GANDA / TANGGAL BENTROK =================
         // Cek awal (cepat). Cek ulang yang kedap race condition ada di dalam
         // transaksi di bawah.
         if ($bentrok = $this->pengajuanBentrok($user->id, $request->tanggal_mulai, $request->tanggal_selesai)) {
@@ -608,12 +832,14 @@ class CutiController extends Controller
         }
         // ================= END VALIDASI PENGAJUAN GANDA =================
 
-        if ($jenisCuti === 'Cuti Tahunan') {
-            $tahunCuti = Carbon::parse($request->tanggal_mulai)->year;
+        // Cek saldo awal (cepat, pesan error langsung). Cek ulang yang kedap
+        // race condition ada di dalam transaksi di bawah.
+        $tahunCuti = Carbon::parse($request->tanggal_mulai)->year;
+        $kuotaDefault = (int) ($user->jatah_cuti ?? 12);
 
-            // [DIUBAH] Validasi saldo memakai helper bersama:
+        if ($jenisCuti === 'Cuti Tahunan') {
             // sisa = (kuota + bawaan eligible) - terpakai efektif - menunggu
-            $saldoInfo = $this->hitungSaldoCuti($user->id, $tahunCuti, (int) ($user->jatah_cuti ?? 12));
+            $saldoInfo = $this->hitungSaldoCuti($user->id, $tahunCuti, $kuotaDefault);
             $sisaTersedia = $saldoInfo['sisa_cuti'];
 
             if ($jumlah_hari > $sisaTersedia) {
@@ -627,8 +853,10 @@ class CutiController extends Controller
         // PROSES UPLOAD FILE LAMPIRAN (JIKA ADA)
         // =========================================================
         $lampiranPath = null;
+        // [DIUBAH] Disk 'local' (private), bukan 'public'. File hanya bisa
+        // dibuka lewat route lampiran.unduh (LampiranController).
         if ($request->hasFile('lampiran')) {
-            $lampiranPath = $request->file('lampiran')->store('lampiran-cuti', 'public');
+            $lampiranPath = $request->file('lampiran')->store('lampiran-cuti', 'local');
         }
 
         // =========================================================
@@ -639,7 +867,7 @@ class CutiController extends Controller
         $levelSaatIni = $levelAwal['level'];
         $targetRoleNotifikasi = $levelAwal['target_role'];
 
-        // [BARU] L4 (Kepala Biro) disetujui otomatis di dalam transaksi yang
+        // L4 (Kepala Biro) disetujui otomatis di dalam transaksi yang
         // sama dengan pembuatan pengajuan, supaya tidak ada data setengah jadi.
         $isKabiro = (int) $user->role_id === 6;
 
@@ -652,18 +880,31 @@ class CutiController extends Controller
                 $lampiranPath,
                 $statusAwal,
                 $levelSaatIni,
-                $isKabiro
+                $isKabiro,
+                $tahunCuti,
+                $kuotaDefault
             ) {
-                // [BARU] Kunci baris pegawai: request kedua dari user yang sama
+                // Kunci baris pegawai: request kedua dari user yang sama
                 // (klik ganda / dua tab) harus menunggu transaksi ini selesai,
-                // lalu cek ulang bentrok. Tanpa ini, dua request yang masuk
-                // bersamaan bisa sama-sama lolos cek awal.
+                // lalu cek ulang bentrok DAN saldo. Tanpa ini, dua request yang
+                // masuk bersamaan bisa sama-sama lolos cek awal.
                 Pegawai::where('id', $user->id)->lockForUpdate()->first();
 
                 if ($bentrok = $this->pengajuanBentrok($user->id, $request->tanggal_mulai, $request->tanggal_selesai)) {
                     throw ValidationException::withMessages([
                         'tanggal_mulai' => $this->pesanBentrok($bentrok),
                     ]);
+                }
+
+                // [BARU] Cek ulang saldo setelah baris pegawai terkunci.
+                if ($jenisCuti === 'Cuti Tahunan') {
+                    $saldoTerkini = $this->hitungSaldoCuti($user->id, $tahunCuti, $kuotaDefault);
+
+                    if ($jumlah_hari > $saldoTerkini['sisa_cuti']) {
+                        throw ValidationException::withMessages([
+                            'jenis_cuti' => "Pengajuan Cuti Tahunan melebihi sisa saldo. Sisa yang tersedia saat ini: {$saldoTerkini['sisa_cuti']} hari.",
+                        ]);
+                    }
                 }
 
                 $p = PengajuanCuti::create([
@@ -688,9 +929,13 @@ class CutiController extends Controller
 
                 return $p;
             });
-        } catch (ValidationException $e) {
-            // Hapus lampiran yang sudah terlanjur diunggah supaya tidak jadi file yatim.
+        } catch (\Throwable $e) {
+            // [DIUBAH] Hapus lampiran yang sudah terlanjur diunggah untuk
+            // error APA PUN (validasi, database, dll) supaya tidak jadi file
+            // yatim. Error aslinya tetap dilempar ulang.
             if ($lampiranPath) {
+                Storage::disk('local')->delete($lampiranPath);
+                // Cadangan: jika pernah tersimpan di public (deploy campuran).
                 Storage::disk('public')->delete($lampiranPath);
             }
 
@@ -706,13 +951,7 @@ class CutiController extends Controller
         // =========================================================
         // PROSES TRIGGER NOTIFIKASI KE ATASAN YANG TEPAT
         // =========================================================
-        $atasanTarget = Pegawai::where('role_id', $targetRoleNotifikasi)
-            ->where('kelompok_substansi', $user->kelompok_substansi)
-            ->first();
-
-        if (!$atasanTarget) {
-            $atasanTarget = Pegawai::where('role_id', $targetRoleNotifikasi)->first();
-        }
+        $atasanTarget = $this->cariAtasanTujuan($user, (int) $targetRoleNotifikasi);
 
         if ($atasanTarget) {
             Notifikasi::create([
@@ -735,7 +974,14 @@ class CutiController extends Controller
 
         // 'pegawai' ikut di-eager load supaya $item->pegawai tersedia untuk
         // ditempeli nama_l1/nama_l2 di bawah.
-        $query = PengajuanCuti::with(['pegawai', 'atasanL1', 'atasanL3', 'atasanL4', 'approvalLogs.approver'])
+        $query = PengajuanCuti::with([
+            'pegawai',
+            'atasanL1:id,nama,jabatan',
+            'atasanL3:id,nama,jabatan',
+            'atasanL4:id,nama,jabatan',
+            'approvalLogs.approver:id,nama,jabatan',
+            'cutiDitangguhkan',
+        ])
             ->where('pegawai_id', $user->id)
             ->orderBy('created_at', 'desc');
 
@@ -794,10 +1040,16 @@ class CutiController extends Controller
                 $item->pegawai->nama_l3 = $namaL3;
                 $item->pegawai->nama_l4 = $namaL4;
             }
+
+            // [BARU] Flag dari SATU aturan di server (bisaDibatalkanMandiri).
+            // RiwayatPengajuan.vue memakai flag ini untuk tombol Batalkan,
+            // sehingga tombol tidak bergantung pada jam perangkat pengguna.
+            $item->bisa_batal_mandiri = $this->bisaDibatalkanMandiri($item);
+            $item->bisa_direvisi = $item->bisaDirevisi();
         }
         // ================= END NAMA ATASAN L1 & L2 DINAMIS =================
 
-        // [DIUBAH] Rumus saldo lewat helper bersama (sama dengan Dashboard).
+        // Rumus saldo lewat helper bersama (sama dengan Dashboard).
         // Catatan: kuota default sekarang 12 (sebelumnya 0) bila baris saldo
         // belum ada, sama dengan Dashboard & halaman admin.
         $saldoInfo = $this->hitungSaldoCuti($user->id, (int) date('Y'), (int) ($user->jatah_cuti ?? 12));
@@ -830,15 +1082,31 @@ class CutiController extends Controller
 
     // 4. Menampilkan Kalender Tim
     //
-    // Kalender hanya menampilkan cuti berstatus 'disetujui':
+    // [DIUBAH] Data dikirim PER BULAN lewat parameter ?bulan=YYYY-MM, dan
+    // MENCAKUP cuti yang sudah lewat (sebelumnya hanya yang tanggal_selesai
+    // >= hari ini). Cuti yang beririsan dengan bulan yang dilihat ikut
+    // dikirim, termasuk yang mulai di bulan sebelumnya atau berakhir di
+    // bulan berikutnya. Pembedaan lampau/mendatang dilakukan di
+    // KalenderTim.vue.
+    //
+    // Hanya status 'disetujui':
     //   - rekan setim  : hanya status 'disetujui'
     //   - milik sendiri: hanya status 'disetujui'
     // Query rekan mengecualikan user sendiri (`id != $user->id`); data milik
     // sendiri diambil lewat query terpisah ($cutiSaya) lalu digabung.
-    public function teamCalendar()
+    public function teamCalendar(Request $request)
     {
         /** @var \App\Models\Pegawai $user */
         $user = Auth::user();
+
+        // Validasi parameter bulan (format YYYY-MM); nilai tak valid jatuh
+        // ke bulan ini, supaya URL yang diketik sembarangan tidak error.
+        $bulan = $request->input('bulan');
+        if (!is_string($bulan) || !preg_match('/^\d{4}-(0[1-9]|1[0-2])$/', $bulan)) {
+            $bulan = now()->format('Y-m');
+        }
+        $awalBulan = Carbon::createFromFormat('Y-m-d', $bulan . '-01')->startOfMonth()->toDateString();
+        $akhirBulan = Carbon::createFromFormat('Y-m-d', $bulan . '-01')->endOfMonth()->toDateString();
 
         $listTimKerja = [];
         $listKelompok = [];
@@ -889,10 +1157,11 @@ class CutiController extends Controller
                 });
         }
 
-        // Cuti REKAN: hanya yang sudah disetujui penuh.
+        // Cuti REKAN: hanya yang sudah disetujui penuh, beririsan dengan bulan yang dilihat.
         $cutiRekan = $query
             ->where('status', 'disetujui')
-            ->where('tanggal_selesai', '>=', Carbon::today()->toDateString())
+            ->whereDate('tanggal_mulai', '<=', $akhirBulan)
+            ->whereDate('tanggal_selesai', '>=', $awalBulan)
             ->orderBy('tanggal_mulai', 'asc')
             ->get();
 
@@ -900,7 +1169,8 @@ class CutiController extends Controller
         $cutiSaya = PengajuanCuti::with($pegawaiSelect)
             ->where('pegawai_id', $user->id)
             ->where('status', 'disetujui')
-            ->where('tanggal_selesai', '>=', Carbon::today()->toDateString())
+            ->whereDate('tanggal_mulai', '<=', $akhirBulan)
+            ->whereDate('tanggal_selesai', '>=', $awalBulan)
             ->get();
         // ================= END CUTI MILIK SENDIRI =================
 
@@ -909,10 +1179,28 @@ class CutiController extends Controller
             ->sortBy('tanggal_mulai')
             ->values();
 
+        // Sembunyikan kolom yang tidak dipakai KalenderTim.vue (privat / internal).
+        $cutiTim->each->makeHidden([
+            'keterangan',
+            'alamat_cuti',
+            'no_telp',
+            'lampiran',
+            'anak_ke',
+            'atasan_l1_id',
+            'atasan_l3_id',
+            'atasan_l4_id',
+            'level_saat_ini',
+        ]);
+
         $hariLiburs = \App\Models\HariLibur::all();
+
+        // Jumlah pengajuan disetujui pada bulan yang sedang dilihat
+        // (sudah sesuai role & filter bulan, dihitung dari $cutiTim).
+        $disetujuiBulanIni = $cutiTim->count();
 
         return Inertia::render('Karyawan/KalenderTim', [
             'cutiTim' => $cutiTim,
+            'bulan' => $bulan, // bulan yang sedang dilihat, format YYYY-MM
             'kelompok_substansi' => $user->kelompok_substansi,
             'hariLiburs' => $hariLiburs,
             'userRoleId' => $user->role_id,
@@ -920,6 +1208,8 @@ class CutiController extends Controller
             'userPegawaiId' => $user->id,       // dipakai untuk penanda "(Anda)"
             'listTimKerja' => $listTimKerja,
             'listKelompok' => $listKelompok,
+            // Jumlah pengajuan disetujui pada bulan yang sedang dilihat.
+            'disetujuiBulanIni' => $disetujuiBulanIni,
         ]);
     }
 
@@ -935,12 +1225,14 @@ class CutiController extends Controller
             abort(403, 'Anda tidak memiliki akses, atau cuti belum disetujui sepenuhnya.');
         }
 
-        $tanggalMasuk = Carbon::parse($pengajuan->pegawai->tanggal_masuk);
+        // [DIUBAH] Pakai tanggal masuk efektif (cadangan TMT dari NIP). Sebelumnya
+        // Carbon::parse(null) menghasilkan "sekarang" sehingga masa kerja tercetak 0.
+        $tanggalMasuk = $this->tanggalMasukEfektif($pengajuan->pegawai) ?? Carbon::now();
         $masaKerja = $tanggalMasuk->diff(Carbon::now())->format('%y Tahun / %m Bulan');
 
         $tahunCuti = (int) date('Y', strtotime($pengajuan->tanggal_mulai));
 
-        // [DIUBAH] Sisa cuti di PDF memakai helper bersama, sehingga angkanya
+        // Sisa cuti di PDF memakai helper bersama, sehingga angkanya
         // sama dengan Dashboard & halaman admin (bawaan eligible + koreksi Admin HR).
         $saldoInfo = $this->hitungSaldoCuti(
             (int) $pengajuan->pegawai_id,
@@ -965,8 +1257,9 @@ class CutiController extends Controller
             'sisaCuti' => (int) $sisaCutiAsli,
             'kasubag' => $kasubag,
             'kabiro' => $kabiro,
-            // [BARU] Pemohon Kepala Biro -> PDF tanpa blok tanda tangan L3/L4.
             'pemohonKabiro' => (int) $pengajuan->pegawai->role_id === 6,
+            // Pemohon Kasubag (L3): rantai approval hanya L4, tanpa blok "Atasan Langsung".
+            'pemohonKasubag' => (int) $pengajuan->pegawai->role_id === 4,
         ];
 
         $pdf = Pdf::loadView('pdf.surat-cuti', $data)->setPaper('A4', 'portrait');
@@ -1012,8 +1305,18 @@ class CutiController extends Controller
 
         $cuti = PengajuanCuti::findOrFail($id);
 
-        if ($cuti->pegawai_id !== $user->id || $cuti->status !== 'disetujui') {
-            return redirect()->back()->with('error', 'Aksi tidak diizinkan atau cuti tidak dapat dibatalkan.');
+        // [DIUBAH] Pemilik cuti + aturan tunggal bisaDibatalkanMandiri()
+        // (disetujui DAN belum dimulai). Aturan yang sama dipakai history()
+        // untuk menampilkan tombol, jadi tampilan & server selalu konsisten.
+        // Cuti yang sudah dimulai atau sudah lewat tidak boleh dibatalkan
+        // mandiri, supaya saldo cuti yang sudah terpakai tidak bisa
+        // dipulihkan setelah kejadian. Sesuaikan aturan di helper bila
+        // kebijakan instansi mengizinkan cuti yang sedang berjalan dipotong.
+        if ($cuti->pegawai_id !== $user->id || !$this->bisaDibatalkanMandiri($cuti)) {
+            return redirect()->back()->with(
+                'error',
+                'Cuti ini tidak dapat dibatalkan mandiri (belum disetujui, sudah dimulai, atau sudah lewat). Hubungi Admin HR bila perlu koreksi.'
+            );
         }
 
         // Saldo tidak perlu dikembalikan manual karena sisa dihitung dinamis
@@ -1023,7 +1326,12 @@ class CutiController extends Controller
         $cuti->keterangan = $cuti->keterangan . ' | Batal Mandiri: ' . $request->alasan_pembatalan;
         $cuti->save();
 
-        return redirect()->back()->with('success', 'Cuti berhasil dibatalkan dan saldo telah dikembalikan.');
+        // Pesan saldo hanya relevan untuk Cuti Tahunan (jenis lain tidak memotong saldo).
+        $pesanSukses = $cuti->jenis_cuti === 'Cuti Tahunan'
+            ? 'Cuti berhasil dibatalkan dan saldo telah dikembalikan.'
+            : 'Cuti berhasil dibatalkan.';
+
+        return redirect()->back()->with('success', $pesanSukses);
     }
 
     // 8. Karyawan Merevisi Cuti (Khusus Status Ditangguhkan)
@@ -1035,15 +1343,29 @@ class CutiController extends Controller
         $userLogin = Auth::user();
 
         if ((int) $cuti->pegawai_id !== (int) $userLogin->id) {
-            abort(403, 'Unauthorized action.');
+            abort(403, 'Anda tidak diizinkan merevisi pengajuan ini.');
         }
 
         $request->validate([
             'tanggal_mulai' => ['required', 'date', 'after_or_equal:today'],
             'tanggal_selesai' => ['required', 'date', 'after_or_equal:tanggal_mulai'],
+        ], [
+            'tanggal_mulai.required' => 'Tanggal mulai wajib diisi.',
+            'tanggal_mulai.after_or_equal' => 'Tanggal mulai tidak boleh sebelum hari ini.',
+            'tanggal_selesai.required' => 'Tanggal selesai wajib diisi.',
+            'tanggal_selesai.after_or_equal' => 'Tanggal selesai tidak boleh sebelum tanggal mulai.',
         ]);
 
-        if ($cuti->pegawai_id !== $userLogin->id || $cuti->status !== 'dibatalkan_ditangguhkan') {
+        $this->pastikanRentangWajar($request->tanggal_mulai, $request->tanggal_selesai, 'tanggal_mulai');
+
+        if (
+            (int) $cuti->pegawai_id !== (int) $userLogin->id
+            || $cuti->status !== 'dibatalkan_ditangguhkan'
+        ) {
+            return redirect()->back()->with('error', 'Cuti ini tidak dapat direvisi.');
+        }
+
+        if (!$cuti->bisaDirevisi()) {
             return redirect()->back()->with('error', 'Cuti ini tidak dapat direvisi.');
         }
 
@@ -1081,10 +1403,10 @@ class CutiController extends Controller
             ]);
         }
 
-        // ================= [BARU] VALIDASI: REVISI BENTROK DENGAN PENGAJUAN LAIN =================
-        // Pengajuan yang sedang direvisi dikecualikan ($cuti->id) supaya tidak
-        // bentrok dengan dirinya sendiri. Posisi sebelum percabangan L4, jadi
-        // jalur revisi Kepala Biro juga tercakup.
+        // ================= VALIDASI: REVISI BENTROK DENGAN PENGAJUAN LAIN =================
+        // Pengajuan yang sedang direvisi dikecualikan supaya tidak bentrok
+        // dengan dirinya sendiri. Posisi sebelum percabangan L4 juga mencakup
+        // jalur revisi Kepala Biro.
         if ($bentrok = $this->pengajuanBentrok($userLogin->id, $request->tanggal_mulai, $request->tanggal_selesai, $cuti->id)) {
             return back()->withErrors([
                 'tanggal_mulai' => $this->pesanBentrok($bentrok),
@@ -1092,26 +1414,35 @@ class CutiController extends Controller
         }
         // ================= END VALIDASI REVISI BENTROK =================
 
+        // ================= [BARU] VALIDASI: SALDO UNTUK REVISI (SEMUA ROLE) =================
+        // Sebelumnya hanya jalur Kepala Biro yang dicek saldonya, sehingga
+        // pegawai lain bisa merevisi Cuti Tahunan ke rentang yang lebih
+        // panjang dari sisa saldonya. Pengajuan yang sedang direvisi berstatus
+        // 'dibatalkan_ditangguhkan', jadi tidak ikut terhitung sebagai
+        // "menunggu" maupun "terpakai" dan saldonya sudah dikembalikan.
+        if ($cuti->jenis_cuti === 'Cuti Tahunan') {
+            $saldoInfo = $this->hitungSaldoCuti(
+                $userLogin->id,
+                Carbon::parse($request->tanggal_mulai)->year,
+                (int) ($userLogin->jatah_cuti ?? 12)
+            );
+
+            if ($jumlah_hari > $saldoInfo['sisa_cuti']) {
+                return back()->withErrors([
+                    'tanggal_mulai' => "Revisi melebihi sisa saldo. Sisa yang tersedia: {$saldoInfo['sisa_cuti']} hari.",
+                ]);
+            }
+        }
+        // ================= END VALIDASI SALDO REVISI =================
+
         $levelAwal = $this->tentukanLevelAwalCuti($userLogin);
 
-        // ================= [BARU] L4: REVISI LANGSUNG DISETUJUI =================
+        // ================= L4: REVISI LANGSUNG DISETUJUI =================
         // Kepala Biro tidak punya atasan, jadi revisi tidak masuk antrean.
+        // (Pengecekan saldo sudah dilakukan di atas untuk semua role.)
         if ((int) $userLogin->role_id === 6) {
-            if ($cuti->jenis_cuti === 'Cuti Tahunan') {
-                $saldoInfo = $this->hitungSaldoCuti(
-                    $userLogin->id,
-                    Carbon::parse($request->tanggal_mulai)->year,
-                    (int) ($userLogin->jatah_cuti ?? 12)
-                );
-
-                if ($jumlah_hari > $saldoInfo['sisa_cuti']) {
-                    return back()->withErrors([
-                        'tanggal_mulai' => "Revisi melebihi sisa saldo. Sisa yang tersedia: {$saldoInfo['sisa_cuti']} hari.",
-                    ]);
-                }
-            }
-
             DB::transaction(function () use ($cuti, $request, $jumlah_hari, $userLogin) {
+                $cuti->cutiDitangguhkan()->delete();
                 $cuti->update([
                     'tanggal_mulai' => $request->tanggal_mulai,
                     'tanggal_selesai' => $request->tanggal_selesai,
@@ -1126,29 +1457,29 @@ class CutiController extends Controller
         }
         // ================= END L4 REVISI =================
 
-        $cuti->update([
-            'tanggal_mulai' => $request->tanggal_mulai,
-            'tanggal_selesai' => $request->tanggal_selesai,
-            'jumlah_hari' => $jumlah_hari,
-            'status' => $levelAwal['status'],
-            'level_saat_ini' => $levelAwal['level'],
-            'keterangan' => $cuti->keterangan . ' | [DIREVISI]',
-        ]);
-
-        $atasanTarget = Pegawai::where('role_id', $levelAwal['target_role'])
-            ->where('kelompok_substansi', $userLogin->kelompok_substansi)
-            ->first()
-            ?? Pegawai::where('role_id', $levelAwal['target_role'])->first();
-
-        if ($atasanTarget) {
-            Notifikasi::create([
-                'pegawai_id' => $atasanTarget->id,
-                'judul'      => 'Revisi Pengajuan Cuti',
-                'pesan'      => 'Ada revisi tanggal cuti dari ' . $userLogin->nama . ' yang butuh persetujuan Anda.',
-                'tautan'     => route('atasan.approval'),
-                'is_read'    => false,
+        DB::transaction(function () use ($cuti, $request, $jumlah_hari, $levelAwal, $userLogin) {
+            $cuti->cutiDitangguhkan()->delete();
+            $cuti->update([
+                'tanggal_mulai' => $request->tanggal_mulai,
+                'tanggal_selesai' => $request->tanggal_selesai,
+                'jumlah_hari' => $jumlah_hari,
+                'status' => $levelAwal['status'],
+                'level_saat_ini' => $levelAwal['level'],
+                'keterangan' => $cuti->keterangan . ' | [DIREVISI]',
             ]);
-        }
+
+            $atasanTarget = $this->cariAtasanTujuan($userLogin, (int) $levelAwal['target_role']);
+
+            if ($atasanTarget) {
+                Notifikasi::create([
+                    'pegawai_id' => $atasanTarget->id,
+                    'judul'      => 'Revisi Pengajuan Cuti',
+                    'pesan'      => 'Ada revisi tanggal cuti dari ' . $userLogin->nama . ' yang butuh persetujuan Anda.',
+                    'tautan'     => route('atasan.approval'),
+                    'is_read'    => false,
+                ]);
+            }
+        });
 
         return redirect()->back()->with('success', 'Tanggal cuti berhasil direvisi dan diajukan ulang.');
     }

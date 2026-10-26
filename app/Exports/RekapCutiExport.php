@@ -27,19 +27,53 @@ class RekapCutiExport implements FromArray, WithHeadings, WithStyles, ShouldAuto
     }
 
 
+    // --- FUNGSI PENCEGAH FORMULA INJECTION (METODE WRAPPER OWASP) ---
+    private function sanitizeFormulaInjection(mixed $value): string
+    {
+        $value = (string) $value;
+
+
+        // Jika karakter pertama adalah simbol rumus berbahaya (=, +, -, @)
+        if (in_array(substr(ltrim($value), 0, 1), ['=', '+', '-', '@'], true)) {
+            // Trik "Safe Formula Wrapper" (Bungkus sebagai rumus pencetak teks)
+            // Ini akan mengubah input =SUM(1+1) menjadi ="=SUM(1+1)"
+            // WPS akan mengeksekusi bungkusan ini, dan hasil akhirnya di layar
+            // adalah teks "=SUM(1+1)" secara utuh, bukan angka 2!
+
+
+            // Bersihkan tanda kutip ganda di dalam teks agar tidak merusak bungkusan
+            $escapedValue = str_replace('"', '""', $value);
+
+
+            return '="' . $escapedValue . '"';
+        }
+
+
+        return $value;
+    }
+
+
     public function array(): array
     {
         return array_map(function ($row) {
             $row = array_values($row);
 
 
-            if (isset($row[2])) {
-                $row[2] = " " . trim($row[2]);
+            // 1. Sanitasi Nama Pegawai (Indeks 1)
+            if (isset($row[1])) {
+                $row[1] = $this->sanitizeFormulaInjection($row[1]);
             }
 
 
+            // 2. Format NIP atau kolom identitas lainnya
+            if (isset($row[2])) {
+                $row[2] = ' ' . trim((string) $row[2]);
+            }
+
+
+            // 3. Format nilai bulan dan total
             for ($i = 3; $i <= 15; $i++) {
-                $nilai = isset($row[$i]) ? $row[$i] : 0;
+                $nilai = $row[$i] ?? 0;
                 if (empty($nilai) || $nilai == 0) {
                     $row[$i] = '0';
                 } else {
@@ -66,7 +100,6 @@ class RekapCutiExport implements FromArray, WithHeadings, WithStyles, ShouldAuto
         $cellRange = 'A1:' . $highestColumn . $highestRow;
 
 
-        // --- 1. BORDERS & ALIGNMENT ---
         $sheet->getStyle($cellRange)->applyFromArray([
             'borders' => [
                 'allBorders' => [
@@ -80,26 +113,21 @@ class RekapCutiExport implements FromArray, WithHeadings, WithStyles, ShouldAuto
         ]);
 
 
-        // --- 2. HEADER GELAP ---
         $sheet->getStyle('A1:' . $highestColumn . '1')->applyFromArray([
             'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
             'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
             'fill' => [
                 'fillType' => Fill::FILL_SOLID,
-                'startColor' => ['argb' => 'FF1E293B'], // Biru/Abu sangat gelap
+                'startColor' => ['argb' => 'FF1E293B'],
             ],
         ]);
 
 
-        // --- 3. TEXT CENTER ---
         $sheet->getStyle('A2:A' . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
         $sheet->getStyle('D2:' . $highestColumn . $highestRow)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
 
 
-        // --- 4. WARNA SUPER KONTRAS UNTUK ISI TABEL ---
         for ($row = 2; $row <= $highestRow; $row++) {
-
-
             $kolomBulan = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'];
 
 
@@ -107,36 +135,32 @@ class RekapCutiExport implements FromArray, WithHeadings, WithStyles, ShouldAuto
                 $cellValue = $sheet->getCell($col . $row)->getValue();
 
 
-                if ((int)$cellValue > 0) {
-                    // >> JIKA ADA CUTI: BIRU SOLID TERANG, TEKS PUTIH <<
+                if ((int) $cellValue > 0) {
                     $sheet->getStyle($col . $row)->applyFromArray([
                         'fill' => [
                             'fillType' => Fill::FILL_SOLID,
-                            'startColor' => ['argb' => 'FF3B82F6'], // Biru Terang (Blue-500)
+                            'startColor' => ['argb' => 'FF3B82F6'],
                         ],
-                        'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']], // Putih
+                        'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
                     ]);
                 } else {
-                    // >> JIKA NOL (0): ABU-ABU SANGAT PUCAT, TEKS SAMAR <<
-                    // Tujuannya agar fokus mata langsung tertuju pada warna biru
                     $sheet->getStyle($col . $row)->applyFromArray([
                         'fill' => [
                             'fillType' => Fill::FILL_SOLID,
-                            'startColor' => ['argb' => 'FFF8FAFC'], // Hampir putih
+                            'startColor' => ['argb' => 'FFF8FAFC'],
                         ],
-                        'font' => ['color' => ['argb' => 'FF94A3B8']], // Teks abu-abu pudar
+                        'font' => ['color' => ['argb' => 'FF94A3B8']],
                     ]);
                 }
             }
 
 
-            // >> KOLOM TOTAL CUTI: HIJAU SOLID TERANG, TEKS PUTIH <<
             $sheet->getStyle('P' . $row)->applyFromArray([
                 'fill' => [
                     'fillType' => Fill::FILL_SOLID,
-                    'startColor' => ['argb' => 'FF22C55E'], // Hijau Terang (Green-500)
+                    'startColor' => ['argb' => 'FF22C55E'],
                 ],
-                'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']], // Putih
+                'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
             ]);
         }
     }
