@@ -5,7 +5,7 @@ use App\Http\Controllers\MonitoringCutiController;
 use App\Http\Controllers\RekapKuotaDetailController;
 use App\Http\Controllers\CutiController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\FcmTokenController; // BARU
+use App\Http\Controllers\FcmTokenController; 
 use App\Http\Controllers\LampiranController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PembatalanController;
@@ -124,8 +124,18 @@ Route::middleware(['auth', 'force.password', PreventBackHistory::class])->group(
 
     // ==========================================
     // Penangguhan cuti oleh Kepala Biro — HANYA role 6
-    // Termasuk AdminController::suspendCuti() yang mensyaratkan role 6 (L4),
-    // bukan Admin HR, sehingga ditaruh di grup ini dan bukan di grup Admin.
+    //
+    // JALUR UTAMA: atasan.penangguhan.process -> PembatalanController::process()
+    //   (dipakai halaman "Penangguhan Cuti", PembatalanCuti.vue).
+    //
+    // JALUR ADMIN: admin.cuti.tangguhkan -> AdminController::suspendCuti()
+    //   [PERBAIKAN TGH] Sekarang method itu hanya MENERUSKAN ke
+    //   PembatalanController::process(), jadi kedua route berperilaku identik
+    //   (mencatat ApprovalLog + baris CutiDitangguhkan yang memunculkan angka
+    //   TGH di Rekap Kuota Detail). Route tetap dipertahankan supaya tidak
+    //   mematahkan pemanggil lama. Kalau pencarian "admin.cuti.tangguhkan" di
+    //   resources/js tidak menemukan apa pun, route di bawah ini AMAN dihapus
+    //   (hapus juga method suspendCuti() di AdminController).
     // ==========================================
     Route::middleware('role:6')->where(['id' => '[0-9]+'])->group(function () {
         Route::get('/atasan/penangguhan-cuti', [PembatalanController::class, 'index'])->name('atasan.penangguhan');

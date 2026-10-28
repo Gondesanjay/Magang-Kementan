@@ -845,6 +845,21 @@ const estimasiDraft = computed(() =>
         : 0,
 );
 
+// [BARU] Daftar hari libur yang jatuh di dalam rentang yang sedang dipilih
+// (draft), dipakai untuk menjelaskan kenapa tanggal tertentu tidak dihitung.
+const liburDalamDraft = computed(() => {
+    if (!draftStart.value) return [];
+    const akhir = parseLocalDate(draftEnd.value || draftStart.value);
+    const hasil = [];
+    const cur = parseLocalDate(draftStart.value);
+    while (cur <= akhir) {
+        const libur = liburMap.value.get(toDateStr(cur));
+        if (libur) hasil.push(libur);
+        cur.setDate(cur.getDate() + 1);
+    }
+    return hasil;
+});
+
 const labelTombolPilihTanggal = computed(() =>
     draftStart.value
         ? `Pilih Tanggal (${formatRentang(draftStart.value, draftEnd.value || draftStart.value)})`
@@ -925,6 +940,8 @@ const cellClass = (c) => {
     return "bg-white text-slate-700 [@media(hover:hover)]:hover:bg-slate-100";
 };
 
+// [DIPERBAIKI] Template literal sebelumnya rusak (kehilangan "$" dan "{"),
+// sehingga prefix berisi teks literal dan daftar libur selalu kosong.
 const hariLiburBulanIni = computed(() => {
     const prefix = `${calendarMonth.value.getFullYear()}-${String(calendarMonth.value.getMonth() + 1).padStart(2, "0")}`;
     return [...liburMap.value.values()]
@@ -1879,7 +1896,7 @@ const submit = () => {
                                     <button
                                         type="button"
                                         :disabled="cell.isLocked"
-                                        :aria-label="`${cell.day} ${calendarLabel}${cell.libur ? ', ' + cell.libur.judul : ''}`"
+                                        :aria-label="`${cell.day}${cell.libur ? ', ' + cell.libur.judul : ''}`"
                                         :aria-pressed="cell.isStart || cell.isEnd"
                                         @click="pilihTanggal(cell)"
                                         class="relative h-9 w-9 flex items-center justify-center rounded-full text-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
@@ -1998,6 +2015,18 @@ const submit = () => {
                 </div>
 
                 <div class="px-4 py-3 border-t border-slate-100 bg-white shrink-0 rounded-b-2xl">
+                    <!-- [BARU] Keterangan kenapa tanggal terpilih tidak dihitung (libur) -->
+                    <div
+                        v-if="draftStart && liburDalamDraft.length > 0"
+                        class="mb-2 rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-[11px] text-blue-700 leading-relaxed break-words"
+                    >
+                        <span class="font-semibold">{{ liburDalamDraft.length }} tanggal tidak dihitung</span>
+                        karena libur:
+                        <span v-for="(libur, idx) in liburDalamDraft" :key="libur.tanggal">
+                            <span class="font-semibold">{{ libur.judul }}</span>
+                            ({{ formatTanggalPendek(libur.tanggal) }}, {{ libur.jenisLabel }})<span v-if="idx < liburDalamDraft.length - 1">, </span>
+                        </span>
+                    </div>
                     <p
                         v-if="draftStart && estimasiDraft === 0"
                         class="text-[11px] font-bold text-red-500 mb-2 text-center"

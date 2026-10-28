@@ -106,7 +106,9 @@ const getSisaTahunBerjalan = (pegawai) => {
 
 // ================================================================
 // Sisa ditangguhkan (Tgh) — tampil di tabel utama & modal Detail.
-// Nilainya dihitung backend dari tabel cuti_ditangguhkans.
+// Nilainya dihitung backend dari tabel cuti_ditangguhkans, KECUALI Admin HR
+// mengisi override manual (kolom saldo_cutis.koreksi_ditangguhkan); angka
+// yang dikirim backend di 'sisa_ditangguhkan_*' SUDAH memperhitungkan itu.
 // HANYA INFORMASI: saldo cuti yang ditangguhkan sudah dikembalikan, jadi
 // Tgh tidak menambah Terpakai maupun Bawaan.
 // ================================================================
@@ -123,6 +125,20 @@ const getSisaDitangguhkanN1 = (pegawai) =>
             pegawai?.sisa_ditangguhkan_2025 ??
             0,
     );
+
+// Angka Tgh murni HITUNGAN SISTEM (tanpa override Admin HR). Dipakai untuk
+// keterangan "Ikut data sistem (X hari)" di form edit.
+const getTghSistemN1 = (pegawai) =>
+    Number(pegawai?.ditangguhkan_sistem_n1 ?? 0) || 0;
+
+const getTghSistemN2 = (pegawai) =>
+    Number(pegawai?.ditangguhkan_sistem_n2 ?? 0) || 0;
+
+// Override Tgh dari Admin HR: null = ikut sistem, angka (TERMASUK 0) =
+// dipakai apa adanya. Sama seperti koreksi cuti terpakai, jangan cek dengan
+// `> 0` atau `!k`; bedakan null dan 0 lewat `=== null`.
+const getKoreksiTgh = (nilai) =>
+    nilai === null || nilai === undefined ? null : Math.max(0, Number(nilai) || 0);
 
 // Dipakai untuk v-if di modal: blok "Sisa Ditangguhkan" hanya
 // dirender kalau salah satu nilainya > 0.
@@ -324,6 +340,8 @@ const expandedRiwayatId = ref(null);
 //                                          (angka FINAL, bukan +/-)
 //   - carry_forward_normal              -> Sisa {tahun-1}
 //   - sisa_cuti_dua_tahun_lalu          -> Sisa {tahun-2}
+//   - pakai_sistem_tgh_n1 + ditangguhkan_n1 -> Ditangguhkan {tahun-1}
+//   - pakai_sistem_tgh_n2 + ditangguhkan_n2 -> Ditangguhkan {tahun-2}
 // Saldo Bawaan Eligible, Total Tersedia & Saldo Akhir dihitung otomatis.
 //
 // Saat disimpan, form ikut mengirim 'tahun' (= tahunAktif) lewat
@@ -336,16 +354,24 @@ const expandedRiwayatId = ref(null);
 // Nilai LAMA ditimpa (bukan diakumulasi): mengubah 3 -> 4 berarti
 // Terpakai = 4.
 //
-// CATATAN: 'Ditangguhkan' (Tgh) TIDAK ada di form ini. Angkanya hanya
-// ditampilkan (baca saja) dari tabel cuti_ditangguhkans, yang diisi
-// otomatis oleh alur Penangguhan Cuti. Tgh hanya informasi; saldo sudah
-// dikembalikan.
+// DITANGGUHKAN (Tgh) — pola override yang SAMA dengan koreksi terpakai:
+//   - pakai_sistem_tgh_nX = true  -> ditangguhkan_nX dikirim null (ikut
+//                                    hitungan sistem dari cuti_ditangguhkans)
+//   - pakai_sistem_tgh_nX = false -> angka di kotak dipakai apa adanya,
+//                                    TERMASUK 0
+// Tgh hanya informasi pelaporan; mengubahnya TIDAK mengubah Terpakai,
+// Bawaan, maupun Saldo Akhir (saldo sudah dikembalikan oleh alur
+// Penangguhan Cuti).
 const saldoForm = useForm({
     hak_tahun_ini: 0,
     pakai_sistem: true,
     koreksi_saldo: "",
     carry_forward_normal: 0,
     sisa_cuti_dua_tahun_lalu: 0,
+    pakai_sistem_tgh_n1: true,
+    ditangguhkan_n1: 0,
+    pakai_sistem_tgh_n2: true,
+    ditangguhkan_n2: 0,
 });
 
 const isSavingSaldo = computed(() => saldoForm.processing);
@@ -359,15 +385,22 @@ let timerPesanSukses = null;
 // saldoForm.isDirty hanya true kalau admin benar-benar mengubah isian.
 // Tanpa koreksi (null): checkbox tercentang dan kotak menampilkan angka
 // sistem. Dengan koreksi (termasuk 0): checkbox mati dan kotak berisi
-// angka koreksi.
+// angka koreksi. Aturan yang sama berlaku untuk Ditangguhkan N-1 & N-2.
 const isiSaldoFormDariPegawai = (pegawai) => {
     const koreksi = getKoreksiSaldo(pegawai);
+    const koreksiTghN1 = getKoreksiTgh(pegawai?.koreksi_ditangguhkan_n1);
+    const koreksiTghN2 = getKoreksiTgh(pegawai?.koreksi_ditangguhkan_n2);
+
     saldoForm.defaults({
         hak_tahun_ini: getSisaTahunIni(pegawai),
         pakai_sistem: koreksi === null,
         koreksi_saldo: koreksi ?? getTerpakaiSistem(pegawai),
         carry_forward_normal: getSisaTahunLalu(pegawai),
         sisa_cuti_dua_tahun_lalu: getSisaDuaTahunLalu(pegawai),
+        pakai_sistem_tgh_n1: koreksiTghN1 === null,
+        ditangguhkan_n1: koreksiTghN1 ?? getTghSistemN1(pegawai),
+        pakai_sistem_tgh_n2: koreksiTghN2 === null,
+        ditangguhkan_n2: koreksiTghN2 ?? getTghSistemN2(pegawai),
     });
     saldoForm.reset();
 };
@@ -380,6 +413,28 @@ watch(
         if (dicentang && selectedPegawai.value) {
             saldoForm.koreksi_saldo = getTerpakaiSistem(selectedPegawai.value);
             saldoForm.clearErrors("koreksi_saldo");
+        }
+    },
+);
+
+// Sama untuk Ditangguhkan N-1 dan N-2: dicentang -> kotak kembali ke angka
+// hitungan sistem.
+watch(
+    () => saldoForm.pakai_sistem_tgh_n1,
+    (dicentang) => {
+        if (dicentang && selectedPegawai.value) {
+            saldoForm.ditangguhkan_n1 = getTghSistemN1(selectedPegawai.value);
+            saldoForm.clearErrors("ditangguhkan_n1");
+        }
+    },
+);
+
+watch(
+    () => saldoForm.pakai_sistem_tgh_n2,
+    (dicentang) => {
+        if (dicentang && selectedPegawai.value) {
+            saldoForm.ditangguhkan_n2 = getTghSistemN2(selectedPegawai.value);
+            saldoForm.clearErrors("ditangguhkan_n2");
         }
     },
 );
@@ -411,6 +466,17 @@ const simpanSaldo = () => {
                 : data.koreksi_saldo === "" || data.koreksi_saldo == null
                   ? null
                   : Number(data.koreksi_saldo),
+            // Ditangguhkan N-1 & N-2: aturan yang sama dengan koreksi terpakai.
+            ditangguhkan_n1: data.pakai_sistem_tgh_n1
+                ? null
+                : data.ditangguhkan_n1 === "" || data.ditangguhkan_n1 == null
+                  ? null
+                  : Number(data.ditangguhkan_n1),
+            ditangguhkan_n2: data.pakai_sistem_tgh_n2
+                ? null
+                : data.ditangguhkan_n2 === "" || data.ditangguhkan_n2 == null
+                  ? null
+                  : Number(data.ditangguhkan_n2),
             tahun: tahunAktif.value,
         }))
         .put(route("admin.rekap-kuota.update-saldo", idAktif), {
@@ -2258,8 +2324,10 @@ watch(adaModalTerbuka, (terbuka) => {
                                          sejajar di kedua kelompok.
                                            1) Tahun berjalan : Hak, Koreksi Terpakai
                                            2) Saldo tahun lalu: Sisa N-1, Sisa N-2
-                                         'Ditangguhkan' (hanya-baca, informasi) tampil
-                                         sebagai teks oranye di bawah label Sisa N-1 / N-2,
+                                         'Ditangguhkan' (informasi, tidak memengaruhi
+                                         Saldo Akhir) tampil di bawah label Sisa N-1 /
+                                         N-2 sebagai kotak angka kecil yang bisa diedit,
+                                         lengkap dengan checkbox "Ikut data sistem",
                                          karena penangguhan hanya ada untuk tahun lalu. -->
                                     <form
                                         id="form-saldo"
@@ -2369,7 +2437,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 Saldo Tahun Lalu
                                             </div>
 
-                                            <!-- Sisa N-1 (carry forward) + Ditangguhkan N-1 (hanya-baca) -->
+                                            <!-- Sisa N-1 (carry forward) + Ditangguhkan N-1 (bisa diedit) -->
                                             <div class="grid grid-cols-[minmax(0,1fr)_5rem] sm:grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 px-3 py-2.5">
                                                 <div class="min-w-0">
                                                     <label
@@ -2378,17 +2446,56 @@ watch(adaModalTerbuka, (terbuka) => {
                                                     >
                                                         Sisa Cuti {{ tahunAktif - 1 }}
                                                     </label>
-                                                    <p
-                                                        class="mt-0.5 cursor-help text-[11px] leading-snug text-orange-600"
+
+                                                    <!-- Ditangguhkan N-1: kotak angka + checkbox
+                                                         "Ikut data sistem". Hanya informasi,
+                                                         tidak memengaruhi Saldo Akhir. -->
+                                                    <div
+                                                        class="mt-1.5 flex items-center gap-1.5 text-[11px] text-orange-700"
                                                         :title="KETERANGAN_TGH"
                                                     >
-                                                        Ditangguhkan:
-                                                        <span class="font-bold">{{
-                                                            getSisaDitangguhkanN1(
-                                                                selectedPegawai,
-                                                            )
-                                                        }}</span>
-                                                        hari
+                                                        <label
+                                                            for="input-tgh-n1"
+                                                            class="font-semibold"
+                                                            >Ditangguhkan:</label
+                                                        >
+                                                        <input
+                                                            id="input-tgh-n1"
+                                                            type="number"
+                                                            inputmode="numeric"
+                                                            step="1"
+                                                            min="0"
+                                                            max="365"
+                                                            v-model="saldoForm.ditangguhkan_n1"
+                                                            :disabled="saldoForm.pakai_sistem_tgh_n1"
+                                                            :required="!saldoForm.pakai_sistem_tgh_n1"
+                                                            class="h-9 sm:h-8 w-16 sm:w-14 rounded-md border border-orange-300 bg-white px-1 text-center text-base sm:text-sm focus:border-orange-500 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-500"
+                                                        />
+                                                        <span>hari</span>
+                                                    </div>
+                                                    <label
+                                                        class="mt-1 flex cursor-pointer select-none items-center gap-2 py-0.5 text-[11px] font-medium text-orange-800"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            v-model="saldoForm.pakai_sistem_tgh_n1"
+                                                            class="h-5 w-5 sm:h-4 sm:w-4 shrink-0 rounded border-orange-300 text-orange-600 focus:ring-orange-500"
+                                                        />
+                                                        <span
+                                                            >Ikut data sistem
+                                                            ({{
+                                                                getTghSistemN1(
+                                                                    selectedPegawai,
+                                                                )
+                                                            }}
+                                                            hari)</span
+                                                        >
+                                                    </label>
+                                                    <p
+                                                        v-if="saldoForm.errors.ditangguhkan_n1"
+                                                        class="mt-1 text-[11px] text-red-600"
+                                                    >
+                                                        {{ saldoForm.errors.ditangguhkan_n1 }}
                                                     </p>
                                                 </div>
                                                 <input
@@ -2408,7 +2515,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 </p>
                                             </div>
 
-                                            <!-- Sisa N-2 + Ditangguhkan N-2 (hanya-baca) -->
+                                            <!-- Sisa N-2 + Ditangguhkan N-2 (bisa diedit) -->
                                             <div class="grid grid-cols-[minmax(0,1fr)_5rem] sm:grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 px-3 py-2.5">
                                                 <div class="min-w-0">
                                                     <label
@@ -2417,17 +2524,54 @@ watch(adaModalTerbuka, (terbuka) => {
                                                     >
                                                         Sisa Cuti {{ tahunAktif - 2 }}
                                                     </label>
-                                                    <p
-                                                        class="mt-0.5 cursor-help text-[11px] leading-snug text-orange-600"
+
+                                                    <!-- Ditangguhkan N-2: pola sama dengan N-1 -->
+                                                    <div
+                                                        class="mt-1.5 flex items-center gap-1.5 text-[11px] text-orange-700"
                                                         :title="KETERANGAN_TGH"
                                                     >
-                                                        Ditangguhkan:
-                                                        <span class="font-bold">{{
-                                                            getSisaDitangguhkanN2(
-                                                                selectedPegawai,
-                                                            )
-                                                        }}</span>
-                                                        hari
+                                                        <label
+                                                            for="input-tgh-n2"
+                                                            class="font-semibold"
+                                                            >Ditangguhkan:</label
+                                                        >
+                                                        <input
+                                                            id="input-tgh-n2"
+                                                            type="number"
+                                                            inputmode="numeric"
+                                                            step="1"
+                                                            min="0"
+                                                            max="365"
+                                                            v-model="saldoForm.ditangguhkan_n2"
+                                                            :disabled="saldoForm.pakai_sistem_tgh_n2"
+                                                            :required="!saldoForm.pakai_sistem_tgh_n2"
+                                                            class="h-9 sm:h-8 w-16 sm:w-14 rounded-md border border-orange-300 bg-white px-1 text-center text-base sm:text-sm focus:border-orange-500 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-500"
+                                                        />
+                                                        <span>hari</span>
+                                                    </div>
+                                                    <label
+                                                        class="mt-1 flex cursor-pointer select-none items-center gap-2 py-0.5 text-[11px] font-medium text-orange-800"
+                                                    >
+                                                        <input
+                                                            type="checkbox"
+                                                            v-model="saldoForm.pakai_sistem_tgh_n2"
+                                                            class="h-5 w-5 sm:h-4 sm:w-4 shrink-0 rounded border-orange-300 text-orange-600 focus:ring-orange-500"
+                                                        />
+                                                        <span
+                                                            >Ikut data sistem
+                                                            ({{
+                                                                getTghSistemN2(
+                                                                    selectedPegawai,
+                                                                )
+                                                            }}
+                                                            hari)</span
+                                                        >
+                                                    </label>
+                                                    <p
+                                                        v-if="saldoForm.errors.ditangguhkan_n2"
+                                                        class="mt-1 text-[11px] text-red-600"
+                                                    >
+                                                        {{ saldoForm.errors.ditangguhkan_n2 }}
                                                     </p>
                                                 </div>
                                                 <input

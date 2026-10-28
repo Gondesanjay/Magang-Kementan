@@ -171,8 +171,10 @@ class RekapKuotaDetailController extends Controller
     //      disetujui / ditangguhkan di tahun itu (hindari "siluman"
     //      setelah Generate Saldo).
     //   3) Admin HR (role 5) dikecualikan.
-    //   4) Eager-load saldo tahun + tahun-1, pengajuan (+ approval opsional),
-    //      cuti ditangguhkan — mengurangi N+1.
+    //   4) Eager-load saldo tahun + tahun-1 + tahun-2, pengajuan
+    //      (+ approval opsional), cuti ditangguhkan — mengurangi N+1.
+    //      Saldo tahun-2 dimuat karena override "Ditangguhkan N-2"
+    //      (koreksi_ditangguhkan) disimpan di baris tahun-2.
     //   5) Urutan mengikuti hierarki jabatan lewat CASE WHEN di SQL.
     //   6) wilayahField/wilayahValue (opsional) dipakai jalur Atasan.
     //
@@ -191,7 +193,7 @@ class RekapKuotaDetailController extends Controller
             ->where('role_id', '!=', 5)
             ->with([
                 'saldoCuti' => function ($q) use ($tahunIni) {
-                    $q->whereIn('tahun', [$tahunIni, $tahunIni - 1]);
+                    $q->whereIn('tahun', [$tahunIni, $tahunIni - 1, $tahunIni - 2]);
                 },
                 'pengajuanCuti' => function ($q) use ($muatApprovalLogs) {
                     if ($muatApprovalLogs) {
@@ -470,6 +472,13 @@ class RekapKuotaDetailController extends Controller
     // $lama & $baru berisi kunci: hak, carry, dua_tahun_lalu, koreksi, terpakai
     // ('koreksi' bernilai int atau null; null = ikut sistem. 'terpakai' adalah
     // cuti terpakai EFEKTIF yang dilihat pegawai, dan itulah yang dibandingkan).
+    //
+    // Perubahan angka "Ditangguhkan" (Tgh) ikut dibandingkan lewat kunci
+    // OPSIONAL 'tgh_n1' dan 'tgh_n2' (angka yang DITAMPILKAN: override Admin HR
+    // bila ada, kalau tidak hitungan sistem). Hanya updateSaldo() yang
+    // mengisinya; importKuota() tidak menyentuh Tgh sehingga kuncinya tidak
+    // ada dan bagian ini dilewati. Tgh hanya informasi: pesan notifikasi
+    // menyebutkan bahwa saldo cuti tidak berubah.
     private function kirimNotifikasiPerubahanSaldo(
         Pegawai $pegawai,
         int $tahunIni,
@@ -502,6 +511,17 @@ class RekapKuotaDetailController extends Controller
 
         if ($lama['dua_tahun_lalu'] !== $baru['dua_tahun_lalu']) {
             $perubahan[] = "Sisa cuti {$tahunDuaLalu} menjadi {$baru['dua_tahun_lalu']} hari";
+        }
+
+        // Ditangguhkan (Tgh): hanya dibandingkan kalau kuncinya ada di KEDUA
+        // array (dikirim updateSaldo(), tidak oleh importKuota()).
+        foreach ([['tgh_n1', $tahunLalu], ['tgh_n2', $tahunDuaLalu]] as [$kunciTgh, $tahunAsalTgh]) {
+            if (
+                isset($lama[$kunciTgh], $baru[$kunciTgh])
+                && $lama[$kunciTgh] !== $baru[$kunciTgh]
+            ) {
+                $perubahan[] = "Cuti ditangguhkan {$tahunAsalTgh} menjadi {$baru[$kunciTgh]} hari (hanya informasi, saldo tidak berubah)";
+            }
         }
 
         // Tidak ada perubahan nyata -> jangan kirim notifikasi.
@@ -539,6 +559,14 @@ class RekapKuotaDetailController extends Controller
      *   - pakai_sistem = true  -> koreksi_saldo disimpan NULL (ikut angka sistem)
      *   - pakai_sistem = false -> koreksi_saldo WAJIB diisi (boleh 0) dan dipakai
      *                             apa adanya sebagai total cuti terpakai
+     *
+     * Angka "Ditangguhkan" (Tgh) juga bisa diedit, dengan pola override yang sama:
+     *   - pakai_sistem_tgh_n1 / ditangguhkan_n1 -> Tgh tahun (N-1)
+     *   - pakai_sistem_tgh_n2 / ditangguhkan_n2 -> Tgh tahun (N-2)
+     *   Dicentang -> koreksi_ditangguhkan = NULL (ikut hitungan sistem).
+     *   Tidak dicentang -> angka dipakai apa adanya (termasuk 0).
+     *   Disimpan di baris saldo_cutis tahun asalnya. Hanya informasi: TIDAK
+     *   memengaruhi Terpakai, Bawaan, maupun Saldo Akhir.
      *
      * Setelah tersimpan, pegawai yang bersangkutan otomatis menerima
      * notifikasi berisi ringkasan perubahan (hanya jika ada yang berubah).
@@ -584,13 +612,35 @@ class RekapKuotaDetailController extends Controller
                     }
                 },
             ],
+
+            // ---- Override "Ditangguhkan" (Tgh) N-1 & N-2 ----
+            // 'sometimes': kalau kunci tidak dikirim, nilai tersimpan tidak diubah.
+            'pakai_sistem_tgh_n1' => ['sometimes', 'boolean'],
+            'ditangguhkan_n1' => [
+                'bail',
+                Rule::requiredIf(fn() => $request->has('pakai_sistem_tgh_n1') && !$request->boolean('pakai_sistem_tgh_n1')),
+                'nullable',
+                'integer',
+                'between:0,365',
+            ],
+            'pakai_sistem_tgh_n2' => ['sometimes', 'boolean'],
+            'ditangguhkan_n2' => [
+                'bail',
+                Rule::requiredIf(fn() => $request->has('pakai_sistem_tgh_n2') && !$request->boolean('pakai_sistem_tgh_n2')),
+                'nullable',
+                'integer',
+                'between:0,365',
+            ],
         ], [
             'koreksi_saldo.required' => 'Isi angka cuti terpakai (boleh 0), atau centang "Gunakan data dari sistem".',
+            'ditangguhkan_n1.required' => 'Isi angka ditangguhkan (boleh 0), atau centang "Ikut data sistem".',
+            'ditangguhkan_n2.required' => 'Isi angka ditangguhkan (boleh 0), atau centang "Ikut data sistem".',
         ]);
 
         $pegawai = Pegawai::findOrFail($id);
         $tahunIni = $this->resolveTahun($request);
         $tahunLalu = $tahunIni - 1;
+        $tahunDuaLaluInt = $tahunIni - 2;
 
         // NULL = ikut sistem, angka (termasuk 0) = koreksi manual Admin HR.
         $koreksiSaldo = $request->boolean('pakai_sistem')
@@ -606,6 +656,32 @@ class RekapKuotaDetailController extends Controller
         $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawai->id)
             ->where('tahun', $tahunLalu)
             ->first();
+
+        $saldoDuaTahunLalu = SaldoCuti::where('pegawai_id', $pegawai->id)
+            ->where('tahun', $tahunDuaLaluInt)
+            ->first();
+
+        // Override Tgh: NULL = ikut sistem, angka = dipakai apa adanya.
+        // Kalau kunci form tidak dikirim, pertahankan nilai yang sudah tersimpan.
+        $tghN1 = $request->has('pakai_sistem_tgh_n1')
+            ? ($request->boolean('pakai_sistem_tgh_n1') ? null : (int) $data['ditangguhkan_n1'])
+            : ($saldoTahunLalu?->koreksi_ditangguhkan);
+        $tghN2 = $request->has('pakai_sistem_tgh_n2')
+            ? ($request->boolean('pakai_sistem_tgh_n2') ? null : (int) $data['ditangguhkan_n2'])
+            : ($saldoDuaTahunLalu?->koreksi_ditangguhkan);
+
+        // Angka Tgh yang DILIHAT pegawai sebelum & sesudah simpan (override Admin
+        // HR bila ada, kalau tidak hitungan sistem). Dipakai hanya untuk
+        // mendeteksi perubahan pada notifikasi. $tghLama* dihitung SEKARANG,
+        // sebelum baris saldo_cutis diperbarui di bawah.
+        $tghSistemN1 = (int) $pegawai->cutiDitangguhkan()->where('tahun_asal', $tahunLalu)->sum('jumlah_hari');
+        $tghSistemN2 = (int) $pegawai->cutiDitangguhkan()->where('tahun_asal', $tahunDuaLaluInt)->sum('jumlah_hari');
+        $tghLamaN1 = $saldoTahunLalu?->koreksi_ditangguhkan !== null
+            ? (int) $saldoTahunLalu->koreksi_ditangguhkan
+            : $tghSistemN1;
+        $tghLamaN2 = $saldoDuaTahunLalu?->koreksi_ditangguhkan !== null
+            ? (int) $saldoDuaTahunLalu->koreksi_ditangguhkan
+            : $tghSistemN2;
 
         $cutiTerpakaiMurni = $this->hitungCutiTerpakaiMurni($pegawai->id, $tahunIni);
 
@@ -623,6 +699,8 @@ class RekapKuotaDetailController extends Controller
             'dua_tahun_lalu' => (int) ($saldoTahunLalu->carry_forward_normal ?? 0),
             'koreksi'        => $koreksiLama,
             'terpakai'       => $this->hitungCutiTerpakaiEfektif($cutiTerpakaiMurni, $koreksiLama),
+            'tgh_n1'         => $tghLamaN1,
+            'tgh_n2'         => $tghLamaN2,
         ];
 
         $cutiTerpakai = $this->hitungCutiTerpakaiEfektif($cutiTerpakaiMurni, $koreksiSaldo);
@@ -633,6 +711,8 @@ class RekapKuotaDetailController extends Controller
             'dua_tahun_lalu' => (int) $data['sisa_cuti_dua_tahun_lalu'],
             'koreksi'        => $koreksiSaldo,
             'terpakai'       => $cutiTerpakai,
+            'tgh_n1'         => $tghN1 ?? $tghSistemN1,
+            'tgh_n2'         => $tghN2 ?? $tghSistemN2,
         ];
 
         SaldoCuti::updateOrCreate(
@@ -648,14 +728,35 @@ class RekapKuotaDetailController extends Controller
         // [FIX] Baris tahun lalu yang BELUM ada dibuat sebagai baris bayangan
         // (kuota_tahunan = 0), bukan 12. Kalau 12, baris itu dianggap "dompet
         // asli" oleh dompetTahunAsli() dan tahun tersebut mendadak muncul di Rekap.
+        // Baris ini juga menyimpan override "Ditangguhkan N-1".
         SaldoCuti::updateOrCreate(
             ['pegawai_id' => $pegawai->id, 'tahun' => $tahunLalu],
             [
                 'kuota_tahunan' => $saldoTahunLalu->kuota_tahunan ?? 0,
                 'carry_forward_normal' => $data['sisa_cuti_dua_tahun_lalu'],
                 'sisa' => $saldoTahunLalu->sisa ?? 0,
+                'koreksi_ditangguhkan' => $tghN1,
             ]
         );
+
+        // Override "Ditangguhkan N-2" disimpan di baris saldo_cutis tahun (N-2).
+        //   - Baris sudah ada -> hanya kolom koreksi_ditangguhkan yang diubah,
+        //     kolom lain (kuota, carry, sisa) tidak disentuh.
+        //   - Baris belum ada -> dibuat HANYA kalau ada angka manual, sebagai
+        //     baris bayangan (kuota_tahunan = 0, BUKAN default 12 milik database)
+        //     supaya tahun tersebut tidak mendadak muncul di Rekap.
+        if ($saldoDuaTahunLalu) {
+            $saldoDuaTahunLalu->update(['koreksi_ditangguhkan' => $tghN2]);
+        } elseif ($tghN2 !== null) {
+            SaldoCuti::create([
+                'pegawai_id' => $pegawai->id,
+                'tahun' => $tahunDuaLaluInt,
+                'kuota_tahunan' => 0,
+                'carry_forward_normal' => 0,
+                'sisa' => 0,
+                'koreksi_ditangguhkan' => $tghN2,
+            ]);
+        }
 
         // Kirim notifikasi ke pegawai (hanya jika ada nilai yang berubah).
         $this->kirimNotifikasiPerubahanSaldo($pegawai, $tahunIni, $lama, $baru, $cutiTerpakai);
@@ -669,6 +770,7 @@ class RekapKuotaDetailController extends Controller
     //   Sisa {tahun-1} -> carry_forward_normal tahun berjalan
     //   Hak {tahun}    -> kuota_tahunan
     // Kolom hasil hitungan diabaikan; koreksi_saldo TIDAK disentuh.
+    // koreksi_ditangguhkan juga TIDAK disentuh oleh impor.
     // Sel kosong = nilai lama dipertahankan.
     // Pencocokan memakai NIP seluruh pegawai non-Admin HR (termasuk yang sudah
     // non-aktif), supaya saldo arsip tahun-tahun lalu tetap bisa dikoreksi.
@@ -932,6 +1034,8 @@ class RekapKuotaDetailController extends Controller
                 if ($sisa2 !== null) {
                     // [FIX] Baris bayangan tahun lalu: kuota_tahunan default 0, bukan 12
                     // (lihat catatan di updateSaldo()).
+                    // koreksi_ditangguhkan sengaja TIDAK ada di daftar kolom ini,
+                    // jadi override Tgh yang sudah ada tidak hilang saat impor.
                     SaldoCuti::updateOrCreate(
                         ['pegawai_id' => $pegawai->id, 'tahun' => $tahunLalu],
                         [
@@ -1004,21 +1108,38 @@ class RekapKuotaDetailController extends Controller
         $totalCutiTersedia = $kuotaTahunan + $saldoBawaanEligible;
         $saldoAkhir = max($totalCutiTersedia - $cutiTerpakai, 0);
 
-        // Sisa ditangguhkan: dari relasi eager-load (tanpa N+1), fallback query.
-        $sisaDitangguhkanDuaTahunLalu = $pegawai->relationLoaded('cutiDitangguhkan')
+        // Sisa ditangguhkan versi SISTEM: dari relasi eager-load (tanpa N+1),
+        // fallback query.
+        $tghSistemN2 = $pegawai->relationLoaded('cutiDitangguhkan')
             ? (int) $pegawai->cutiDitangguhkan
                 ->where('tahun_asal', $tahunIni - 2)
                 ->sum('jumlah_hari')
             : (int) $pegawai->cutiDitangguhkan()
                 ->where('tahun_asal', $tahunIni - 2)
                 ->sum('jumlah_hari');
-        $sisaDitangguhkanTahunLalu = $pegawai->relationLoaded('cutiDitangguhkan')
+        $tghSistemN1 = $pegawai->relationLoaded('cutiDitangguhkan')
             ? (int) $pegawai->cutiDitangguhkan
                 ->where('tahun_asal', $tahunIni - 1)
                 ->sum('jumlah_hari')
             : (int) $pegawai->cutiDitangguhkan()
                 ->where('tahun_asal', $tahunIni - 1)
                 ->sum('jumlah_hari');
+
+        // Override Admin HR untuk Tgh. NULL = ikut sistem, angka (termasuk 0)
+        // = dipakai apa adanya. Disimpan di baris saldo_cutis tahun asalnya:
+        //   Tgh N-1 -> baris tahun (N-1) ($saldoTahunLalu)
+        //   Tgh N-2 -> baris tahun (N-2)
+        $saldoDuaTahunLaluRow = $pegawai->relationLoaded('saldoCuti')
+            ? $pegawai->saldoCuti->firstWhere('tahun', $tahunIni - 2)
+            : SaldoCuti::where('pegawai_id', $pegawai->id)->where('tahun', $tahunIni - 2)->first();
+
+        $koreksiTghN1Raw = $saldoTahunLalu?->koreksi_ditangguhkan;
+        $koreksiTghN2Raw = $saldoDuaTahunLaluRow?->koreksi_ditangguhkan;
+        $koreksiTghN1 = $koreksiTghN1Raw === null ? null : max(0, (int) $koreksiTghN1Raw);
+        $koreksiTghN2 = $koreksiTghN2Raw === null ? null : max(0, (int) $koreksiTghN2Raw);
+
+        $sisaDitangguhkanDuaTahunLalu = $koreksiTghN2 ?? $tghSistemN2;
+        $sisaDitangguhkanTahunLalu = $koreksiTghN1 ?? $tghSistemN1;
 
         $previewCarryOver = SaldoCuti::hitungPreviewCarryOver($saldoAkhir);
 
@@ -1056,9 +1177,17 @@ class RekapKuotaDetailController extends Controller
             'total_cuti_tersedia' => $totalCutiTersedia,
             'preview_carry_over' => $previewCarryOver,
 
-            // Sisa ditangguhkan
+            // Sisa ditangguhkan (angka yang DITAMPILKAN = override Admin HR
+            // bila ada, kalau tidak angka sistem)
             'sisa_ditangguhkan_dua_tahun_lalu' => $sisaDitangguhkanDuaTahunLalu,
             'sisa_ditangguhkan_tahun_lalu' => $sisaDitangguhkanTahunLalu,
+
+            // Ditangguhkan: angka murni sistem + override Admin HR (untuk form
+            // Edit Saldo di Vue). koreksi_ditangguhkan_*: null = ikut sistem.
+            'ditangguhkan_sistem_n1' => $tghSistemN1,
+            'ditangguhkan_sistem_n2' => $tghSistemN2,
+            'koreksi_ditangguhkan_n1' => $koreksiTghN1,
+            'koreksi_ditangguhkan_n2' => $koreksiTghN2,
 
             // Koreksi (untuk form Edit Saldo di Vue)
             // koreksi_saldo: null = ikut sistem, angka (termasuk 0) = koreksi manual

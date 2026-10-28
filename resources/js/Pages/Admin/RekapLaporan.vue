@@ -12,6 +12,8 @@ import {
 import { useTahunFilter } from "@/composables/useTahunFilter";
 
 
+
+
 const props = defineProps({
     laporan: {
         type: Array,
@@ -37,12 +39,16 @@ const props = defineProps({
 });
 
 
+
+
 const searchQuery = ref(props.filters.search || "");
 const filterTahun = ref(
     String(props.filters.tahun || new Date().getFullYear()),
 );
 const filterBulan = ref(props.filters.bulan ? String(props.filters.bulan) : "");
 const filterKelompok = ref(props.filters.kelompok_substansi || "");
+
+
 
 
 // ================================================================
@@ -52,6 +58,8 @@ const filterKelompok = ref(props.filters.kelompok_substansi || "");
 // di halaman lain (Rekap Kuota Detail, Monitoring Cuti, dsb).
 // ================================================================
 const daftarTahunFilter = useTahunFilter();
+
+
 
 
 const bulanList = [
@@ -84,10 +92,14 @@ const keyBulan = [
 ];
 
 
+
+
 // Nilai kelompok "-" (pegawai tanpa kelompok) ditampilkan sebagai
 // "Tanpa kelompok", sama seperti di halaman Monitoring Cuti. Nilai yang
 // dikirim ke server tetap "-", jadi filter di backend tidak berubah.
 const tampilKelompok = (nilai) => (nilai === "-" ? "Tanpa kelompok" : nilai);
+
+
 
 
 // ================================================================
@@ -97,6 +109,8 @@ const tampilKelompok = (nilai) => (nilai === "-" ? "Tanpa kelompok" : nilai);
 // ================================================================
 let lewatiWatch = false;
 let searchTimeout = null;
+
+
 
 
 const fetchFilteredData = (page = 1) => {
@@ -119,10 +133,14 @@ const fetchFilteredData = (page = 1) => {
 };
 
 
+
+
 watch([filterTahun, filterBulan, filterKelompok], () => {
     if (lewatiWatch) return;
     fetchFilteredData(1);
 });
+
+
 
 
 watch(searchQuery, () => {
@@ -132,6 +150,8 @@ watch(searchQuery, () => {
         fetchFilteredData(1);
     }, 500);
 });
+
+
 
 
 // Sinkronkan state lokal dengan props.filters (mis. saat tombol
@@ -151,6 +171,8 @@ watch(
 );
 
 
+
+
 const goToPage = (page) => {
     if (page < 1 || page > props.pagination.last_page) return;
     if (page === props.pagination.current_page) return;
@@ -158,9 +180,13 @@ const goToPage = (page) => {
 };
 
 
+
+
 const startIndex = computed(
     () => (props.pagination.current_page - 1) * props.pagination.per_page,
 );
+
+
 
 
 const pageNumbers = computed(() => {
@@ -177,6 +203,8 @@ const pageNumbers = computed(() => {
     }
     return range;
 });
+
+
 
 
 const columnsToShow = computed(() => {
@@ -198,6 +226,8 @@ const columnsToShow = computed(() => {
 });
 
 
+
+
 // Nilai cuti satu bulan untuk satu pegawai (dipakai tabel & kartu)
 const nilaiBulan = (item, key) => {
     const nilai = item.cuti?.[key];
@@ -205,11 +235,18 @@ const nilaiBulan = (item, key) => {
 };
 
 
+
+
 // ================================================================
 // PENANDA KOREKSI SALDO ADMIN HR
-// Field `total` dari backend = Cuti Terpakai EFEKTIF (ikut koreksi_saldo
-// Admin HR), sama dengan Rekap Kuota Detail. Total bisa berbeda dari
-// jumlah kolom bulan, jadi baris yang berbeda diberi tanda *.
+// Field `total` dari backend:
+//   - Filter bulan KOSONG  -> Cuti Terpakai EFEKTIF setahun (ikut
+//     koreksi_saldo Admin HR), sama dengan Rekap Kuota Detail.
+//   - Filter bulan TERISI  -> jumlah cuti pada bulan itu saja.
+// Saat "Semua Bulan", total bisa berbeda dari jumlah kolom bulan, jadi
+// baris yang berbeda diberi tanda *. Saat filter bulan aktif, total memang
+// sengaja berbeda dari jumlah 12 bulan, jadi tanda * TIDAK ditampilkan
+// (kalau tidak, semua baris yang punya cuti di bulan lain salah ditandai).
 // Perhitungan memakai SEMUA 12 bulan, tetap benar walau filter Bulan
 // hanya menampilkan satu kolom.
 // ================================================================
@@ -220,15 +257,26 @@ const totalDariBulan = (item) =>
     );
 
 
+
+
+// Pakai props.filters.bulan (bukan filterBulan.value) supaya penanda berubah
+// bersamaan dengan data dari server, bukan lebih dulu saat dropdown diklik.
 const adaKoreksi = (item) =>
+    !props.filters.bulan &&
     (Number(item.total) || 0) !== totalDariBulan(item);
+
+
 
 
 const adaItemDikoreksi = computed(() => props.laporan.some(adaKoreksi));
 
 
+
+
 const keteranganKoreksi = (item) =>
     `Angka ini telah disesuaikan secara manual oleh Admin HR (Riwayat asli: ${totalDariBulan(item)} hari).`;
+
+
 
 
 const isFilterAktif = computed(() => {
@@ -238,6 +286,8 @@ const isFilterAktif = computed(() => {
         Boolean(filterKelompok.value)
     );
 });
+
+
 
 
 // Chip filter aktif — hanya filter yang bukan nilai default
@@ -274,6 +324,8 @@ const activeFilterChips = computed(() => {
 });
 
 
+
+
 const emptyStateMessage = computed(() => {
     const bagianBulan = filterBulan.value
         ? bulanList[parseInt(filterBulan.value, 10) - 1]
@@ -291,6 +343,8 @@ const emptyStateMessage = computed(() => {
 });
 
 
+
+
 // Satu kali fetch saja: watcher dilewati selama reset.
 const resetFilters = () => {
     lewatiWatch = true;
@@ -305,6 +359,8 @@ const resetFilters = () => {
 };
 
 
+
+
 // ================================================================
 // DROPDOWN FILTER KUSTOM (Kelompok Substansi, Bulan, Tahun)
 // Di semua ukuran layar (termasuk HP) daftar pilihan muncul TEPAT di
@@ -317,9 +373,13 @@ const toolbarRef = ref(null);
 const dropdownTerbuka = ref(null); // 'kelompok' | 'bulan' | 'tahun' | null
 
 
+
+
 const toggleDropdown = (nama) => {
     dropdownTerbuka.value = dropdownTerbuka.value === nama ? null : nama;
 };
+
+
 
 
 const pilihKelompok = (nilai) => {
@@ -336,6 +396,8 @@ const pilihTahun = (nilai) => {
 };
 
 
+
+
 const labelKelompok = computed(() =>
     filterKelompok.value
         ? tampilKelompok(filterKelompok.value)
@@ -348,6 +410,8 @@ const labelBulan = computed(() =>
 );
 
 
+
+
 const tutupDropdownSaatKlikLuar = (event) => {
     if (toolbarRef.value && !toolbarRef.value.contains(event.target)) {
         dropdownTerbuka.value = null;
@@ -356,6 +420,8 @@ const tutupDropdownSaatKlikLuar = (event) => {
 const tutupDropdownSaatEsc = (event) => {
     if (event.key === "Escape") dropdownTerbuka.value = null;
 };
+
+
 
 
 onMounted(() => {
@@ -370,8 +436,12 @@ onBeforeUnmount(() => {
 </script>
 
 
+
+
 <template>
     <Head title="Rekap Laporan Cuti" />
+
+
 
 
     <MainLayout>
@@ -399,6 +469,8 @@ onBeforeUnmount(() => {
                         tahun.
                     </p>
                 </div>
+
+
 
 
                 <a
@@ -429,6 +501,8 @@ onBeforeUnmount(() => {
                     Export Excel
                 </a>
             </div>
+
+
 
 
             <!-- ===================== TOOLBAR: SEARCH + FILTER =====================
@@ -484,6 +558,8 @@ onBeforeUnmount(() => {
                 </div>
 
 
+
+
                 <!-- Filter group: dropdown KUSTOM (bukan <select> bawaan
                      browser) supaya lebar & arah buka bisa dikontrol. -->
                 <div
@@ -514,6 +590,8 @@ onBeforeUnmount(() => {
                         </div>
 
 
+
+
                         <button
                             id="filter-kelompok-laporan"
                             type="button"
@@ -527,6 +605,8 @@ onBeforeUnmount(() => {
                                 labelKelompok
                             }}</span>
                         </button>
+
+
 
 
                         <span
@@ -550,6 +630,8 @@ onBeforeUnmount(() => {
                                 ></path>
                             </svg>
                         </span>
+
+
 
 
                         <!-- Daftar pilihan: tepat di bawah kotak dan selebar kotaknya
@@ -598,6 +680,8 @@ onBeforeUnmount(() => {
                     </div>
 
 
+
+
                     <!-- Filter Bulan -->
                     <div class="relative min-w-0 lg:w-36 lg:shrink-0">
                         <button
@@ -633,6 +717,8 @@ onBeforeUnmount(() => {
                                 ></path>
                             </svg>
                         </span>
+
+
 
 
                         <ul
@@ -683,6 +769,8 @@ onBeforeUnmount(() => {
                     </div>
 
 
+
+
                     <!-- ================================================
                          FILTER TAHUN — DINAMIS
                          Opsi di-generate dari daftarTahunFilter
@@ -723,6 +811,8 @@ onBeforeUnmount(() => {
                         </span>
 
 
+
+
                         <ul
                             v-if="dropdownTerbuka === 'tahun'"
                             role="listbox"
@@ -750,6 +840,8 @@ onBeforeUnmount(() => {
                     </div>
                 </div>
             </div>
+
+
 
 
             <!-- ===================== CHIP FILTER AKTIF ===================== -->
@@ -782,6 +874,8 @@ onBeforeUnmount(() => {
                     Hapus semua
                 </button>
             </div>
+
+
 
 
             <!-- ===================== KARTU PER PEGAWAI (HP & TABLET, < 1024px) =====================
@@ -840,6 +934,8 @@ onBeforeUnmount(() => {
                         </div>
 
 
+
+
                         <div
                             class="grid gap-1.5 px-3 pb-3"
                             :class="
@@ -879,6 +975,8 @@ onBeforeUnmount(() => {
                         </div>
 
 
+
+
                         <p
                             v-if="adaKoreksi(item)"
                             class="mt-auto border-t border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800"
@@ -888,6 +986,8 @@ onBeforeUnmount(() => {
                         </p>
                     </li>
                 </ul>
+
+
 
 
                 <!-- Empty state kartu -->
@@ -938,6 +1038,8 @@ onBeforeUnmount(() => {
                     </button>
                 </div>
             </div>
+
+
 
 
             <!-- ===================== TABEL (DESKTOP, >= 1024px) =====================
@@ -1040,7 +1142,8 @@ onBeforeUnmount(() => {
                             </td>
                             <td class="px-2 py-3 text-center bg-slate-50/70">
                                 <!-- Tanda * muncul kalau total (efektif) berbeda
-                                     dari jumlah riwayat bulanan (koreksi Admin HR). -->
+                                     dari jumlah riwayat bulanan (koreksi Admin HR).
+                                     Tidak muncul saat filter Bulan aktif. -->
                                 <span
                                     class="inline-block min-w-[36px] px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md font-bold text-xs border border-emerald-300/80"
                                     :title="
@@ -1059,6 +1162,8 @@ onBeforeUnmount(() => {
                             </td>
                         </tr>
                     </tbody>
+
+
 
 
                     <tbody v-else class="bg-white">
@@ -1121,12 +1226,16 @@ onBeforeUnmount(() => {
             </div>
 
 
+
+
             <!-- Catatan kaki: hanya tampil kalau ada minimal 1 baris yang dikoreksi -->
             <p v-if="adaItemDikoreksi" class="mt-3 text-xs text-amber-700">
                 * Catatan: Angka Total Cuti bisa berbeda dari hasil
                 penjumlahan per bulan jika ada penyesuaian manual oleh Admin
                 HR.
             </p>
+
+
 
 
             <!-- ===================== PAGINASI ===================== -->
@@ -1152,6 +1261,8 @@ onBeforeUnmount(() => {
                     }}</span>
                     pegawai
                 </p>
+
+
 
 
                 <!-- Mobile: tombol besar + penanda halaman ringkas -->
@@ -1186,6 +1297,8 @@ onBeforeUnmount(() => {
                 </div>
 
 
+
+
                 <!-- Tablet & desktop: paginasi bernomor -->
                 <div
                     v-if="pagination.last_page > 1"
@@ -1199,6 +1312,8 @@ onBeforeUnmount(() => {
                     >
                         Sebelumnya
                     </button>
+
+
 
 
                     <button
@@ -1216,6 +1331,8 @@ onBeforeUnmount(() => {
                     >
 
 
+
+
                     <button
                         v-for="page in pageNumbers"
                         :key="page"
@@ -1230,6 +1347,8 @@ onBeforeUnmount(() => {
                     >
                         {{ page }}
                     </button>
+
+
 
 
                     <span
@@ -1253,6 +1372,8 @@ onBeforeUnmount(() => {
                     </button>
 
 
+
+
                     <button
                         type="button"
                         :disabled="
@@ -1268,3 +1389,4 @@ onBeforeUnmount(() => {
         </div>
     </MainLayout>
 </template>
+

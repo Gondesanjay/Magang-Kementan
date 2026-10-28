@@ -394,7 +394,9 @@ const saldoBawaanEligible = computed(() => {
     if (props.stats?.saldo_bawaan_eligible != null) {
         return Number(props.stats.saldo_bawaan_eligible) || 0;
     }
-    const normal = akumulasiPenuh.value ? 12 : Math.min(6, sisaSatuTahunLalu.value);
+    const normal = akumulasiPenuh.value
+        ? 12
+        : Math.min(6, sisaSatuTahunLalu.value);
     return Math.max(0, Math.min(normal, 24 - kuotaTahunanUtuh.value));
 });
 
@@ -428,9 +430,21 @@ const barisSaldoTahunan = computed(() => {
     }
 
     return [
-        { tahun: currentYear - 2, nilai: sisaDuaTahunLalu.value, barClass: "bg-orange-400" },
-        { tahun: currentYear - 1, nilai: sisaSatuTahunLalu.value, barClass: "bg-orange-400" },
-        { tahun: currentYear, nilai: jatahTahunIniUntukSaldo.value, barClass: "bg-emerald-400" },
+        {
+            tahun: currentYear - 2,
+            nilai: sisaDuaTahunLalu.value,
+            barClass: "bg-orange-400",
+        },
+        {
+            tahun: currentYear - 1,
+            nilai: sisaSatuTahunLalu.value,
+            barClass: "bg-orange-400",
+        },
+        {
+            tahun: currentYear,
+            nilai: jatahTahunIniUntukSaldo.value,
+            barClass: "bg-emerald-400",
+        },
     ];
 });
 
@@ -451,7 +465,7 @@ const toDateStr = (date) => {
     const yyyy = date.getFullYear();
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const dd = String(date.getDate()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}`;
+    return `yyyy-{mm}-${dd}`;
 };
 
 const toDateOnlyString = (dateValue) => toDateStr(new Date(dateValue));
@@ -784,7 +798,7 @@ const donutTooltipStyle = computed(() => {
 // ================================================================
 const normalisasiLibur = (libur) => {
     const ket = String(libur.keterangan || "");
-    
+
     // Field yang benar dari database adalah is_cuti_bersama (boolean)
     const isCutiBersama = Boolean(libur.is_cuti_bersama);
 
@@ -1232,14 +1246,24 @@ const confirmApproveCuti = () => {
 };
 
 // "processing" mencegah klik ganda pada tombol "Kirim Penolakan".
-const rejectModal = ref({ show: false, item: null, alasan: "", processing: false });
+const rejectModal = ref({
+    show: false,
+    item: null,
+    alasan: "",
+    processing: false,
+});
 const rejectError = ref(false);
 const openRejectModal = (item) => {
     rejectModal.value = { show: true, item, alasan: "", processing: false };
     rejectError.value = false;
 };
 const closeRejectModal = () => {
-    rejectModal.value = { show: false, item: null, alasan: "", processing: false };
+    rejectModal.value = {
+        show: false,
+        item: null,
+        alasan: "",
+        processing: false,
+    };
     rejectError.value = false;
 };
 const confirmRejectCuti = () => {
@@ -1609,9 +1633,7 @@ const getCatatanAtasanList = (item) => {
                 <div
                     class="absolute inset-0 bg-gradient-to-r from-emerald-950/90 via-emerald-900/55 to-transparent"
                 ></div>
-                <div
-                    class="relative max-w-2xl px-5 pt-8 pb-4 md:px-8 md:py-14"
-                >
+                <div class="relative max-w-2xl px-5 pt-8 pb-4 md:px-8 md:py-14">
                     <p
                         class="text-[10px] font-extrabold uppercase tracking-[0.2em] text-emerald-200"
                     >
@@ -1748,10 +1770,11 @@ const getCatatanAtasanList = (item) => {
                     <div
                         class="bg-white rounded-2xl border border-slate-200 shadow-sm p-3.5 md:p-5 flex flex-col md:min-h-[180px] hover:shadow-md transition-all"
                     >
+                        <!-- [DIPERBAIKI] "Jatah Cuti" diganti menjadi "Hak Cuti" -->
                         <h3
                             class="text-[10px] md:text-[11px] font-bold text-slate-800 tracking-wider uppercase leading-tight"
                         >
-                            Jatah Cuti {{ currentYear }}
+                            Hak Cuti {{ currentYear }}
                         </h3>
                         <div
                             class="flex-1 flex flex-row items-center justify-between gap-2 md:gap-3 mt-1"
@@ -1776,9 +1799,10 @@ const getCatatanAtasanList = (item) => {
                                 </p>
                             </div>
                             <div class="shrink-0">
+                                <!-- [DIPERBAIKI] alt "Jatah Cuti" diganti "Hak Cuti" -->
                                 <img
                                     src="/images/kalender-3d.png"
-                                    alt="Jatah Cuti"
+                                    alt="Hak Cuti"
                                     class="w-9 h-9 md:w-16 md:h-16 object-contain"
                                 />
                             </div>
@@ -1833,8 +1857,12 @@ const getCatatanAtasanList = (item) => {
                             class="mt-2 pt-2 border-t border-slate-100"
                         >
                             <p class="text-[10px] text-slate-400 font-medium">
-                                Menurut riwayat sistem: {{ stats.cuti_terpakai_sistem }} hari.
-                                Ada penyesuaian {{ stats.selisih_koreksi > 0 ? "+" : "" }}{{ stats.selisih_koreksi }} hari dari Admin SDM.
+                                Menurut riwayat sistem:
+                                {{ stats.cuti_terpakai_sistem }} hari. Ada
+                                penyesuaian
+                                {{ stats.selisih_koreksi > 0 ? "+" : ""
+                                }}{{ stats.selisih_koreksi }} hari dari Admin
+                                SDM.
                             </p>
                         </div>
                     </div>
@@ -1850,7 +1878,9 @@ const getCatatanAtasanList = (item) => {
                         class="bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col overflow-hidden md:min-h-[180px] cursor-pointer hover:shadow-md transition-all focus:outline-none focus:ring-2 focus:ring-orange-300"
                     >
                         <div class="p-3.5 md:p-4 pb-2 flex-1 flex flex-col">
-                            <div class="flex justify-between items-center mb-2 md:mb-3">
+                            <div
+                                class="flex justify-between items-center mb-2 md:mb-3"
+                            >
                                 <h3
                                     class="text-[10px] md:text-[11px] font-bold text-orange-500 tracking-wider uppercase"
                                 >
@@ -1910,9 +1940,10 @@ const getCatatanAtasanList = (item) => {
                         <div
                             class="bg-emerald-50/70 border-t border-emerald-100 px-3.5 md:px-4 py-2 md:py-2.5 flex justify-between items-center shrink-0"
                         >
+                            <!-- [DIPERBAIKI] "Saldo bawaan eligible" diganti menjadi "Hak bawaan eligible" -->
                             <span
                                 class="text-[10px] font-bold text-emerald-700 uppercase tracking-wide leading-tight"
-                                >Saldo<br class="hidden sm:block" />
+                                >Hak<br class="hidden sm:block" />
                                 bawaan eligible</span
                             >
                             <span class="flex items-baseline gap-1">
@@ -2272,7 +2303,9 @@ const getCatatanAtasanList = (item) => {
                                 >
                                     {{ item.pegawai?.nama ?? "-" }}
                                 </td>
-                                <td class="px-3 2xl:px-5 py-3.5 whitespace-nowrap">
+                                <td
+                                    class="px-3 2xl:px-5 py-3.5 whitespace-nowrap"
+                                >
                                     <span
                                         class="px-2.5 py-1 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-lg text-[11px] font-bold"
                                     >
@@ -2355,7 +2388,9 @@ const getCatatanAtasanList = (item) => {
                 <div
                     class="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm lg:col-span-2"
                 >
-                    <div class="flex flex-row flex-wrap items-start justify-between gap-3 mb-5">
+                    <div
+                        class="flex flex-row flex-wrap items-start justify-between gap-3 mb-5"
+                    >
                         <div class="min-w-0 flex-1">
                             <h3 class="text-sm font-extrabold text-slate-800">
                                 {{
@@ -2742,7 +2777,8 @@ const getCatatanAtasanList = (item) => {
                                 v-if="distribusiCuti.total === 0"
                                 class="text-center text-[11px] font-medium text-slate-400 mt-2"
                             >
-                                Belum ada cuti yang disetujui pada tahun {{ selectedTahun }}.
+                                Belum ada cuti yang disetujui pada tahun
+                                {{ selectedTahun }}.
                             </p>
 
                             <!-- Label bulan -->
@@ -2929,22 +2965,22 @@ const getCatatanAtasanList = (item) => {
                                         donutSegments.find(
                                             (s) => s.key === 'tahunan',
                                         ) &&
-                                            setHoveredDonutSegment(
-                                                donutSegments.find(
-                                                    (s) => s.key === 'tahunan',
-                                                ),
-                                            )
+                                        setHoveredDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'tahunan',
+                                            ),
+                                        )
                                     "
                                     @mouseleave="clearHoveredDonutSegment"
                                     @click="
                                         donutSegments.find(
                                             (s) => s.key === 'tahunan',
                                         ) &&
-                                            toggleDonutSegment(
-                                                donutSegments.find(
-                                                    (s) => s.key === 'tahunan',
-                                                ),
-                                            )
+                                        toggleDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'tahunan',
+                                            ),
+                                        )
                                     "
                                 >
                                     <span
@@ -2965,8 +3001,7 @@ const getCatatanAtasanList = (item) => {
                                     class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
                                     :class="
                                         hoveredDonutSegment &&
-                                        hoveredDonutSegment.key ===
-                                            'melahirkan'
+                                        hoveredDonutSegment.key === 'melahirkan'
                                             ? 'bg-pink-50'
                                             : ''
                                     "
@@ -2974,24 +3009,22 @@ const getCatatanAtasanList = (item) => {
                                         donutSegments.find(
                                             (s) => s.key === 'melahirkan',
                                         ) &&
-                                            setHoveredDonutSegment(
-                                                donutSegments.find(
-                                                    (s) =>
-                                                        s.key === 'melahirkan',
-                                                ),
-                                            )
+                                        setHoveredDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'melahirkan',
+                                            ),
+                                        )
                                     "
                                     @mouseleave="clearHoveredDonutSegment"
                                     @click="
                                         donutSegments.find(
                                             (s) => s.key === 'melahirkan',
                                         ) &&
-                                            toggleDonutSegment(
-                                                donutSegments.find(
-                                                    (s) =>
-                                                        s.key === 'melahirkan',
-                                                ),
-                                            )
+                                        toggleDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'melahirkan',
+                                            ),
+                                        )
                                     "
                                 >
                                     <span
@@ -3020,22 +3053,22 @@ const getCatatanAtasanList = (item) => {
                                         donutSegments.find(
                                             (s) => s.key === 'penting',
                                         ) &&
-                                            setHoveredDonutSegment(
-                                                donutSegments.find(
-                                                    (s) => s.key === 'penting',
-                                                ),
-                                            )
+                                        setHoveredDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'penting',
+                                            ),
+                                        )
                                     "
                                     @mouseleave="clearHoveredDonutSegment"
                                     @click="
                                         donutSegments.find(
                                             (s) => s.key === 'penting',
                                         ) &&
-                                            toggleDonutSegment(
-                                                donutSegments.find(
-                                                    (s) => s.key === 'penting',
-                                                ),
-                                            )
+                                        toggleDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'penting',
+                                            ),
+                                        )
                                     "
                                 >
                                     <span
@@ -3064,22 +3097,22 @@ const getCatatanAtasanList = (item) => {
                                         donutSegments.find(
                                             (s) => s.key === 'besar',
                                         ) &&
-                                            setHoveredDonutSegment(
-                                                donutSegments.find(
-                                                    (s) => s.key === 'besar',
-                                                ),
-                                            )
+                                        setHoveredDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'besar',
+                                            ),
+                                        )
                                     "
                                     @mouseleave="clearHoveredDonutSegment"
                                     @click="
                                         donutSegments.find(
                                             (s) => s.key === 'besar',
                                         ) &&
-                                            toggleDonutSegment(
-                                                donutSegments.find(
-                                                    (s) => s.key === 'besar',
-                                                ),
-                                            )
+                                        toggleDonutSegment(
+                                            donutSegments.find(
+                                                (s) => s.key === 'besar',
+                                            ),
+                                        )
                                     "
                                 >
                                     <span
@@ -3135,10 +3168,9 @@ const getCatatanAtasanList = (item) => {
                                             : 'bg-rose-50 text-rose-600 ring-rose-100'
                                     "
                                 >
-                                    <span
-                                        class="block text-base font-black"
-                                        >{{ libur.hari }}</span
-                                    >
+                                    <span class="block text-base font-black">{{
+                                        libur.hari
+                                    }}</span>
                                     <span
                                         class="mt-0.5 block text-[9px] font-extrabold tracking-wider"
                                         >{{ libur.bulan }}</span
@@ -3520,7 +3552,9 @@ const getCatatanAtasanList = (item) => {
                             <div class="col-span-4 text-slate-500 font-medium">
                                 Anak ke berapa
                             </div>
-                            <div class="col-span-8 text-slate-800 font-semibold">
+                            <div
+                                class="col-span-8 text-slate-800 font-semibold"
+                            >
                                 {{ detailModal.data.anak_ke }}
                             </div>
                         </div>
@@ -3545,8 +3579,7 @@ const getCatatanAtasanList = (item) => {
                                 >
                                     {{
                                         detailModal.data.pegawai
-                                            ?.total_cuti_tersedia ??
-                                        0
+                                            ?.total_cuti_tersedia ?? 0
                                     }}
                                     Hari Total
                                 </span>
@@ -3556,14 +3589,12 @@ const getCatatanAtasanList = (item) => {
                                     (Tahun Ini:
                                     {{
                                         detailModal.data.pegawai
-                                            ?.sisa_hak_tahun_berjalan ??
-                                        0
+                                            ?.sisa_hak_tahun_berjalan ?? 0
                                     }}
                                     hari | Saldo Bawaan:
                                     {{
                                         detailModal.data.pegawai
-                                            ?.saldo_bawaan_eligible ??
-                                        0
+                                            ?.saldo_bawaan_eligible ?? 0
                                     }}
                                     hari)
                                 </span>
@@ -3989,7 +4020,8 @@ const getCatatanAtasanList = (item) => {
                                     class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
                                 />
                                 <p class="text-[10px] text-slate-400 mt-1">
-                                    Maks. {{ MAKS_MULAI_TAHUN_KE_DEPAN }} tahun dari hari ini
+                                    Maks. {{ MAKS_MULAI_TAHUN_KE_DEPAN }} tahun
+                                    dari hari ini
                                 </p>
                             </div>
                             <div>
@@ -4008,7 +4040,8 @@ const getCatatanAtasanList = (item) => {
                                     class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
                                 />
                                 <p class="text-[10px] text-slate-400 mt-1">
-                                    Rentang maks. {{ MAKS_RENTANG_HARI }} hari kalender
+                                    Rentang maks. {{ MAKS_RENTANG_HARI }} hari
+                                    kalender
                                 </p>
                             </div>
                         </div>
@@ -4065,7 +4098,11 @@ const getCatatanAtasanList = (item) => {
                             >
                         </div>
                         <p
-                            v-if="(detailModal.data?.jenis_cuti || 'Cuti Tahunan').toLowerCase().includes('tahunan')"
+                            v-if="
+                                (detailModal.data?.jenis_cuti || 'Cuti Tahunan')
+                                    .toLowerCase()
+                                    .includes('tahunan')
+                            "
                             class="text-xs text-amber-800 bg-amber-100 border border-amber-200 rounded-lg px-3 py-2"
                         >
                             Revisi Cuti Tahunan akan memotong saldo sesuai
@@ -4143,7 +4180,9 @@ const getCatatanAtasanList = (item) => {
                         </button>
                     </div>
 
-                    <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                    <div
+                        class="flex flex-wrap items-center gap-2 w-full sm:w-auto"
+                    >
                         <button
                             type="button"
                             @click="closeDetailModal"
@@ -4649,8 +4688,9 @@ const getCatatanAtasanList = (item) => {
                             </p>
                         </div>
                         <div class="bg-emerald-50 rounded-xl p-2.5">
+                            <!-- [DIPERBAIKI] "Bawaan eligible" diseragamkan menjadi "Hak bawaan eligible" -->
                             <p class="text-[10px] font-bold text-emerald-600">
-                                Bawaan eligible
+                                Hak bawaan eligible
                             </p>
                             <p
                                 class="text-lg font-black text-emerald-700 mt-0.5"
@@ -4985,7 +5025,9 @@ const getCatatanAtasanList = (item) => {
                             <span
                                 class="text-sm font-bold text-slate-800 text-right"
                             >
-                                {{ formatDate(approveModal.item.tanggal_mulai) }}
+                                {{
+                                    formatDate(approveModal.item.tanggal_mulai)
+                                }}
                                 s/d
                                 {{
                                     formatDate(
@@ -5030,7 +5072,11 @@ const getCatatanAtasanList = (item) => {
                         :disabled="approveModal.processing"
                         class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold transition shadow-md shadow-emerald-600/30 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                        {{ approveModal.processing ? "Memproses..." : "Ya, Setujui" }}
+                        {{
+                            approveModal.processing
+                                ? "Memproses..."
+                                : "Ya, Setujui"
+                        }}
                     </button>
                 </div>
             </div>
@@ -5094,7 +5140,9 @@ const getCatatanAtasanList = (item) => {
                 </div>
 
                 <div class="p-5 space-y-4" v-if="rejectModal.item">
-                    <p class="text-sm font-medium text-slate-700 leading-relaxed">
+                    <p
+                        class="text-sm font-medium text-slate-700 leading-relaxed"
+                    >
                         Silakan berikan alasan atau catatan mengapa pengajuan
                         cuti ini ditolak. Alasan ini akan dibaca oleh pegawai
                         yang bersangkutan.
@@ -5157,9 +5205,7 @@ const getCatatanAtasanList = (item) => {
                             for="alasan-penolakan-dashboard"
                             class="block text-[11px] font-extrabold uppercase tracking-wider mb-1.5"
                             :class="
-                                rejectError
-                                    ? 'text-red-600'
-                                    : 'text-slate-500'
+                                rejectError ? 'text-red-600' : 'text-slate-500'
                             "
                         >
                             Alasan Penolakan
@@ -5216,10 +5262,15 @@ const getCatatanAtasanList = (item) => {
                         :disabled="rejectModal.processing"
                         class="px-5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold transition shadow-md shadow-red-600/30 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                        {{ rejectModal.processing ? "Mengirim..." : "Kirim Penolakan" }}
+                        {{
+                            rejectModal.processing
+                                ? "Mengirim..."
+                                : "Kirim Penolakan"
+                        }}
                     </button>
                 </div>
             </div>
         </div>
     </Teleport>
 </template>
+

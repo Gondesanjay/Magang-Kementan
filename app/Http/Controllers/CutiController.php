@@ -34,7 +34,7 @@ use Carbon\Carbon;
 // BUG: masa kerja untuk syarat Cuti Besar dihitung langsung dari kolom
 // tanggal_masuk. Kalau kolom itu kosong / placeholder (0000-00-00) / tidak
 // bisa di-parse, hasilnya 0 tahun dan opsi Cuti Besar terkunci keliru.
-// downloadPdf() juga memakai Carbon::parse(null) yang menghasilkan "sekarang",
+// downloadPdf() juga memakai Carbon::parse($null) yang menghasilkan "sekarang",
 // sehingga PDF mencetak masa kerja "0 Tahun / 0 Bulan".
 //
 // PERBAIKAN: helper tanggalMasukEfektif() dengan prioritas
@@ -195,6 +195,22 @@ use Carbon\Carbon;
 // Field privat (keterangan, alamat_cuti, no_telp, lampiran, dll.) di-hide
 // lewat makeHidden() supaya tidak bocor di response Inertia.
 //
+// ================= PERBAIKAN (FILTER TIM KERJA UNTUK L1 DI KALENDER TIM) =================
+// SEBELUMNYA: L1 (Ketua Tim Kerja, role_id 2) hanya melihat cuti anggota
+// tim_kerja-nya sendiri, tanpa dropdown filter.
+// SEKARANG: L1 diperlakukan sama seperti L2 di Kalender Tim:
+//   - Data yang dikirim mencakup SEMUA anggota kelompok_substansi milik L1
+//     (selain dirinya sendiri; cuti milik sendiri tetap digabung lewat
+//     $cutiSaya).
+//   - 'listTimKerja' dikirim (daftar tim kerja di kelompok itu) sehingga
+//     KalenderTim.vue menampilkan dropdown "Semua Tim Kerja".
+//   - Penyaringan per tim dilakukan di KalenderTim.vue (sisi klien), sama
+//     seperti L2.
+// CATATAN: ini HANYA mengubah tampilan Kalender Tim. Wewenang L1 untuk
+// approval (MonitoringCutiController::process()) dan penentuan atasan
+// (cariAtasanTujuan(), timKerjaPunyaAtasanL1()) TETAP per tim_kerja.
+// ================= END PERBAIKAN FILTER TIM KERJA L1 =================
+//
 // ================= PERBAIKAN (FILTER STATUS RIWAYAT + rute_level) =================
 // 1. FILTER STATUS di history() memakai STATUS EFEKTIF (sama dengan tabel &
 //    modal RiwayatPengajuan.vue):
@@ -343,12 +359,12 @@ class CutiController extends Controller
         $saldo = SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
         $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun - 1)->first();
 
-        $kuota            = (int) ($saldo->kuota_tahunan ?? $kuotaDefault);
-        $sisaTahunLalu    = (int) ($saldo->carry_forward_normal ?? 0);
-        $sisaDuaTahunLalu = (int) ($saldoTahunLalu->carry_forward_normal ?? 0);
+        $kuota      = (int)($saldo->kuota_tahunan ?? $kuotaDefault);
+        $sisaTahunLalu  = (int)($saldo->carry_forward_normal ?? 0);
+        $sisaDuaTahunLalu = (int)($saldoTahunLalu->carry_forward_normal ?? 0);
 
         // Ikut koreksi_saldo Admin HR (NULL = ikut sistem).
-        $terpakai = (int) SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
+        $terpakai = (int)SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
 
         $bawaanEligible = SaldoCuti::hitungBawaan(
             $sisaDuaTahunLalu,
@@ -398,8 +414,8 @@ class CutiController extends Controller
 
         $nip = preg_replace('/\D/', '', (string) $pegawai->nip);
         if (strlen($nip) === 18) {
-            $tahun = (int) substr($nip, 8, 4);
-            $bulan = (int) substr($nip, 12, 2);
+            $tahun = (int)substr($nip, 8, 4);
+            $bulan = (int)substr($nip, 12, 2);
             if ($tahun >= 1950 && $bulan >= 1 && $bulan <= 12) {
                 return Carbon::create($tahun, $bulan, 1)->startOfDay();
             }
@@ -835,7 +851,7 @@ class CutiController extends Controller
         // Cek saldo awal (cepat, pesan error langsung). Cek ulang yang kedap
         // race condition ada di dalam transaksi di bawah.
         $tahunCuti = Carbon::parse($request->tanggal_mulai)->year;
-        $kuotaDefault = (int) ($user->jatah_cuti ?? 12);
+        $kuotaDefault = (int)($user->jatah_cuti ?? 12);
 
         if ($jenisCuti === 'Cuti Tahunan') {
             // sisa = (kuota + bawaan eligible) - terpakai efektif - menunggu
@@ -872,18 +888,7 @@ class CutiController extends Controller
         $isKabiro = (int) $user->role_id === 6;
 
         try {
-            $pengajuan = DB::transaction(function () use (
-                $user,
-                $jenisCuti,
-                $request,
-                $jumlah_hari,
-                $lampiranPath,
-                $statusAwal,
-                $levelSaatIni,
-                $isKabiro,
-                $tahunCuti,
-                $kuotaDefault
-            ) {
+            $pengajuan = DB::transaction(function () use ($user, $jenisCuti, $request, $jumlah_hari, $lampiranPath, $statusAwal, $levelSaatIni, $isKabiro, $tahunCuti, $kuotaDefault) {
                 // Kunci baris pegawai: request kedua dari user yang sama
                 // (klik ganda / dua tab) harus menunggu transaksi ini selesai,
                 // lalu cek ulang bentrok DAN saldo. Tanpa ini, dua request yang
@@ -1094,6 +1099,10 @@ class CutiController extends Controller
     //   - milik sendiri: hanya status 'disetujui'
     // Query rekan mengecualikan user sendiri (`id != $user->id`); data milik
     // sendiri diambil lewat query terpisah ($cutiSaya) lalu digabung.
+    //
+    // [DIUBAH] L1 (role_id 2) kini diperlakukan SAMA seperti L2 (role_id 3):
+    // data mencakup semua anggota kelompok_substansi-nya dan 'listTimKerja'
+    // dikirim, sehingga KalenderTim.vue menampilkan dropdown "Semua Tim Kerja".
     public function teamCalendar(Request $request)
     {
         /** @var \App\Models\Pegawai $user */
@@ -1114,15 +1123,10 @@ class CutiController extends Controller
         // foto_profil disertakan supaya avatar pegawai bisa ditampilkan di modal Kalender Tim
         $pegawaiSelect = 'pegawai:id,nama,kelompok_substansi,tim_kerja,jabatan,foto_profil';
 
-        if ($user->role_id === 2) {
-            // ================= L1 (Ketua Tim Kerja) =================
-            $query = PengajuanCuti::with($pegawaiSelect)
-                ->whereHas('pegawai', function ($q) use ($user) {
-                    $q->where('tim_kerja', $user->tim_kerja)
-                        ->where('id', '!=', $user->id);
-                });
-        } elseif ($user->role_id === 3) {
-            // ================= L2 (Ketua Kelompok Substansi) =================
+        if (in_array((int) $user->role_id, [2, 3], true)) {
+            // ================= L1 (Ketua Tim Kerja) & L2 (Ketua Kelompok Substansi) =================
+            // Keduanya melihat semua anggota kelompok_substansi-nya dan bisa
+            // menyaring per Tim Kerja lewat dropdown di KalenderTim.vue.
             $query = PengajuanCuti::with($pegawaiSelect)
                 ->whereHas('pegawai', function ($q) use ($user) {
                     $q->where('kelompok_substansi', $user->kelompok_substansi)
@@ -1204,7 +1208,7 @@ class CutiController extends Controller
             'kelompok_substansi' => $user->kelompok_substansi,
             'hariLiburs' => $hariLiburs,
             'userRoleId' => $user->role_id,
-            'userTimKerja' => $user->tim_kerja, // dipakai untuk badge info L1
+            'userTimKerja' => $user->tim_kerja, // dipertahankan (sebelumnya dipakai badge info L1)
             'userPegawaiId' => $user->id,       // dipakai untuk penanda "(Anda)"
             'listTimKerja' => $listTimKerja,
             'listKelompok' => $listKelompok,
@@ -1226,11 +1230,11 @@ class CutiController extends Controller
         }
 
         // [DIUBAH] Pakai tanggal masuk efektif (cadangan TMT dari NIP). Sebelumnya
-        // Carbon::parse(null) menghasilkan "sekarang" sehingga masa kerja tercetak 0.
+        // Carbon::parse($null) menghasilkan "sekarang" sehingga masa kerja tercetak 0.
         $tanggalMasuk = $this->tanggalMasukEfektif($pengajuan->pegawai) ?? Carbon::now();
         $masaKerja = $tanggalMasuk->diff(Carbon::now())->format('%y Tahun / %m Bulan');
 
-        $tahunCuti = (int) date('Y', strtotime($pengajuan->tanggal_mulai));
+        $tahunCuti = (int)date('Y', strtotime($pengajuan->tanggal_mulai));
 
         // Sisa cuti di PDF memakai helper bersama, sehingga angkanya
         // sama dengan Dashboard & halaman admin (bawaan eligible + koreksi Admin HR).

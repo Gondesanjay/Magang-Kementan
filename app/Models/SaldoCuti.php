@@ -10,6 +10,7 @@ class SaldoCuti extends Model
 
     protected $casts = [
         'koreksi_saldo' => 'integer', // nullable: NULL tetap NULL, tidak jadi 0
+        'koreksi_ditangguhkan' => 'integer', // nullable: NULL = ikut sistem, 0 = koreksi sah
     ];
 
     /**
@@ -43,8 +44,7 @@ class SaldoCuti extends Model
         int $pegawaiId,
         int $tahun,
         ?self $saldo = null
-    ): int
-    {
+    ): int {
         $saldo ??= static::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
 
         if ($saldo && $saldo->koreksi_saldo !== null) {

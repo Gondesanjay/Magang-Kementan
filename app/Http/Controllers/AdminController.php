@@ -590,6 +590,14 @@ class AdminController extends Controller
     // [SINKRON HIERARKI] Memakai scope sesuaiHierarki() (model Pegawai), sehingga
     // Rekap Laporan & Export Excel selalu sama dengan cakupan Dashboard. Scope
     // sudah menyingkirkan akun Admin HR (role 5).
+    //
+    // [TOTAL SESUAI FILTER BULAN] Kolom `total` mengikuti filter bulan:
+    //   - Filter bulan KOSONG ("Semua Bulan") -> total = Cuti Terpakai EFEKTIF
+    //     setahun (ikut koreksi_saldo Admin HR), sama dengan Rekap Kuota Detail.
+    //   - Filter bulan TERISI -> total = jumlah cuti pada bulan itu saja.
+    //     koreksi_saldo tidak dipakai karena bersifat tahunan (tidak punya
+    //     pembagian per bulan). Export Excel ikut benar otomatis karena memakai
+    //     fungsi ini.
     private function buildLaporanData(Request $request, bool $paginate = false): array
     {
         $tahun = $request->input('tahun', date('Y'));
@@ -651,7 +659,8 @@ class AdminController extends Controller
             );
         }
 
-        $laporan = $pegawais->map(function ($pegawai) use ($tahun) {
+        // [TOTAL SESUAI FILTER BULAN] $bulanFilter ikut dibawa ke closure.
+        $laporan = $pegawais->map(function ($pegawai) use ($tahun, $bulanFilter) {
             $cutis = PengajuanCuti::where('pegawai_id', $pegawai->id)
                 ->where('jenis_cuti', 'Cuti Tahunan')
                 ->whereYear('tanggal_mulai', $tahun)
@@ -675,6 +684,14 @@ class AdminController extends Controller
             $terpakaiMurni = array_sum($rekapBulan);
             $terpakaiEfektif = $koreksiSaldo !== null ? $koreksiSaldo : $terpakaiMurni;
 
+            // [TOTAL SESUAI FILTER BULAN] Kalau filter bulan aktif, Total = cuti
+            // pada bulan itu saja. Koreksi saldo Admin HR bersifat tahunan, jadi
+            // tidak dipakai di sini.
+            $bulanDipilih = (int) $bulanFilter;
+            if ($bulanDipilih >= 1 && $bulanDipilih <= 12) {
+                $terpakaiEfektif = $rekapBulan[$this->keyBulan[$bulanDipilih - 1]];
+            }
+
             return [
                 'id' => $pegawai->id,
                 'nama' => $pegawai->nama,
@@ -684,7 +701,7 @@ class AdminController extends Controller
                 'tim_kerja' => $pegawai->tim_kerja,
                 'role_id' => $pegawai->role_id,
                 'cuti' => $rekapBulan,
-                'total' => $terpakaiEfektif, // sama dengan Cuti Terpakai Efektif di Rekap Kuota Detail
+                'total' => $terpakaiEfektif, // Semua Bulan: sama dengan Cuti Terpakai Efektif di Rekap Kuota Detail; filter bulan: cuti bulan terpilih
             ];
         })->values();
 
@@ -1795,6 +1812,8 @@ class AdminController extends Controller
 
             // [SINKRON RKD] Total per pegawai memakai nilai efektif (ikut koreksi
             // Admin HR), bukan rumus =SUM bulan, supaya sama dengan Rekap Kuota Detail.
+            // [TOTAL SESUAI FILTER BULAN] Kalau filter bulan aktif, nilai ini sudah
+            // berisi cuti bulan terpilih saja (dihitung di buildLaporanData()).
             $sheet->setCellValue("{$totalLetter}{$r}", $item['total']);
             $sheet->getStyle("{$totalLetter}{$r}")->applyFromArray([
                 'font' => ['name' => 'Arial', 'size' => 10, 'bold' => true, 'color' => ['rgb' => '173404']],
@@ -1888,74 +1907,27 @@ class AdminController extends Controller
         ]);
     }
 
-    // 6. Menangguhkan cuti yang sudah disetujui (HANYA L4 / Kepala Biro)
-    // Opsi B: hanya jika belum dimulai (tanggal_mulai > hari ini), sama seperti
-    // aturan batal mandiri pegawai. Cuti yang sudah jalan/lewat ditolak.
-    // Pengembalian kolom legacy `sisa` hanya berlaku untuk Cuti Tahunan.
+    // 6. Menangguhkan cuti (HANYA L4 / Kepala Biro)
+    //
+    // [PERBAIKAN TGH] Method ini SENGAJA hanya meneruskan ke
+    // PembatalanController::process(), supaya SATU-SATUNYA logika penangguhan
+    // ada di sana. Sebelumnya method ini mengubah status & notifikasi saja, tanpa
+    // membuat baris CutiDitangguhkan (penyebab kolom TGH di Rekap Kuota Detail
+    // tampil 0) dan tanpa ApprovalLog. Sekarang kedua jalur identik:
+    //   - status -> dibatalkan_ditangguhkan
+    //   - ApprovalLog (keputusan 'tangguh', level 5)
+    //   - CutiDitangguhkan (hanya Cuti Tahunan yang sebelumnya disetujui)
+    //   - saldo sisa dikembalikan & notifikasi ke pegawai
+    // Semua di dalam DB::transaction milik process().
     public function suspendCuti(Request $request, int $id)
     {
-        abort_unless((int) $request->user()->role_id === self::ROLE_ID_KEPALA_BIRO, 403, 'Hanya L4 yang dapat menangguhkan cuti.');
+        abort_unless(
+            (int) $request->user()->role_id === self::ROLE_ID_KEPALA_BIRO,
+            403,
+            'Hanya L4 yang dapat menangguhkan cuti.'
+        );
 
-        $request->validate([
-            'alasan' => ['required', 'string', 'max:255'],
-        ], [
-            'alasan.required' => 'Alasan penangguhan wajib diisi.',
-        ]);
-
-        $pengajuan = PengajuanCuti::findOrFail($id);
-
-        if ($pengajuan->status !== 'disetujui') {
-            return back()->with('error', 'Hanya cuti yang telah disetujui yang dapat ditangguhkan.');
-        }
-
-        // Opsi B: cuti yang sudah dimulai atau sudah lewat tidak boleh ditangguhkan.
-        if (!Carbon::parse($pengajuan->tanggal_mulai)->startOfDay()->gt(Carbon::today())) {
-            return back()->with(
-                'error',
-                'Cuti yang sudah dimulai atau sudah lewat tidak dapat ditangguhkan. Hanya cuti yang belum dimulai yang boleh ditangguhkan.'
-            );
-        }
-
-        $tahunCuti = (int) date('Y', strtotime($pengajuan->tanggal_mulai));
-        $isTahunan = strtolower(trim((string) $pengajuan->jenis_cuti)) === 'cuti tahunan';
-
-        // Kolom legacy `sisa` hanya relevan untuk Cuti Tahunan.
-        if ($isTahunan) {
-            $saldo = SaldoCuti::where('pegawai_id', $pengajuan->pegawai_id)
-                ->where('tahun', $tahunCuti)
-                ->first();
-
-            if ($saldo) {
-                $saldo->update([
-                    'sisa' => (int) $saldo->sisa + (int) $pengajuan->jumlah_hari,
-                ]);
-            }
-        }
-
-        $pengajuan->update([
-            'status' => 'dibatalkan_ditangguhkan',
-            'keterangan' => $pengajuan->keterangan
-                . ' | [DITANGGUHKAN: ' . $request->alasan . ']',
-        ]);
-
-        // Beri tahu pegawai pemilik cuti (lonceng + push lewat hook di model Notifikasi).
-        // Teks sengaja tidak memuat kata "batal"/"tolak" supaya warna badge tetap kuning.
-        Notifikasi::create([
-            'pegawai_id' => $pengajuan->pegawai_id,
-            'judul'      => 'Cuti Ditangguhkan',
-            'pesan'      => 'Cuti Anda tanggal ' . Carbon::parse($pengajuan->tanggal_mulai)->format('d/m/Y')
-                . ' ditangguhkan oleh ' . ($request->user()->nama ?? 'Kepala Biro')
-                . '. Alasan: ' . $request->alasan
-                . '. Anda dapat mengajukan revisi tanggal di Riwayat Pengajuan.',
-            'tautan'     => route('karyawan.riwayat', [], false),
-            'is_read'    => false,
-        ]);
-
-        $pesan = $isTahunan
-            ? 'Cuti berhasil ditangguhkan dan saldo telah dikembalikan.'
-            : 'Cuti berhasil ditangguhkan.';
-
-        return back()->with('success', $pesan);
+        return app(PembatalanController::class)->process($request, $id);
     }
 
     // 7. Menampilkan Halaman Kelola Hari Libur

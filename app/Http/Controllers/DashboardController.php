@@ -1,6 +1,8 @@
 <?php
 
+
 namespace App\Http\Controllers;
+
 
 use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
@@ -10,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
 use Carbon\Carbon;
+
 
 // ================= PERBAIKAN (L4 / KEPALA BIRO DISETUJUI OTOMATIS) =================
 // Semua query yang memuat relasi 'approvalLogs' memakai
@@ -40,9 +43,11 @@ class DashboardController extends Controller
     private const KOLOM_STATUS_PEGAWAI = 'status_aktif';
     private const STATUS_PENSIUN = 'Pensiun';
 
+
     // Pegawai yang harus selalu ikut terhitung sebagai anggota tim (dicocokkan
     // dengan LIKE pada kolom nama), walaupun data wilayahnya tidak cocok.
     private const ANGGOTA_TAMBAHAN_NAMA = ['SETA RUKMALASARI'];
+
 
     /**
      * SATU-SATUNYA tempat perhitungan saldo cuti untuk dashboard.
@@ -58,12 +63,15 @@ class DashboardController extends Controller
         $saldo ??= SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun)->first();
         $saldoTahunLalu = SaldoCuti::where('pegawai_id', $pegawaiId)->where('tahun', $tahun - 1)->first();
 
+
         $kuota            = (int) ($saldo->kuota_tahunan ?? 12);
         $sisaTahunLalu    = (int) ($saldo->carry_forward_normal ?? 0);
         $sisaDuaTahunLalu = (int) ($saldoTahunLalu->carry_forward_normal ?? 0);
 
+
         // Ikut koreksi_saldo Admin HR (NULL = ikut sistem).
         $terpakai = SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
+
 
         $bawaanEligible = SaldoCuti::hitungBawaan(
             $sisaDuaTahunLalu,
@@ -71,8 +79,10 @@ class DashboardController extends Controller
             $kuota
         );
 
+
         $sisaKuotaTahunIni = max($kuota - $terpakai, 0);
         $totalTersedia     = max(($kuota + $bawaanEligible) - $terpakai, 0);
+
 
         return [
             'sisa_cuti'                => $totalTersedia,
@@ -91,6 +101,7 @@ class DashboardController extends Controller
         ];
     }
 
+
     /**
      * Menempelkan info saldo cuti tahunan milik PEGAWAI PEMILIK PENGAJUAN
      * (bukan Auth::user()) ke setiap item collection, agar modal detail
@@ -102,14 +113,17 @@ class DashboardController extends Controller
     {
         static $cache = [];
 
+
         foreach ($collection as $item) {
             $pegawai = $item->pegawai ?? null;
             if (!$pegawai) {
                 continue;
             }
 
+
             if (!isset($cache[$pegawai->id])) {
                 $s = $this->hitungSaldoPegawai((int) $pegawai->id, $tahun);
+
 
                 $cache[$pegawai->id] = [
                     'kuota_tahunan'           => $s['kuota_tahunan'],
@@ -121,6 +135,7 @@ class DashboardController extends Controller
                     'total_cuti_tersedia'     => $s['total_cuti_tersedia'],
                 ];
             }
+
 
             $info = $cache[$pegawai->id];
             $pegawai->kuota_tahunan           = $info['kuota_tahunan'];
@@ -134,6 +149,7 @@ class DashboardController extends Controller
         }
     }
 
+
     /**
      * Menempelkan nama atasan L1 (Ketua Tim Kerja) & L2 (Ketua Kelompok
      * Substansi) milik PEGAWAI PEMILIK PENGAJUAN ke $item->pegawai.
@@ -146,16 +162,19 @@ class DashboardController extends Controller
         static $namaL3 = false;
         static $namaL4 = false;
 
+
         if ($namaL3 === false) {
             $namaL3 = $this->namaPejabatAktif(4) ?? 'Kasubag TU';
             $namaL4 = $this->namaPejabatAktif(6) ?? 'Kepala Biro Perencanaan';
         }
+
 
         foreach ($collection as $item) {
             $pegawai = $item->pegawai ?? null;
             if (!$pegawai) {
                 continue;
             }
+
 
             if (!isset($cache[$pegawai->id])) {
                 $cache[$pegawai->id] = [
@@ -164,12 +183,14 @@ class DashboardController extends Controller
                 ];
             }
 
+
             $pegawai->nama_l1 = $cache[$pegawai->id]['nama_l1'];
             $pegawai->nama_l2 = $cache[$pegawai->id]['nama_l2'];
             $pegawai->nama_l3 = $namaL3;
             $pegawai->nama_l4 = $namaL4;
         }
     }
+
 
     private function namaPejabatAktif(int $roleId): ?string
     {
@@ -178,6 +199,7 @@ class DashboardController extends Controller
             ->orderBy('id')
             ->value('nama');
     }
+
 
     /**
      * Query "Anggota Tim" untuk dashboard atasan/admin.
@@ -196,6 +218,7 @@ class DashboardController extends Controller
     ) {
         $kolomStatus = self::KOLOM_STATUS_PEGAWAI;
 
+
         return Pegawai::query()
             ->where(function ($q) use ($user, $wilayahField, $wilayahValue, $kelompokSubstansiFilter) {
                 $q->where(function ($scope) use ($user, $wilayahField, $wilayahValue, $kelompokSubstansiFilter) {
@@ -205,6 +228,7 @@ class DashboardController extends Controller
                         $scope->where('role_id', 1);
                     }
 
+
                     if ($wilayahField) {
                         $scope->where($wilayahField, $wilayahValue);
                     }
@@ -212,6 +236,7 @@ class DashboardController extends Controller
                         $scope->where('kelompok_substansi', $kelompokSubstansiFilter);
                     }
                 });
+
 
                 // Anggota tambahan (mis. data wilayahnya tidak cocok dengan
                 // aturan di atas). Tidak dipakai saat filter Divisi aktif.
@@ -228,11 +253,13 @@ class DashboardController extends Controller
             });
     }
 
+
     public function index(Request $request)
     {
         /** @var \App\Models\Pegawai $user */
         $user = Auth::user();
         $tahun = date('Y');
+
 
         // Tahun khusus CHART & DONUT (dipilih lewat dropdown di dashboard).
         // $tahun di atas TIDAK diubah karena dipakai kartu saldo/kuota/statistik
@@ -242,10 +269,12 @@ class DashboardController extends Controller
             $tahunChart = (int) $tahun;
         }
 
+
         // Diinisialisasi di luar if/elseif supaya bisa dipakai query chart
         // di bagian bawah (untuk role 1 nilainya tetap null).
         $wilayahField = null;
         $wilayahValue = null;
+
 
         $stats               = [];
         $recentCuti          = [];
@@ -257,17 +286,21 @@ class DashboardController extends Controller
         $chartDataBackend    = array_fill(0, 12, 0);
         $chartDataPribadi    = array_fill(0, 12, 0);
 
+
         // Filter Divisi hanya untuk role 4, 5, 6 (L3, Admin HR, L4).
         // Role 1, 2, 3 sudah punya pembatasan wilayah otomatis.
         $kelompokSubstansiFilter = in_array($user->role_id, [1, 2, 3], true)
             ? null
             : $request->query('kelompok_substansi');
 
+
         $isAdminHR = $user->role_id === 5;
+
 
         $hariLiburs = HariLibur::where('tanggal', '>=', Carbon::today()->toDateString())
             ->orderBy('tanggal', 'asc')
             ->get();
+
 
         // Relasi atasan & approver: hanya kolom yang dibutuhkan UI
         // (cegah bocor remember_token / hash password di response Inertia).
@@ -287,20 +320,25 @@ class DashboardController extends Controller
             'approvalLogs.approver:id,nama,jabatan',
         ];
 
+
         // =====================================================================
         // DASHBOARD KARYAWAN (role 1)
         // =====================================================================
         if ($user->role_id === 1) {
             $saldo = SaldoCuti::where('pegawai_id', $user->id)->where('tahun', $tahun)->first();
 
+
             $saldoStats   = $this->hitungSaldoPegawai($user->id, (int) $tahun, $saldo);
             $cutiTerpakai = $saldoStats['cuti_terpakai'];
 
+
             $cutiTerpakaiSistem = SaldoCuti::terpakaiMurni((int) $user->id, (int) $tahun);
+
 
             $adaKoreksi = $saldo
                 && $saldo->koreksi_saldo !== null
                 && (int) $saldo->koreksi_saldo !== $cutiTerpakaiSistem;
+
 
             $stats = array_merge($saldoStats, [
                 'ada_koreksi'          => $adaKoreksi,
@@ -311,13 +349,16 @@ class DashboardController extends Controller
                 'disetujui'            => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'disetujui')->count(),
             ]);
 
+
             $recentCuti = PengajuanCuti::with($withAtasanPribadi)
                 ->where('pegawai_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->take(5)
                 ->get();
 
+
             $recentCutiPribadi = $recentCuti;
+
 
             $allCutiDisetujui = PengajuanCuti::with($withAtasanPribadi)
                 ->where('pegawai_id', $user->id)
@@ -325,12 +366,15 @@ class DashboardController extends Controller
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
+
             $cutiPribadiDisetujui = $allCutiDisetujui;
+
 
             // =====================================================================
             // DASHBOARD ATASAN & ADMIN (L1, L2, L3, L4, HR)
             // =====================================================================
         } elseif (in_array($user->role_id, [2, 3, 4, 5, 6])) {
+
 
             // Granularitas wilayah:
             //   L1 (role 2) → tim_kerja
@@ -346,6 +390,7 @@ class DashboardController extends Controller
                 $wilayahValue = $user->kelompok_substansi;
             }
 
+
             $targetStatus = [
                 2 => 'menunggu_l1',
                 3 => 'menunggu_l2',
@@ -353,10 +398,12 @@ class DashboardController extends Controller
                 6 => 'menunggu_l4',
             ][$user->role_id] ?? null;
 
+
             // --- Antrean ---
             $antreanQuery = $targetStatus
                 ? PengajuanCuti::where('status', $targetStatus)
                 : PengajuanCuti::where('status', 'like', 'menunggu%');
+
 
             if ($wilayahField) {
                 $antreanQuery->whereHas('pegawai', function ($q) use ($wilayahField, $wilayahValue) {
@@ -369,6 +416,7 @@ class DashboardController extends Controller
                 });
             }
 
+
             // --- Anggota Tim ---
             // Lewat queryAnggotaTim(): membuang pegawai Pensiun dan
             // menambahkan anggota tambahan (ANGGOTA_TAMBAHAN_NAMA).
@@ -379,8 +427,10 @@ class DashboardController extends Controller
                 $kelompokSubstansiFilter
             )->get();
 
+
             // Total dihitung dari daftar yang sama, jadi pasti cocok.
             $totalAnggota = $anggotaTim->count();
+
 
             // --- Saldo Atasan (role 2,3,4,6) ---
             $saldoAtasan = null;
@@ -391,7 +441,9 @@ class DashboardController extends Controller
                 );
             }
 
+
             $saldoStats = $this->hitungSaldoPegawai($user->id, (int) $tahun, $saldoAtasan);
+
 
             $stats = array_merge($saldoStats, [
                 'total_antrean'      => $antreanQuery->count(),
@@ -412,6 +464,7 @@ class DashboardController extends Controller
                 'total_anggota_tim'  => $totalAnggota,
             ]);
 
+
             // --- Recent Cuti (tabel atasan) ---
             $recentCuti = PengajuanCuti::with($withAtasanTim)
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
@@ -431,6 +484,7 @@ class DashboardController extends Controller
                 ->take(5)
                 ->get();
 
+
             // --- Cuti Disetujui TIM (tahun berjalan) ---
             // Exclude cuti milik atasan sendiri agar tidak dobel dengan data pribadi
             $allCutiDisetujui = PengajuanCuti::with($withAtasanTim)
@@ -449,6 +503,7 @@ class DashboardController extends Controller
                 ->whereYear('tanggal_mulai', $tahun)
                 ->get();
 
+
             // --- Tim cuti hari ini ---
             $timCutiHariIni = PengajuanCuti::with($withAtasanTim)
                 ->when($wilayahField, function ($query) use ($wilayahField, $wilayahValue) {
@@ -466,6 +521,7 @@ class DashboardController extends Controller
                 ->whereDate('tanggal_selesai', '>=', Carbon::today())
                 ->get();
 
+
             // --- Data cuti Pribadi untuk Atasan (role 2,3,4,6) ---
             if (in_array($user->role_id, [2, 3, 4, 6], true)) {
                 $cutiPribadiDisetujui = PengajuanCuti::with($withAtasanPribadi)
@@ -474,6 +530,7 @@ class DashboardController extends Controller
                     ->whereYear('tanggal_mulai', $tahun)
                     ->get();
 
+
                 $recentCutiPribadi = PengajuanCuti::with($withAtasanPribadi)
                     ->where('pegawai_id', $user->id)
                     ->orderBy('created_at', 'desc')
@@ -481,6 +538,7 @@ class DashboardController extends Controller
                     ->get();
             }
         }
+
 
         // =====================================================================
         // DATA CHART & DONUT — mengikuti tahun terpilih ($tahunChart)
@@ -508,6 +566,7 @@ class DashboardController extends Controller
                 ->whereYear('tanggal_mulai', $tahunChart)
                 ->get();
 
+
             $cutiChartPribadi = in_array($user->role_id, [2, 3, 4, 6], true)
                 ? PengajuanCuti::where('pegawai_id', $user->id)
                 ->where('status', 'disetujui')
@@ -516,8 +575,10 @@ class DashboardController extends Controller
                 : collect();
         }
 
+
         $chartDataBackend = array_fill(0, 12, 0);
         $chartDataPribadi = array_fill(0, 12, 0);
+
 
         foreach ($cutiChartTim as $cuti) {
             $i = (int) date('n', strtotime($cuti->tanggal_mulai)) - 1;
@@ -532,11 +593,13 @@ class DashboardController extends Controller
             }
         }
 
+
         $listKelompokSubstansi = Pegawai::whereNotNull('kelompok_substansi')
             ->where('kelompok_substansi', '!=', '')
             ->distinct()
             ->orderBy('kelompok_substansi')
             ->pluck('kelompok_substansi');
+
 
         $this->attachSaldoInfoKePegawai($recentCuti, (int) $tahun);
         $this->attachSaldoInfoKePegawai($recentCutiPribadi, (int) $tahun);
@@ -544,10 +607,12 @@ class DashboardController extends Controller
         $this->attachSaldoInfoKePegawai($cutiPribadiDisetujui, (int) $tahun);
         $this->attachSaldoInfoKePegawai($timCutiHariIni, (int) $tahun);
 
+
         foreach ([$recentCuti, $recentCutiPribadi, $allCutiDisetujui, $cutiPribadiDisetujui, $timCutiHariIni] as $daftar) {
             if (!$daftar instanceof \Illuminate\Database\Eloquent\Collection) {
                 continue;
             }
+
 
             $daftar->loadMissing('cutiDitangguhkan');
             $daftar->each(function (PengajuanCuti $cuti) {
@@ -555,11 +620,13 @@ class DashboardController extends Controller
             });
         }
 
+
         $this->attachNamaApproverL1L2KePegawai($recentCuti);
         $this->attachNamaApproverL1L2KePegawai($recentCutiPribadi);
         $this->attachNamaApproverL1L2KePegawai($allCutiDisetujui);
         $this->attachNamaApproverL1L2KePegawai($cutiPribadiDisetujui);
         $this->attachNamaApproverL1L2KePegawai($timCutiHariIni);
+
 
         return Inertia::render('Dashboard', [
             'stats'                     => $stats,
