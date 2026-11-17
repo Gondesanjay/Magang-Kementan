@@ -44,6 +44,7 @@ class HandleInertiaRequests extends Middleware
                     'jabatan'            => $user->jabatan,
                     'kelompok_substansi' => $user->kelompok_substansi,
                     'tim_kerja'          => $user->tim_kerja,
+                    'status_kepegawaian' => $user->status_kepegawaian,
                     'alamat_domisili'    => $user->alamat_domisili,
                     'no_telepon'         => $user->no_telepon,
                 ] : null,

@@ -70,6 +70,13 @@ function debounce(fn, delay) {
 
 // ================= PROPS =================
 const props = defineProps({
+    // Antrean yang masih menunggu persetujuan. Selalu tampil, tidak
+    // ikut filter tahun, tidak dipaginasi.
+    menunggu: {
+        type: Array,
+        default: () => [],
+    },
+    // Riwayat yang sudah diproses (ikut filter tahun, dipaginasi).
     antrean: Object,
     filters: Object,
     opsi_tim_kerja: {
@@ -83,6 +90,15 @@ const props = defineProps({
     listKelompok: {
         type: Array,
         default: () => [],
+    },
+    // Filter Tahun: daftar tahun & tahun terpilih dikirim dari controller.
+    daftarTahun: {
+        type: Array,
+        default: () => [],
+    },
+    tahunDipilih: {
+        type: Number,
+        default: () => new Date().getFullYear(),
     },
 });
 
@@ -145,10 +161,12 @@ const jenisCuti = ref(props.filters?.jenis_cuti || "Semua Jenis Cuti");
 const status = ref(props.filters?.status || "");
 const kelompok = ref(props.filters?.kelompok || "");
 const timKerja = ref(props.filters?.tim_kerja || "");
+// Tahun terpilih (sudah divalidasi controller).
+const tahun = ref(props.tahunDipilih);
 
 // ================================================================
 // DROPDOWN FILTER KUSTOM
-// Mobile  : Search full → Kelompok full → Jenis | Status (2 kolom)
+// Mobile  : Search full → Kelompok full → Jenis | Status (2 kolom) → Tahun full
 // Desktop : satu baris horizontal (seperti foto)
 // ================================================================
 const dropdownTerbuka = ref(null);
@@ -165,6 +183,10 @@ const OPSI_JENIS_CUTI = [
     "Cuti Alasan Penting",
 ].map((j) => ({ value: j, label: j }));
 
+// CATATAN: opsi "Kedaluwarsa" sengaja DIHAPUS dari dropdown karena logika
+// kedaluwarsa sudah tidak dipakai lagi. Label "kedaluwarsa" di statusLabels,
+// statusLabelsSingkat, dll. SENGAJA DIPERTAHANKAN supaya data lama di database
+// tetap tampil dengan label & warna badge yang benar.
 const OPSI_STATUS = [
     { value: "", label: "Semua Status" },
     { value: "menunggu_l1", label: "Menunggu L1" },
@@ -175,7 +197,6 @@ const OPSI_STATUS = [
     { value: "ditolak", label: "Ditolak" },
     { value: "ditangguhkan", label: "Ditangguhkan" },
     { value: "dibatalkan_reguler", label: "Dibatalkan (Reguler)" },
-    { value: "kedaluwarsa", label: "Kedaluwarsa" },
 ];
 
 /** Filter wilayah (Tim Kerja / Kelompok) */
@@ -213,7 +234,7 @@ const filterWilayah = computed(() => {
     return null;
 });
 
-/** Jenis Cuti + Status */
+/** Jenis Cuti + Status + Tahun */
 const filterLain = computed(() => [
     {
         key: "jenis",
@@ -229,6 +250,16 @@ const filterLain = computed(() => [
         selected: status.value,
         options: OPSI_STATUS,
     },
+    {
+        key: "tahun",
+        id: "filter-tahun-monitoring",
+        ariaLabel: "Filter tahun riwayat cuti",
+        selected: tahun.value,
+        options: props.daftarTahun.map((t) => ({
+            value: t,
+            label: `Tahun ${t}`,
+        })),
+    },
 ]);
 
 const labelSelected = (f) => {
@@ -241,6 +272,7 @@ const pilihFilter = (key, nilai) => {
     else if (key === "kelompok") kelompok.value = nilai;
     else if (key === "jenis") jenisCuti.value = nilai;
     else if (key === "status") status.value = nilai;
+    else if (key === "tahun") tahun.value = nilai;
     dropdownTerbuka.value = null;
 };
 
@@ -260,6 +292,7 @@ const buildParams = () => {
         search: search.value,
         jenis_cuti: jenisCuti.value,
         status: status.value,
+        tahun: tahun.value,
     };
     if (filterMode.value === "l3l4" && kelompok.value)
         params.kelompok = kelompok.value;
@@ -269,7 +302,7 @@ const buildParams = () => {
 };
 
 watch(
-    [search, jenisCuti, status, kelompok, timKerja],
+    [search, jenisCuti, status, kelompok, timKerja, tahun],
     debounce(function () {
         router.get(route("atasan.approval"), buildParams(), {
             preserveState: true,
@@ -279,7 +312,39 @@ watch(
     }, 300),
 );
 
-const antreanTampil = computed(() => props.antrean?.data ?? []);
+// ================= DUA DAFTAR: MENUNGGU + RIWAYAT =================
+const menungguTampil = computed(() => props.menunggu ?? []);
+const riwayatTampil = computed(() => props.antrean?.data ?? []);
+const totalTampil = computed(
+    () => menungguTampil.value.length + riwayatTampil.value.length,
+);
+
+// Dua bagian yang dirender berurutan di tabel (desktop) dan kartu (mobile).
+const seksiTabel = computed(() => [
+    {
+        key: "menunggu",
+        judul: `Menunggu persetujuan (${menungguTampil.value.length})`,
+        keterangan: "Selalu tampil, tidak terpengaruh filter tahun.",
+        items: menungguTampil.value,
+        kosong: "Tidak ada pengajuan yang menunggu persetujuan.",
+        kelasJudul: "bg-amber-50 text-amber-800 border-amber-200",
+    },
+    {
+        key: "riwayat",
+        judul: `Riwayat diproses tahun ${props.tahunDipilih}`,
+        keterangan: "Mengikuti filter tahun.",
+        items: riwayatTampil.value,
+        kosong: `Belum ada pengajuan yang diproses pada tahun ${props.tahunDipilih}.`,
+        kelasJudul: "bg-slate-50 text-slate-700 border-slate-200",
+    },
+]);
+
+// Cari item di KEDUA daftar (dipakai modal setuju/tolak).
+const cariItem = (id) =>
+    menungguTampil.value.find((i) => i.id === id) ||
+    riwayatTampil.value.find((i) => i.id === id) ||
+    null;
+// ================= END DUA DAFTAR =================
 
 const labelFilterAktif = computed(() => {
     if (filterMode.value === "l3l4" && kelompok.value) {
@@ -309,6 +374,7 @@ const resetFilter = () => {
     status.value = "";
     kelompok.value = "";
     timKerja.value = "";
+    tahun.value = new Date().getFullYear();
 };
 
 const statusLabels = {
@@ -412,7 +478,7 @@ const processApproval = (id, action) => {
 const approveModal = ref({ show: false, id: null, item: null });
 
 const openApproveModal = (id) => {
-    const item = props.antrean?.data?.find((i) => i.id === id) || null;
+    const item = cariItem(id);
     approveModal.value = { show: true, id, item };
 };
 
@@ -440,7 +506,7 @@ const rejectModal = ref({
 const rejectTextarea = ref(null);
 
 const openRejectModal = (id) => {
-    const item = props.antrean?.data?.find((i) => i.id === id) || null;
+    const item = cariItem(id);
     rejectModal.value = {
         show: true,
         id,
@@ -534,6 +600,7 @@ const getIsiCatatanMentah = (text) => {
     const bracketRegex = /\[DITANGGUHKAN\/DIBATALKAN ATASAN:\s*(.*?)\]/i;
     const bracketMatch = text.match(bracketRegex);
     if (bracketMatch && bracketMatch[1]) return bracketMatch[1].trim();
+    // Mengambil isi di dalam tanda kurung terakhir, mis. "(Ditolak oleh X: alasan)"
     const parenRegex = /([)]+)/;
     const parenMatch = text.match(parenRegex);
     if (parenMatch && parenMatch[1]) return parenMatch[1].trim();
@@ -859,12 +926,12 @@ const riwayatDibatalkan = computed(() =>
 
             <!-- ============================================================
                  FILTER RESPONSIVE
-                 Mobile  : Search full → Kelompok full → Jenis | Status
+                 Mobile  : Search full → Kelompok full → Jenis | Status → Tahun full
                  Desktop : satu baris horizontal (seperti foto)
                  ============================================================ -->
             <div
                 @keydown.esc="dropdownTerbuka = null"
-                class="mb-5 flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center lg:gap-2.5"
+                class="mb-3 flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center lg:gap-2.5"
             >
                 <!-- 1. Search -->
                 <div
@@ -991,8 +1058,8 @@ const riwayatDibatalkan = computed(() =>
                     </ul>
                 </div>
 
-                <!-- 3. Jenis Cuti + Status
-                     Mobile  : grid 2 kolom
+                <!-- 3. Jenis Cuti + Status + Tahun
+                     Mobile  : grid 2 kolom (Tahun satu baris penuh)
                      Desktop : ikut baris flex -->
                 <div
                     class="grid grid-cols-2 gap-2 w-full lg:w-auto lg:flex lg:gap-2.5 lg:shrink-0"
@@ -1001,6 +1068,9 @@ const riwayatDibatalkan = computed(() =>
                         v-for="f in filterLain"
                         :key="f.key"
                         data-dropdown
+                        :class="
+                            f.key === 'tahun' ? 'col-span-2 lg:col-span-1' : ''
+                        "
                         class="relative w-full min-w-0 lg:w-44"
                     >
                         <div
@@ -1107,6 +1177,13 @@ const riwayatDibatalkan = computed(() =>
                 </div>
             </div>
 
+            <!-- Catatan filter tahun -->
+            <p class="mb-4 text-xs text-gray-500">
+                Pengajuan yang masih menunggu persetujuan selalu tampil di
+                bagian atas, apa pun tahunnya. Filter tahun hanya berlaku untuk
+                riwayat pengajuan yang sudah diproses di bagian bawah.
+            </p>
+
             <!-- Penanda filter aktif -->
             <div
                 v-if="kelompok || timKerja"
@@ -1132,7 +1209,7 @@ const riwayatDibatalkan = computed(() =>
                     </button>
                 </span>
                 <span class="text-gray-500"
-                    >{{ antreanTampil.length }} pengajuan pada halaman ini</span
+                    >{{ totalTampil }} pengajuan pada halaman ini</span
                 >
             </div>
 
@@ -1193,55 +1270,234 @@ const riwayatDibatalkan = computed(() =>
                             </tr>
                         </thead>
                         <tbody class="bg-white divide-y divide-gray-200">
-                            <tr
-                                v-for="item in antreanTampil"
-                                :key="item.id"
-                                class="hover:bg-gray-50"
-                            >
-                                <td class="px-3 py-3.5 align-middle">
-                                    <div
-                                        class="break-words text-sm font-medium leading-snug text-gray-900"
-                                        :title="item.pegawai.nama"
+                            <!-- Dua bagian: Menunggu persetujuan + Riwayat tahun terpilih -->
+                            <template v-for="s in seksiTabel" :key="s.key">
+                                <tr>
+                                    <td
+                                        colspan="6"
+                                        class="border-y px-3 py-2 text-xs font-bold uppercase tracking-wider"
+                                        :class="s.kelasJudul"
                                     >
-                                        {{ item.pegawai.nama }}
-                                    </div>
-                                    <div
-                                        class="mt-0.5 break-words text-xs leading-snug"
-                                        :class="
-                                            adaKelompokPegawai(item.pegawai)
-                                                ? 'text-gray-500'
-                                                : 'italic text-gray-400'
-                                        "
-                                        :title="kelompokPegawai(item.pegawai)"
-                                    >
-                                        {{ kelompokPegawai(item.pegawai) }}
-                                    </div>
-                                </td>
-                                <td class="px-3 py-3.5 align-middle">
-                                    <span
-                                        class="inline-flex max-w-full px-2.5 py-1 text-xs leading-tight font-semibold rounded-full bg-blue-200 text-blue-800 border border-blue-300"
-                                    >
-                                        {{ item.jenis_cuti }}
-                                    </span>
-                                </td>
-                                <td class="px-3 py-3.5 align-middle text-sm">
-                                    <div class="text-gray-900">
-                                        {{ formatDate(item.tanggal_mulai) }}
-                                    </div>
-                                    <div class="text-xs text-gray-500">
-                                        s/d
-                                        {{ formatDate(item.tanggal_selesai) }}
-                                    </div>
-                                </td>
-                                <td
-                                    class="px-3 py-3.5 align-middle text-sm text-gray-900 whitespace-nowrap"
+                                        {{ s.judul }}
+                                        <span
+                                            class="ml-2 font-normal normal-case tracking-normal opacity-80"
+                                            >{{ s.keterangan }}</span
+                                        >
+                                    </td>
+                                </tr>
+                                <tr
+                                    v-for="item in s.items"
+                                    :key="`${s.key}-${item.id}`"
+                                    class="hover:bg-gray-50"
                                 >
-                                    {{ getDurasi(item) }} Hari
-                                </td>
-                                <td class="px-3 py-3.5 align-middle text-sm">
+                                    <td class="px-3 py-3.5 align-middle">
+                                        <div
+                                            class="break-words text-sm font-medium leading-snug text-gray-900"
+                                            :title="item.pegawai.nama"
+                                        >
+                                            {{ item.pegawai.nama }}
+                                        </div>
+                                        <div
+                                            class="mt-0.5 break-words text-xs leading-snug"
+                                            :class="
+                                                adaKelompokPegawai(item.pegawai)
+                                                    ? 'text-gray-500'
+                                                    : 'italic text-gray-400'
+                                            "
+                                            :title="
+                                                kelompokPegawai(item.pegawai)
+                                            "
+                                        >
+                                            {{ kelompokPegawai(item.pegawai) }}
+                                        </div>
+                                    </td>
+                                    <td class="px-3 py-3.5 align-middle">
+                                        <span
+                                            class="inline-flex max-w-full px-2.5 py-1 text-xs leading-tight font-semibold rounded-full bg-blue-200 text-blue-800 border border-blue-300"
+                                        >
+                                            {{ item.jenis_cuti }}
+                                        </span>
+                                    </td>
+                                    <td
+                                        class="px-3 py-3.5 align-middle text-sm"
+                                    >
+                                        <div class="text-gray-900">
+                                            {{ formatDate(item.tanggal_mulai) }}
+                                        </div>
+                                        <div class="text-xs text-gray-500">
+                                            s/d
+                                            {{
+                                                formatDate(item.tanggal_selesai)
+                                            }}
+                                        </div>
+                                    </td>
+                                    <td
+                                        class="px-3 py-3.5 align-middle text-sm text-gray-900 whitespace-nowrap"
+                                    >
+                                        {{ getDurasi(item) }} Hari
+                                    </td>
+                                    <td
+                                        class="px-3 py-3.5 align-middle text-sm"
+                                    >
+                                        <span
+                                            :title="
+                                                getEffectiveStatusLabel(item)
+                                            "
+                                            class="inline-flex max-w-full items-center px-2.5 py-1 rounded-md text-xs leading-tight font-bold tracking-wide uppercase border cursor-default"
+                                            :class="kelasBadgeStatus(item)"
+                                        >
+                                            {{
+                                                getEffectiveStatusLabelSingkatTahap(
+                                                    item,
+                                                )
+                                            }}
+                                        </span>
+                                    </td>
+                                    <td
+                                        class="px-3 py-3.5 align-middle text-center text-sm font-medium"
+                                    >
+                                        <div
+                                            class="flex flex-nowrap items-center justify-center gap-1.5"
+                                        >
+                                            <button
+                                                type="button"
+                                                @click="bukaDetailModal(item)"
+                                                title="Lihat Detail Pengajuan"
+                                                aria-label="Lihat detail pengajuan"
+                                                class="shrink-0 inline-flex items-center justify-center p-1.5 bg-white border border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50 hover:text-blue-600 transition-colors shadow-sm cursor-pointer"
+                                            >
+                                                <svg
+                                                    class="w-5 h-5"
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                    aria-hidden="true"
+                                                >
+                                                    <path
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                                    />
+                                                    <path
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                                    />
+                                                </svg>
+                                            </button>
+                                            <template v-if="!isReadOnly">
+                                                <button
+                                                    type="button"
+                                                    @click="
+                                                        processApproval(
+                                                            item.id,
+                                                            'approve',
+                                                        )
+                                                    "
+                                                    :disabled="
+                                                        !canApprove(item)
+                                                    "
+                                                    :class="[
+                                                        'shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
+                                                        canApprove(item)
+                                                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                                                            : 'bg-slate-200 text-slate-400 cursor-not-allowed',
+                                                    ]"
+                                                >
+                                                    SETUJUI
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    @click="
+                                                        processApproval(
+                                                            item.id,
+                                                            'reject',
+                                                        )
+                                                    "
+                                                    :disabled="
+                                                        !canApprove(item)
+                                                    "
+                                                    :class="[
+                                                        'shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
+                                                        canApprove(item)
+                                                            ? 'bg-red-600 hover:bg-red-700 text-white cursor-pointer'
+                                                            : 'bg-slate-200 text-slate-400 cursor-not-allowed',
+                                                    ]"
+                                                >
+                                                    TOLAK
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </td>
+                                </tr>
+                                <tr v-if="s.items.length === 0">
+                                    <td
+                                        colspan="6"
+                                        class="px-4 py-6 text-center text-sm text-gray-500"
+                                    >
+                                        {{ s.kosong }}
+                                        <button
+                                            v-if="adaFilterAktif"
+                                            type="button"
+                                            @click="resetFilter"
+                                            class="ml-1 text-green-700 font-semibold hover:underline cursor-pointer"
+                                        >
+                                            Reset filter
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- ================= KARTU (di bawah lg) ================= -->
+                <div class="lg:hidden">
+                    <div
+                        v-for="s in seksiTabel"
+                        :key="s.key"
+                        class="mb-5 last:mb-0"
+                    >
+                        <div
+                            class="mb-2 rounded-lg border px-3 py-2 text-xs font-bold uppercase tracking-wider"
+                            :class="s.kelasJudul"
+                        >
+                            {{ s.judul }}
+                            <span
+                                class="block font-normal normal-case tracking-normal opacity-80"
+                                >{{ s.keterangan }}</span
+                            >
+                        </div>
+                        <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <article
+                                v-for="item in s.items"
+                                :key="`${s.key}-${item.id}`"
+                                class="flex min-w-0 flex-col rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                            >
+                                <div
+                                    class="flex items-start justify-between gap-3"
+                                >
+                                    <div class="min-w-0">
+                                        <h3
+                                            class="break-words text-sm font-semibold text-gray-900"
+                                        >
+                                            {{ item.pegawai.nama }}
+                                        </h3>
+                                        <p
+                                            class="mt-1 break-words text-xs"
+                                            :class="
+                                                adaKelompokPegawai(item.pegawai)
+                                                    ? 'text-gray-500'
+                                                    : 'italic text-gray-400'
+                                            "
+                                        >
+                                            {{ kelompokPegawai(item.pegawai) }}
+                                        </p>
+                                    </div>
                                     <span
-                                        :title="getEffectiveStatusLabel(item)"
-                                        class="inline-flex max-w-full items-center px-2.5 py-1 rounded-md text-xs leading-tight font-bold tracking-wide uppercase border cursor-default"
+                                        class="shrink-0 rounded-md border px-2 py-1 text-xs font-bold"
                                         :class="kelasBadgeStatus(item)"
                                     >
                                         {{
@@ -1250,234 +1506,114 @@ const riwayatDibatalkan = computed(() =>
                                             )
                                         }}
                                     </span>
-                                </td>
-                                <td
-                                    class="px-3 py-3.5 align-middle text-center text-sm font-medium"
+                                </div>
+                                <dl class="mt-3 space-y-2 text-sm">
+                                    <div class="flex justify-between gap-3">
+                                        <dt class="shrink-0 text-gray-500">
+                                            Jenis cuti
+                                        </dt>
+                                        <dd
+                                            class="min-w-0 break-words text-right font-medium text-gray-800"
+                                        >
+                                            {{ item.jenis_cuti }}
+                                        </dd>
+                                    </div>
+                                    <div class="flex justify-between gap-3">
+                                        <dt class="shrink-0 text-gray-500">
+                                            Tanggal
+                                        </dt>
+                                        <dd
+                                            class="min-w-0 break-words text-right text-gray-800"
+                                        >
+                                            {{ formatDate(item.tanggal_mulai) }}
+                                            s/d
+                                            {{
+                                                formatDate(item.tanggal_selesai)
+                                            }}
+                                        </dd>
+                                    </div>
+                                    <div class="flex justify-between gap-3">
+                                        <dt class="shrink-0 text-gray-500">
+                                            Durasi
+                                        </dt>
+                                        <dd class="font-medium text-gray-800">
+                                            {{ getDurasi(item) }} hari
+                                        </dd>
+                                    </div>
+                                </dl>
+                                <div
+                                    class="mt-auto grid gap-2 pt-4"
+                                    :class="
+                                        isReadOnly
+                                            ? 'grid-cols-1'
+                                            : 'grid-cols-3'
+                                    "
                                 >
-                                    <div
-                                        class="flex flex-nowrap items-center justify-center gap-1.5"
+                                    <button
+                                        type="button"
+                                        @click="bukaDetailModal(item)"
+                                        class="min-h-[44px] rounded-lg border border-gray-300 bg-white px-2 py-2 text-sm font-semibold text-gray-700 cursor-pointer"
                                     >
+                                        Detail
+                                    </button>
+                                    <template v-if="!isReadOnly">
                                         <button
                                             type="button"
-                                            @click="bukaDetailModal(item)"
-                                            title="Lihat Detail Pengajuan"
-                                            aria-label="Lihat detail pengajuan"
-                                            class="shrink-0 inline-flex items-center justify-center p-1.5 bg-white border border-gray-300 rounded-lg text-gray-500 hover:bg-gray-50 hover:text-blue-600 transition-colors shadow-sm cursor-pointer"
+                                            @click="
+                                                processApproval(
+                                                    item.id,
+                                                    'approve',
+                                                )
+                                            "
+                                            :disabled="!canApprove(item)"
+                                            class="min-h-[44px] rounded-lg bg-emerald-600 px-2 py-2 text-sm font-bold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                                         >
-                                            <svg
-                                                class="w-5 h-5"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                viewBox="0 0 24 24"
-                                                aria-hidden="true"
-                                            >
-                                                <path
-                                                    stroke-linecap="round"
-                                                    stroke-linejoin="round"
-                                                    stroke-width="2"
-                                                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                                                />
-                                                <path
-                                                    stroke-linecap="round"
-                                                    stroke-linejoin="round"
-                                                    stroke-width="2"
-                                                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                                                />
-                                            </svg>
+                                            Setujui
                                         </button>
-                                        <template v-if="!isReadOnly">
-                                            <button
-                                                type="button"
-                                                @click="
-                                                    processApproval(
-                                                        item.id,
-                                                        'approve',
-                                                    )
-                                                "
-                                                :disabled="!canApprove(item)"
-                                                :class="[
-                                                    'shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
-                                                    canApprove(item)
-                                                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
-                                                        : 'bg-slate-200 text-slate-400 cursor-not-allowed',
-                                                ]"
-                                            >
-                                                SETUJUI
-                                            </button>
-                                            <button
-                                                type="button"
-                                                @click="
-                                                    processApproval(
-                                                        item.id,
-                                                        'reject',
-                                                    )
-                                                "
-                                                :disabled="!canApprove(item)"
-                                                :class="[
-                                                    'shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm',
-                                                    canApprove(item)
-                                                        ? 'bg-red-600 hover:bg-red-700 text-white cursor-pointer'
-                                                        : 'bg-slate-200 text-slate-400 cursor-not-allowed',
-                                                ]"
-                                            >
-                                                TOLAK
-                                            </button>
-                                        </template>
-                                    </div>
-                                </td>
-                            </tr>
-                            <tr v-if="antreanTampil.length === 0">
-                                <td
-                                    colspan="6"
-                                    class="px-4 py-8 text-center text-gray-500"
-                                >
-                                    Saat ini tidak ada antrean pengajuan cuti
-                                    yang memerlukan persetujuan Anda.
-                                    <button
-                                        v-if="adaFilterAktif"
-                                        type="button"
-                                        @click="resetFilter"
-                                        class="ml-1 text-green-700 font-semibold hover:underline cursor-pointer"
-                                    >
-                                        Reset filter
-                                    </button>
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <!-- ================= KARTU (di bawah lg) ================= -->
-                <div class="lg:hidden">
-                    <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-                        <article
-                            v-for="item in antreanTampil"
-                            :key="item.id"
-                            class="flex min-w-0 flex-col rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                                        <button
+                                            type="button"
+                                            @click="
+                                                processApproval(
+                                                    item.id,
+                                                    'reject',
+                                                )
+                                            "
+                                            :disabled="!canApprove(item)"
+                                            class="min-h-[44px] rounded-lg bg-red-600 px-2 py-2 text-sm font-bold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                                        >
+                                            Tolak
+                                        </button>
+                                    </template>
+                                </div>
+                            </article>
+                        </div>
+                        <div
+                            v-if="s.items.length === 0"
+                            class="rounded-xl border border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-500"
                         >
-                            <div class="flex items-start justify-between gap-3">
-                                <div class="min-w-0">
-                                    <h3
-                                        class="break-words text-sm font-semibold text-gray-900"
-                                    >
-                                        {{ item.pegawai.nama }}
-                                    </h3>
-                                    <p
-                                        class="mt-1 break-words text-xs"
-                                        :class="
-                                            adaKelompokPegawai(item.pegawai)
-                                                ? 'text-gray-500'
-                                                : 'italic text-gray-400'
-                                        "
-                                    >
-                                        {{ kelompokPegawai(item.pegawai) }}
-                                    </p>
-                                </div>
-                                <span
-                                    class="shrink-0 rounded-md border px-2 py-1 text-xs font-bold"
-                                    :class="kelasBadgeStatus(item)"
-                                >
-                                    {{
-                                        getEffectiveStatusLabelSingkatTahap(
-                                            item,
-                                        )
-                                    }}
-                                </span>
-                            </div>
-                            <dl class="mt-3 space-y-2 text-sm">
-                                <div class="flex justify-between gap-3">
-                                    <dt class="shrink-0 text-gray-500">
-                                        Jenis cuti
-                                    </dt>
-                                    <dd
-                                        class="min-w-0 break-words text-right font-medium text-gray-800"
-                                    >
-                                        {{ item.jenis_cuti }}
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-3">
-                                    <dt class="shrink-0 text-gray-500">
-                                        Tanggal
-                                    </dt>
-                                    <dd
-                                        class="min-w-0 break-words text-right text-gray-800"
-                                    >
-                                        {{ formatDate(item.tanggal_mulai) }} s/d
-                                        {{ formatDate(item.tanggal_selesai) }}
-                                    </dd>
-                                </div>
-                                <div class="flex justify-between gap-3">
-                                    <dt class="shrink-0 text-gray-500">
-                                        Durasi
-                                    </dt>
-                                    <dd class="font-medium text-gray-800">
-                                        {{ getDurasi(item) }} hari
-                                    </dd>
-                                </div>
-                            </dl>
-                            <div
-                                class="mt-auto grid gap-2 pt-4"
-                                :class="
-                                    isReadOnly ? 'grid-cols-1' : 'grid-cols-3'
-                                "
+                            {{ s.kosong }}
+                            <button
+                                v-if="adaFilterAktif"
+                                type="button"
+                                @click="resetFilter"
+                                class="ml-1 font-semibold text-green-700 underline cursor-pointer"
                             >
-                                <button
-                                    type="button"
-                                    @click="bukaDetailModal(item)"
-                                    class="min-h-[44px] rounded-lg border border-gray-300 bg-white px-2 py-2 text-sm font-semibold text-gray-700 cursor-pointer"
-                                >
-                                    Detail
-                                </button>
-                                <template v-if="!isReadOnly">
-                                    <button
-                                        type="button"
-                                        @click="
-                                            processApproval(item.id, 'approve')
-                                        "
-                                        :disabled="!canApprove(item)"
-                                        class="min-h-[44px] rounded-lg bg-emerald-600 px-2 py-2 text-sm font-bold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        Setujui
-                                    </button>
-                                    <button
-                                        type="button"
-                                        @click="
-                                            processApproval(item.id, 'reject')
-                                        "
-                                        :disabled="!canApprove(item)"
-                                        class="min-h-[44px] rounded-lg bg-red-600 px-2 py-2 text-sm font-bold text-white cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        Tolak
-                                    </button>
-                                </template>
-                            </div>
-                        </article>
-                    </div>
-                    <div
-                        v-if="antreanTampil.length === 0"
-                        class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
-                    >
-                        Saat ini tidak ada antrean pengajuan cuti yang
-                        memerlukan persetujuan Anda.
-                        <button
-                            v-if="adaFilterAktif"
-                            type="button"
-                            @click="resetFilter"
-                            class="ml-1 font-semibold text-green-700 underline cursor-pointer"
-                        >
-                            Atur ulang filter
-                        </button>
+                                Atur ulang filter
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <!-- PAGINATION -->
+            <!-- PAGINATION (khusus riwayat diproses) -->
             <div
-                v-if="antrean.links && antrean.links.length > 3"
+                v-if="antrean?.links && antrean.links.length > 3"
                 class="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:justify-between"
             >
                 <p class="text-center text-sm text-gray-500">
-                    Menampilkan {{ antrean.from ?? 0 }}–{{ antrean.to ?? 0 }}
+                    Riwayat: menampilkan {{ antrean.from ?? 0 }}–{{
+                        antrean.to ?? 0
+                    }}
                     dari {{ antrean.total ?? 0 }} data
                 </p>
                 <div class="flex flex-wrap justify-center gap-1">
@@ -1659,17 +1795,21 @@ const riwayatDibatalkan = computed(() =>
                             <span
                                 class="font-normal text-amber-600/80 text-xs block mt-0.5"
                             >
-                                (Tahun Ini:
                                 {{
                                     detailModal.data.pegawai
                                         ?.sisa_hak_tahun_berjalan ?? 0
                                 }}
-                                hari | Saldo Bawaan:
+                                sisa tahun ini +
                                 {{
                                     detailModal.data.pegawai
                                         ?.saldo_bawaan_eligible ?? 0
                                 }}
-                                hari)
+                                bawaan +
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.cuti_dikembalikan ?? 0
+                                }}
+                                dikembalikan
                             </span>
                         </div>
                     </div>
@@ -2221,4 +2361,3 @@ const riwayatDibatalkan = computed(() =>
     animation: shake 0.4s ease-in-out;
 }
 </style>
-

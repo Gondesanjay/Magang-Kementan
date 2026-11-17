@@ -10,6 +10,7 @@ import {
     nextTick,
 } from "vue";
 
+
 const props = defineProps({
     cutiTim: Array,
     // [BARU] Bulan yang sedang dilihat, format "YYYY-MM". Dikirim dari
@@ -36,6 +37,7 @@ const props = defineProps({
     },
 });
 
+
 // ================= BULAN YANG DILIHAT =================
 const parseBulan = (s) => {
     const m = /^(\d{4})-(\d{2})$/.exec(s || "");
@@ -46,8 +48,10 @@ const parseBulan = (s) => {
 const formatBulan = (d) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
+
 const currentDate = ref(parseBulan(props.bulan));
 const memuat = ref(false); // true selama data bulan baru dimuat dari server
+
 
 // Jaga sinkron bila server mengirim bulan lain (mis. tombol Back browser).
 watch(
@@ -58,6 +62,7 @@ watch(
         }
     },
 );
+
 
 const namaBulan = [
     "Januari",
@@ -77,6 +82,7 @@ const bulanAktif = computed(() => namaBulan[currentDate.value.getMonth()]);
 const tahunAktif = computed(() => currentDate.value.getFullYear());
 // ================= END BULAN YANG DILIHAT =================
 
+
 // ================= [BARU] HELPER LAMPAU / HARI INI =================
 // Pembeda dihitung PER TANGGAL SEL, bukan per pengajuan. Cuti 13-19 Okt
 // akan tampak pudar di tanggal yang sudah lewat, normal di tanggal
@@ -86,9 +92,11 @@ const toDateStr = (d) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const todayStr = toDateStr(new Date());
 
+
 const isLampau = (dateStr) => !!dateStr && dateStr < todayStr;
 const isHariIni = (dateStr) => dateStr === todayStr;
 // ================= END HELPER LAMPAU / HARI INI =================
+
 
 // --- FITUR FILTER BERJENJANG SESUAI LEVEL ATASAN ---
 // L1 (role_id 2) & L2 (role_id 3): filter berdasarkan Tim Kerja (dalam
@@ -103,9 +111,11 @@ const filterMode = computed(() => {
     return "none";
 });
 
+
 const showFilterDropdown = computed(
     () => filterMode.value === "l2" || filterMode.value === "l3l4",
 );
+
 
 // Field di object pegawai yang dipakai untuk mencocokkan filter lokal
 const filterFieldName = computed(() =>
@@ -136,6 +146,7 @@ const filterOptions = computed(() => {
     return [];
 });
 
+
 // Membaca parameter URL agar pilihan tidak kereset saat halaman dimuat ulang.
 const getInitialFilter = () => {
     if (typeof window !== "undefined") {
@@ -147,6 +158,7 @@ const getInitialFilter = () => {
 };
 const initialFilterFromUrl = getInitialFilter();
 const selectedFilter = ref(initialFilterFromUrl ?? filterAllLabel.value);
+
 
 // ================= [BARU] MUAT DATA PER BULAN DARI SERVER =================
 // Data cuti dikirim per bulan, jadi setiap pindah bulan (atau ganti filter)
@@ -176,6 +188,7 @@ const muatKalender = (targetDate) => {
     );
 };
 
+
 const gantiBulan = (selisih) => {
     const target = new Date(
         currentDate.value.getFullYear(),
@@ -193,9 +206,11 @@ const keBulanIni = () => {
     muatKalender(target);
 };
 
+
 // Dropdown filter ikut membawa bulan yang sedang dilihat
 const applyFilter = () => muatKalender(currentDate.value);
 // ================= END MUAT DATA PER BULAN =================
+
 
 // ================================================================
 // DROPDOWN FILTER KUSTOM (Tim Kerja / Kelompok)
@@ -211,6 +226,7 @@ const applyFilter = () => muatKalender(currentDate.value);
 // ================================================================
 const dropdownTerbuka = ref(false);
 
+
 const toggleDropdown = () => {
     dropdownTerbuka.value = !dropdownTerbuka.value;
 };
@@ -218,19 +234,32 @@ const tutupDropdown = () => {
     dropdownTerbuka.value = false;
 };
 
+
 // Opsi bernilai "-" (pegawai yang tidak punya tim/kelompok) ditampilkan
 // sebagai teks yang jelas. Hanya LABEL yang diganti; nilai asli ("-") tetap
 // dipakai untuk mencocokkan filter & parameter URL, jadi logika tidak berubah.
+// NULL, "" dan "-" dianggap sama: "tidak punya tim/kelompok" (nilai "-").
+const normalisasiNilai = (v) => {
+    const s = String(v ?? "");
+    return s.trim() === "" || s.trim() === "-" ? "-" : s;
+};
+
+
 const labelOpsi = (opsi) => {
     const kosong = !opsi || String(opsi).trim() === "-";
     if (!kosong) return opsi;
     return filterMode.value === "l2" ? "Tanpa Tim Kerja" : "Tanpa Kelompok";
 };
 
-const opsiFilterLengkap = computed(() => [
-    filterAllLabel.value,
-    ...filterOptions.value,
-]);
+
+const opsiFilterLengkap = computed(() => {
+    const biasa = filterOptions.value.filter(
+        (o) => normalisasiNilai(o) !== "-",
+    );
+    const adaTanpa = biasa.length !== filterOptions.value.length;
+    return [filterAllLabel.value, ...biasa, ...(adaTanpa ? ["-"] : [])];
+});
+
 
 const pilihFilter = (opsi) => {
     const berubah = selectedFilter.value !== opsi;
@@ -239,12 +268,14 @@ const pilihFilter = (opsi) => {
     if (berubah) applyFilter();
 };
 
+
 const tutupDropdownSaatKlikLuar = (event) => {
     if (!event.target.closest?.("[data-dropdown]")) {
         dropdownTerbuka.value = false;
     }
 };
 // ================= END DROPDOWN FILTER KUSTOM =================
+
 
 // DAFTAR HARI LIBUR DINAMIS DIAMBIL DARI DATABASE ADMIN HR
 const holidayList = computed(() => {
@@ -256,6 +287,7 @@ const holidayList = computed(() => {
     }
     return holidays;
 });
+
 
 const calendarDays = computed(() => {
     const year = currentDate.value.getFullYear();
@@ -281,9 +313,11 @@ const calendarDays = computed(() => {
     return days;
 });
 
+
 const getHolidayName = (dateStr) => {
     return holidayList.value[dateStr] || null;
 };
+
 
 // ================= PENANDA "(ANDA)" & FILTER STATUS =================
 // Entri milik user yang sedang login ditandai "(Anda)".
@@ -305,6 +339,7 @@ const isDisetujui = (item) => !item?.status || item.status === "disetujui";
 const bolehTampil = (item) => isDisetujui(item);
 // ================= END PENANDA =================
 
+
 // Apakah filter dropdown sedang aktif memilih satu tim/kelompok tertentu.
 const filterAktif = computed(
     () =>
@@ -312,6 +347,7 @@ const filterAktif = computed(
         selectedFilter.value !== filterAllLabel.value &&
         selectedFilter.value !== "",
 );
+
 
 // Filter lokal (fallback) sesuai mode filter yang aktif.
 const cocokDenganFilter = (item) => {
@@ -321,8 +357,9 @@ const cocokDenganFilter = (item) => {
         (filterFieldName.value === "kelompok_substansi"
             ? props.kelompok_substansi
             : null);
-    return nilaiPegawai === selectedFilter.value;
+    return normalisasiNilai(nilaiPegawai) === selectedFilter.value;
 };
+
 
 // Filter cuti: menyaring status yang boleh tampil, lalu filter lokal
 // (fallback) sesuai mode filter yang aktif.
@@ -336,6 +373,7 @@ const getCutiOnDate = (dateStr) => {
         return dateStr >= item.tanggal_mulai && dateStr <= item.tanggal_selesai;
     });
 };
+
 
 // ================= OPSI D: RINGKAS DAFTAR NAMA DI GRID KALENDER (DESKTOP) =================
 // Entri milik sendiri diurutkan paling atas supaya tidak pernah tersembunyi
@@ -352,6 +390,7 @@ const getSisaCutiDiGrid = (dateStr) => {
 };
 // ================= END OPSI D =================
 
+
 // ================= INDIKATOR TITIK (HP) =================
 // Di layar kecil nama tidak muat di dalam sel, jadi cukup titik berwarna
 // per jenis cuti. Detail lengkap tampil di pop up saat tanggal diketuk.
@@ -366,6 +405,7 @@ const getSisaTitikDiGrid = (dateStr) => {
     return total > MAX_TITIK_DI_GRID ? total - MAX_TITIK_DI_GRID : 0;
 };
 // ================= END INDIKATOR TITIK =================
+
 
 const getJenisCuti = (cuti) => (cuti?.jenis_cuti || "Cuti Tahunan").trim();
 const getCutiColor = (cuti) => {
@@ -402,11 +442,13 @@ const getCutiColor = (cuti) => {
     }
 };
 
+
 // Kelas tambahan untuk chip di grid kalender:
 //  - milik sendiri : ring hijau tegas supaya cepat ditemukan
 const getChipExtraClass = (cuti) => [
     isMilikSaya(cuti) ? "ring-2 ring-green-500 ring-offset-1" : "",
 ];
+
 
 // ================= FORMAT TANGGAL & DURASI (UNTUK POP UP) =================
 const parseTanggal = (dateStr) => {
@@ -465,8 +507,10 @@ const getInisial = (nama) => {
 };
 // ================= END FORMAT TANGGAL & DURASI =================
 
+
 // MODAL DATA
 const selectedDateData = ref(null);
+
 
 // ================= OPSI A: SEARCH NAMA DI DALAM MODAL =================
 const searchModal = ref("");
@@ -480,6 +524,7 @@ const filteredModalList = computed(() => {
     );
 });
 // ================= END OPSI A =================
+
 
 // ================= OPSI B: GROUPING PER JENIS CUTI =================
 const URUTAN_JENIS_CUTI = [
@@ -510,6 +555,7 @@ const groupedModalList = computed(() => {
         }));
 });
 // ================= END OPSI B =================
+
 
 const openModal = (day) => {
     if (!day.isCurrentMonth) return;
@@ -551,6 +597,7 @@ const tanggalModalPanjang = computed(() =>
     formatTanggalPanjang(selectedDateData.value?.date),
 );
 
+
 // Tekan Esc untuk menutup dropdown filter, lalu pop up
 const onKeydown = (e) => {
     if (e.key !== "Escape") return;
@@ -569,6 +616,7 @@ onBeforeUnmount(() => {
     document.removeEventListener("click", tutupDropdownSaatKlikLuar);
 });
 </script>
+
 
 <template>
     <Head title="Jadwal Cuti Tim" />
@@ -592,6 +640,7 @@ onBeforeUnmount(() => {
                          Digantikan oleh dropdown filter "Semua Tim Kerja" yang
                          sekarang juga tampil untuk L1. -->
                 </div>
+
 
                 <!-- TOOLBAR AKSI (Filter & Navigasi Bulan) -->
                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -622,6 +671,7 @@ onBeforeUnmount(() => {
                             </svg>
                         </div>
 
+
                         <button
                             id="filter-kalender-tim"
                             type="button"
@@ -642,6 +692,7 @@ onBeforeUnmount(() => {
                             }}</span>
                         </button>
 
+
                         <span
                             class="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none"
                         >
@@ -660,6 +711,7 @@ onBeforeUnmount(() => {
                                 ></path>
                             </svg>
                         </span>
+
 
                         <ul
                             v-if="dropdownTerbuka"
@@ -702,6 +754,7 @@ onBeforeUnmount(() => {
                         </ul>
                     </div>
                     <!-- ================= END DROPDOWN FILTER KUSTOM ================= -->
+
 
                     <!-- Navigasi Bulan -->
                     <div
@@ -762,6 +815,7 @@ onBeforeUnmount(() => {
                     </div>
                 </div>
             </div>
+
 
             <!-- GRID KALENDER -->
             <div
@@ -866,6 +920,7 @@ onBeforeUnmount(() => {
                             </div>
                         </div>
 
+
                         <!-- INDIKATOR TITIK (HP & tablet): detail ada di pop up -->
                         <div
                             v-if="
@@ -896,6 +951,7 @@ onBeforeUnmount(() => {
                                 >+{{ getSisaTitikDiGrid(day.dateString) }}</span
                             >
                         </div>
+
 
                         <!-- OPSI D (DESKTOP): hanya beberapa nama teratas, sisanya
                              "+X lainnya". Entri milik sendiri selalu di atas,
@@ -954,10 +1010,12 @@ onBeforeUnmount(() => {
                 </div>
             </div>
 
+
             <!-- Petunjuk untuk HP -->
             <p class="lg:hidden text-center text-xs text-slate-400 -mt-1">
                 Ketuk tanggal bertanda titik untuk melihat siapa saja yang cuti.
             </p>
+
 
             <div
                 class="flex flex-wrap items-center justify-center gap-x-4 sm:gap-x-5 gap-y-2 text-[11px] font-semibold text-slate-600"
@@ -995,6 +1053,7 @@ onBeforeUnmount(() => {
             </div>
         </div>
     </MainLayout>
+
 
     <Teleport to="body">
         <Transition
@@ -1074,6 +1133,7 @@ onBeforeUnmount(() => {
                         </button>
                     </div>
 
+
                     <!-- OPSI A: KOTAK PENCARIAN NAMA (hanya jika >5 orang) -->
                     <div
                         v-if="selectedDateData.list.length > 5"
@@ -1110,6 +1170,7 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
+
                     <!-- Isi -->
                     <div class="flex-1 overflow-y-auto px-5 py-3">
                         <!-- Alert Hari Libur -->
@@ -1140,6 +1201,7 @@ onBeforeUnmount(() => {
                             </p>
                         </div>
 
+
                         <!-- Pesan kalau hasil pencarian kosong -->
                         <p
                             v-if="
@@ -1150,6 +1212,7 @@ onBeforeUnmount(() => {
                         >
                             Tidak ada pegawai dengan nama tersebut.
                         </p>
+
 
                         <!-- OPSI B: DAFTAR PEGAWAI CUTI PER JENIS CUTI -->
                         <div
@@ -1240,6 +1303,7 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
+
                     <!-- Footer tipis -->
                     <div
                         class="shrink-0 flex justify-end px-5 py-2.5 bg-slate-50 border-t border-slate-100"
@@ -1257,3 +1321,4 @@ onBeforeUnmount(() => {
         </Transition>
     </Teleport>
 </template>
+

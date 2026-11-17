@@ -17,11 +17,15 @@ class Pegawai extends Authenticatable
      * Kolom mass-assignment (create/update Admin HR + import).
      * Pastikan nama kolom sama dengan database
      * (no_telepon / alamat_domisili, bukan no_telp / alamat).
+     *
+     * status_kepegawaian = jenis ASN (PNS / PPPK).
+     * status_aktif       = status keaktifan (Aktif / Pensiun / dst).
      */
     protected $fillable = [
         'nama',
         'nip',
         'jabatan',
+        'status_kepegawaian',
         'kelompok_substansi',
         'tim_kerja',
         'status_aktif',
@@ -106,7 +110,6 @@ class Pegawai extends Authenticatable
     }
 
     // ================= SCOPE =================
-
     /**
      * Batasi data pegawai sesuai hierarki atasan yang sedang login.
      * Pemakaian: Pegawai::sesuaiHierarki(auth()->user())->get();

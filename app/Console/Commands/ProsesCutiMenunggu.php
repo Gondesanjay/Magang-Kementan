@@ -13,9 +13,27 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 // Command harian:
-// 1. Kedaluwarsa otomatis jika tanggal_mulai sudah lewat
+// 1. Kedaluwarsa otomatis jika sudah melewati batas tenggang (HARI_TENGGANG)
+//    — lihat batasKedaluwarsa()
 // 2. Pengingat bertahap (2 & 4 hari kerja) ke atasan + Admin HR
 // 3. Bersihkan notifikasi lama saat kedaluwarsa (aman: cek pengajuan lain dulu)
+//
+// ================= PERBAIKAN (PENGAJUAN MUNDUR / GRACE PERIOD) =================
+// SEBELUMNYA: pengajuan langsung kedaluwarsa begitu tanggal_mulai < hari ini.
+// Itu tidak cocok dengan pengajuan mundur (maks. CutiController::MAKS_HARI_MUNDUR
+// = 7 hari), karena pengajuan yang baru dibuat bisa kedaluwarsa keesokan
+// harinya sebelum atasan sempat memproses.
+//
+// SEKARANG: batas terakhir = max(tanggal_mulai, tanggal terakhir pengajuan
+// diubah) + HARI_TENGGANG hari. Hasilnya:
+//   - Pengajuan normal (mulai di masa depan): kedaluwarsa setelah
+//     tanggal_mulai + HARI_TENGGANG.
+//   - Pengajuan / revisi mundur: tenggang dihitung sejak diajukan, jadi
+//     atasan tetap punya waktu.
+// updated_at ikut berubah tiap kali pengajuan naik level (update model),
+// sehingga tenggang dihitung ulang selama pengajuan masih bergerak.
+// CATATAN: HARI_TENGGANG harus sama dengan CutiController::MAKS_HARI_MUNDUR.
+// ================= END PERBAIKAN =================
 //
 // php artisan cuti:proses-menunggu [--dry-run] [--bersihkan-lama]
 class ProsesCutiMenunggu extends Command
@@ -24,12 +42,15 @@ class ProsesCutiMenunggu extends Command
         {--dry-run : Hanya tampilkan yang akan dilakukan, tanpa mengubah data}
         {--bersihkan-lama : Bersihkan notifikasi lama untuk pengajuan yang sudah kedaluwarsa}';
 
-    protected $description = 'Kirim pengingat ke atasan & kedaluwarsakan pengajuan cuti yang tidak diproses sampai tanggal mulai terlewati';
+    protected $description = 'Kirim pengingat ke atasan & kedaluwarsakan pengajuan cuti yang tidak diproses sampai melewati batas tenggang';
 
     private const HARI_PENGINGAT_1 = 2;
     private const HARI_PENGINGAT_2 = 4;
 
     private const STATUS_MENUNGGU = ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'];
+
+    // Tenggang kedaluwarsa (hari). Selaras CutiController::MAKS_HARI_MUNDUR.
+    private const HARI_TENGGANG = 7;
 
     private const JUDUL_PENGINGAT = ['Pengingat: Pengajuan Cuti', 'Pengingat Kedua: Pengajuan Cuti'];
     private const JUDUL_NOTIF_AWAL = ['Pengajuan Cuti Baru', 'Revisi Pengajuan Cuti'];
@@ -55,9 +76,7 @@ class ProsesCutiMenunggu extends Command
         $jumlahPengingat = 0;
 
         foreach ($daftar as $p) {
-            $mulai = Carbon::parse($p->tanggal_mulai)->startOfDay();
-
-            if ($mulai->lt($today)) {
+            if ($this->batasKedaluwarsa($p)->lt($today)) {
                 if ($this->kedaluwarsakan($p, $dryRun)) {
                     $jumlahKedaluwarsa++;
                 }
@@ -75,6 +94,17 @@ class ProsesCutiMenunggu extends Command
         return self::SUCCESS;
     }
 
+    // Batas terakhir (inklusif) sebuah pengajuan masih boleh menunggu.
+    // Acuan = tanggal yang lebih akhir antara tanggal_mulai dan terakhir kali
+    // pengajuan diubah (diajukan / direvisi / naik level), lalu + tenggang.
+    private function batasKedaluwarsa(PengajuanCuti $p): Carbon
+    {
+        $mulai = Carbon::parse($p->tanggal_mulai)->startOfDay();
+        $diubah = Carbon::parse($p->updated_at ?? $p->created_at)->startOfDay();
+
+        return $mulai->copy()->max($diubah)->copy()->addDays(self::HARI_TENGGANG);
+    }
+
     private function kedaluwarsakan(PengajuanCuti $p, bool $dryRun): bool
     {
         $nama = $p->pegawai->nama ?? 'Pegawai';
@@ -89,7 +119,8 @@ class ProsesCutiMenunggu extends Command
 
         $keterangan = trim((string) $p->keterangan);
         $keterangan = ($keterangan === '' ? '-' : $keterangan)
-            . ' | [KEDALUWARSA: Tidak diproses atasan sampai tanggal mulai cuti terlewati]';
+            . ' | [KEDALUWARSA: Tidak diproses atasan dalam batas waktu (tenggang '
+            . self::HARI_TENGGANG . ' hari)]';
 
         $berubah = PengajuanCuti::where('id', $p->id)
             ->where('status', $statusLama)
@@ -110,7 +141,7 @@ class ProsesCutiMenunggu extends Command
                 'pegawai_id' => $p->pegawai_id,
                 'judul' => 'Pengajuan Cuti Kedaluwarsa',
                 'pesan' => 'Pengajuan cuti Anda tanggal ' . $this->tgl($p->tanggal_mulai)
-                    . ' tidak diproses atasan sampai tanggal mulai terlewati. Silakan ajukan ulang bila masih diperlukan.',
+                    . ' tidak diproses atasan dalam batas waktu. Silakan ajukan ulang bila masih diperlukan.',
                 'tautan' => route('karyawan.riwayat', [], false),
                 'is_read' => false,
             ]);
@@ -121,7 +152,7 @@ class ProsesCutiMenunggu extends Command
                 'pegawai_id' => $atasan->id,
                 'judul' => 'Pengajuan Cuti Kedaluwarsa',
                 'pesan' => 'Pengajuan cuti ' . $nama . ' (' . $this->tgl($p->tanggal_mulai)
-                    . ') kedaluwarsa karena tidak diproses sampai tanggal mulai terlewati.',
+                    . ') kedaluwarsa karena tidak diproses dalam batas waktu.',
                 'tautan' => route('atasan.approval', [], false),
                 'is_read' => false,
             ]);

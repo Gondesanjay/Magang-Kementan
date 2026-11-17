@@ -1,25 +1,98 @@
 <script setup>
 import {
     ref,
+    reactive,
     computed,
     watch,
     nextTick,
     onMounted,
     onBeforeUnmount,
+    h,
 } from "vue";
-import { router, useForm, Head } from "@inertiajs/vue3";
+import { router, useForm, Head, Link } from "@inertiajs/vue3";
 import MainLayout from "@/Layouts/MainLayout.vue";
+import SelAngka from "@/Components/SelAngka.vue";
 import { useTahunFilter } from "@/composables/useTahunFilter";
 
 // Tahun kalender sebenarnya (hari ini). Dipakai sebagai default filter tahun
-// dan sebagai dasar tahun "berikutnya" untuk fitur Generate Saldo Tahun Baru.
+// dan sebagai batas tahun yang boleh digenerate (currentYear + 1).
 const currentYear = new Date().getFullYear();
+
+// Ikon pensil kecil untuk penanda kolom yang bisa diedit (dipakai di header
+// tabel, label kartu HP, dan legenda). Komponen fungsional supaya path SVG
+// tidak diulang di tiap tempat.
+// Hiasan saja (aria-hidden); artinya dijelaskan oleh legenda di bawah tabel
+// dan tooltip pada header.
+const IkonPensil = () =>
+    h(
+        "svg",
+        {
+            class: "w-3 h-3 shrink-0 text-emerald-600",
+            fill: "none",
+            stroke: "currentColor",
+            viewBox: "0 0 24 24",
+            "aria-hidden": "true",
+        },
+        [
+            h("path", {
+                "stroke-linecap": "round",
+                "stroke-linejoin": "round",
+                "stroke-width": "2",
+                d: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+            }),
+        ],
+    );
+
+// [TERPAKAI DIKUNCI] Ikon gembok kecil untuk penanda kolom yang HANYA TAMPIL
+// (Cuti Terpakai). Angkanya diubah per bulan di Rekap Laporan.
+const IkonGembok = () =>
+    h(
+        "svg",
+        {
+            class: "w-3 h-3 shrink-0 text-slate-500",
+            fill: "none",
+            stroke: "currentColor",
+            viewBox: "0 0 24 24",
+            "aria-hidden": "true",
+        },
+        [
+            h("path", {
+                "stroke-linecap": "round",
+                "stroke-linejoin": "round",
+                "stroke-width": "2",
+                d: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z",
+            }),
+        ],
+    );
+
+// Tooltip untuk header kolom yang bisa diedit.
+const KETERANGAN_BISA_DIEDIT = "Kolom bisa diedit: klik angkanya";
+
+// [TERPAKAI DIKUNCI] Tooltip kolom Terpakai.
+const KETERANGAN_TERPAKAI_DIKUNCI =
+    "Terpakai dikunci di halaman ini. Ubah per bulan di Rekap Laporan.";
+
+const NAMA_BULAN_PENDEK = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "Mei",
+    "Jun",
+    "Jul",
+    "Agu",
+    "Sep",
+    "Okt",
+    "Nov",
+    "Des",
+];
 
 /**
  * Hitung saldo bawaan eligible — selaras dengan Dashboard karyawan & Excel:
  * IF (sisa N-2 == 12 AND sisa N-1 == 12) → 12
  * else → MIN(6, sisa N-1)
- * Total hak + bawaan dibatasi maksimal 24 hari.
+ * [DIUBAH] Batas total 24 hari DINONAKTIFKAN: Bawaan tidak bergantung pada Hak
+ * (selaras dengan SaldoCuti::TERAPKAN_BATAS_ATAS_TOTAL_HAK = false di backend).
  * Jika backend sudah kirim saldo_bawaan_eligible, pakai itu.
  */
 const getSaldoBawaanEligible = (pegawai) => {
@@ -28,9 +101,8 @@ const getSaldoBawaanEligible = (pegawai) => {
     }
     const sisaN2 = Number(pegawai?.sisa_cuti_dua_tahun_lalu ?? 0);
     const sisaN1 = Number(pegawai?.carry_forward_normal ?? 0);
-    const kuota = Number(pegawai?.kuota_tahunan ?? pegawai?.hak_tahun_ini ?? 0);
     const normal = sisaN2 === 12 && sisaN1 === 12 ? 12 : Math.min(6, sisaN1);
-    return Math.max(0, Math.min(normal, 24 - kuota));
+    return Math.max(0, normal);
 };
 
 const getSisaDuaTahunLalu = (pegawai) =>
@@ -45,31 +117,37 @@ const getSisaTahunLalu = (pegawai) =>
     Number(pegawai?.carry_forward_normal ?? 0);
 
 // ================================================================
-// Koreksi Cuti Terpakai (INPUT LANGSUNG / OVERRIDE) — Admin HR mengetik
-// TOTAL CUTI TERPAKAI FINAL, bukan selisih plus/minus. Nilai dikirim
-// backend lewat field 'koreksi_saldo'
-// (RekapKuotaDetailController::hitungKuota()).
+// [TERPAKAI DIKUNCI] Cuti Terpakai HANYA TAMPIL di halaman ini.
+// Angkanya berasal dari backend ('cuti_terpakai') dan diubah per bulan di
+// Rekap Laporan (koreksi bulanan), supaya selalu jelas koreksinya jatuh di
+// bulan mana. Tidak ada lagi input Terpakai / tombol "kembalikan ke sistem"
+// di sini.
 //
-// Aturan di backend:
-//   - koreksi_saldo = null -> Terpakai = angka sistem (riwayat disetujui)
-//   - koreksi_saldo = 0..n -> Terpakai = koreksi_saldo (angka Admin dipakai
-//                             apa adanya, TERMASUK 0)
-//
-// PENTING: 0 adalah koreksi yang SAH ("tidak ada cuti yang benar-benar
-// terpakai"). Jadi JANGAN pernah mengecek koreksi dengan `> 0`, `!k`,
-// atau `k || ...`. Selalu bedakan null dan 0 lewat `=== null`.
-//
-// Contoh: sistem mencatat 3 hari. Admin ketik 0 -> terpakai 0. Ketik 4 ->
-// terpakai 4. Centang "Gunakan data dari sistem" untuk kembali ke angka
-// sistem.
+// Field dari backend:
+//   cuti_terpakai          : Terpakai efektif (belum termasuk Tgh tahun ini)
+//   cuti_terpakai_sistem   : hitungan murni sistem (riwayat disetujui)
+//   ada_koreksi            : ada koreksi (tahunan lama ATAU bulanan)
+//   ada_koreksi_bulanan    : ada koreksi bulanan dari Rekap Laporan
+//   koreksi_bulanan        : { bulan(1-12): nilai }
+//   koreksi_saldo          : koreksi tahunan LAMA (null = tidak ada), info saja
 // ================================================================
-const getKoreksiSaldo = (pegawai) => {
+
+// Ada koreksi dari Admin HR atau tidak (bulanan atau tahunan lama).
+const adaKoreksi = (pegawai) => {
+    if (pegawai?.ada_koreksi != null) return Boolean(pegawai.ada_koreksi);
     const k = pegawai?.koreksi_saldo;
-    return k === null || k === undefined ? null : Math.max(0, Number(k) || 0);
+    return k !== null && k !== undefined;
 };
 
-// Ada override dari Admin HR atau tidak. Koreksi 0 juga dihitung override.
-const adaKoreksi = (pegawai) => getKoreksiSaldo(pegawai) !== null;
+const adaKoreksiBulanan = (pegawai) => Boolean(pegawai?.ada_koreksi_bulanan);
+
+// Nama bulan yang dikoreksi di Rekap Laporan, mis. ["Okt", "Des"].
+const bulanDikoreksi = (pegawai) =>
+    Object.keys(pegawai?.koreksi_bulanan || {})
+        .map(Number)
+        .filter((b) => b >= 1 && b <= 12)
+        .sort((a, b) => a - b)
+        .map((b) => NAMA_BULAN_PENDEK[b - 1]);
 
 // Angka cuti terpakai MURNI dari sistem (riwayat pengajuan disetujui),
 // dipakai untuk keterangan "Cuti terpakai dari sistem: X hari".
@@ -78,39 +156,23 @@ const getTerpakaiSistem = (pegawai) =>
         pegawai?.cuti_terpakai_sistem ?? pegawai?.cuti_terpakai_murni ?? 0,
     ) || 0;
 
-const getTotalTersedia = (pegawai) => {
-    if (pegawai?.total_cuti_tersedia != null) {
-        return Number(pegawai.total_cuti_tersedia) || 0;
-    }
-    // Excel: Total Hak Tersedia = Saldo Bawaan Eligible + Hak tahun berjalan
-    return getSisaTahunIni(pegawai) + getSaldoBawaanEligible(pegawai);
-};
-
-const getSaldoAkhir = (pegawai) => {
-    if (pegawai?.saldo_akhir != null) {
-        return Number(pegawai.saldo_akhir) || 0;
-    }
-    // 'cuti_terpakai' dari backend SUDAH final (angka override Admin bila
-    // ada, kalau tidak angka sistem), jadi koreksi TIDAK boleh
-    // ditambahkan/dikurangkan lagi di sini.
-    const terpakai = Number(pegawai?.cuti_terpakai ?? 0);
-    return Math.max(0, getTotalTersedia(pegawai) - terpakai);
-};
-
-// Sisa jatah tahun berjalan untuk KPI modal. Ini berbeda dari Total
-// Tersedia karena tidak memasukkan Saldo Bawaan Eligible.
-const getSisaTahunBerjalan = (pegawai) => {
-    const sisa = getSisaTahunIni(pegawai) - Number(pegawai?.cuti_terpakai ?? 0);
-    return Math.max(0, sisa);
-};
-
 // ================================================================
-// Sisa ditangguhkan (Tgh) — tampil di tabel utama & modal Detail.
-// Nilainya dihitung backend dari tabel cuti_ditangguhkans, KECUALI Admin HR
-// mengisi override manual (kolom saldo_cutis.koreksi_ditangguhkan); angka
-// yang dikirim backend di 'sisa_ditangguhkan_*' SUDAH memperhitungkan itu.
-// HANYA INFORMASI: saldo cuti yang ditangguhkan sudah dikembalikan, jadi
-// Tgh tidak menambah Terpakai maupun Bawaan.
+// Sisa ditangguhkan (Tgh) — tampil di tabel utama & modal Rincian.
+// Nilainya dihitung backend dari tabel cuti_ditangguhkans (SUM jumlah_hari
+// per tahun_asal).
+//
+// [ATURAN]
+//   - Tgh TAHUN YANG DILIHAT (N) adalah BAGIAN dari Terpakai N:
+//     Terpakai (tampil) = cuti terpakai + Tgh N. Angka Tgh tetap tampil
+//     sebagai catatan di kolom Tgh. Karena Tgh sudah ada di dalam Terpakai,
+//     Sisa N dan Saldo Akhir N TIDAK mengurangi Tgh lagi
+//     (Sisa N = Hak - Terpakai; Saldo Akhir = Total - Terpakai).
+//   - Tgh N-1 (tahun lalu) MENAMBAH Total Tersedia (aturan A, sama dengan
+//     backend RekapKuotaDetailController::TGH_MASUK_TOTAL = true):
+//     Total = Hak + Bawaan + Tgh N-1.
+//   - Tgh N-2 hanya CATATAN Admin HR (tidak memengaruhi saldo).
+// Admin HR boleh mengubah angkanya langsung di baris (klik angkanya);
+// backend menyesuaikan total lewat setTotalDitangguhkan().
 // ================================================================
 const getSisaDitangguhkanN2 = (pegawai) =>
     Number(
@@ -126,28 +188,62 @@ const getSisaDitangguhkanN1 = (pegawai) =>
             0,
     );
 
-// Angka Tgh murni HITUNGAN SISTEM (tanpa override Admin HR). Dipakai untuk
-// keterangan "Ikut data sistem (X hari)" di form edit.
-const getTghSistemN1 = (pegawai) =>
-    Number(pegawai?.ditangguhkan_sistem_n1 ?? 0) || 0;
+// Ditangguhkan pada tahun yang sedang dilihat (tahun_asal = tahun aktif).
+const getSisaDitangguhkanTahunIni = (pegawai) =>
+    Number(pegawai?.sisa_ditangguhkan_tahun_ini ?? 0);
 
-const getTghSistemN2 = (pegawai) =>
-    Number(pegawai?.ditangguhkan_sistem_n2 ?? 0) || 0;
+const getTotalTersedia = (pegawai) => {
+    if (pegawai?.total_cuti_tersedia != null) {
+        return Number(pegawai.total_cuti_tersedia) || 0;
+    }
+    // Total Tersedia = Hak + Bawaan Eligible + Tgh tahun lalu (aturan A)
+    return (
+        getSisaTahunIni(pegawai) +
+        getSaldoBawaanEligible(pegawai) +
+        getSisaDitangguhkanN1(pegawai)
+    );
+};
 
-// Override Tgh dari Admin HR: null = ikut sistem, angka (TERMASUK 0) =
-// dipakai apa adanya. Sama seperti koreksi cuti terpakai, jangan cek dengan
-// `> 0` atau `!k`; bedakan null dan 0 lewat `=== null`.
-const getKoreksiTgh = (nilai) =>
-    nilai === null || nilai === undefined ? null : Math.max(0, Number(nilai) || 0);
+// Cuti Terpakai yang DITAMPILKAN = cuti terpakai dari backend
+// ('cuti_terpakai': sudah ikut koreksi bulanan Rekap Laporan) + Tgh tahun
+// ini. Sama dengan Dashboard karyawan (mis. 2 digunakan + 1 ditangguhkan = 3).
+// Nilai 'cuti_terpakai' dari backend TIDAK menyertakan Tgh.
+const getTerpakaiTampil = (pegawai) =>
+    Number(pegawai?.cuti_terpakai ?? 0) + getSisaDitangguhkanTahunIni(pegawai);
 
-// Dipakai untuk v-if di modal: blok "Sisa Ditangguhkan" hanya
-// dirender kalau salah satu nilainya > 0.
-const punyaSisaDitangguhkan = (pegawai) =>
-    getSisaDitangguhkanN2(pegawai) > 0 || getSisaDitangguhkanN1(pegawai) > 0;
+// Angka sistem (tanpa koreksi Admin) dalam bentuk TAMPIL: sistem + Tgh tahun ini.
+const getTerpakaiSistemTampil = (pegawai) =>
+    getTerpakaiSistem(pegawai) + getSisaDitangguhkanTahunIni(pegawai);
 
-// Teks tooltip yang sama untuk semua tampilan Tgh.
-const KETERANGAN_TGH =
-    "Hari cuti ditangguhkan (saldo sudah dikembalikan, hanya informasi)";
+const getSaldoAkhir = (pegawai) => {
+    if (pegawai?.saldo_akhir != null) {
+        return Number(pegawai.saldo_akhir) || 0;
+    }
+    // Tgh tahun ini sudah termasuk di Terpakai (tampil), jadi tidak
+    // dikurangkan lagi: Saldo Akhir = Total - Terpakai (tampil).
+    return Math.max(0, getTotalTersedia(pegawai) - getTerpakaiTampil(pegawai));
+};
+
+// Sisa jatah tahun berjalan untuk KPI modal. Ini berbeda dari Total
+// Tersedia karena tidak memasukkan Saldo Bawaan Eligible maupun Tgh N-1.
+// Sisa = Hak - Terpakai (tampil, sudah termasuk Tgh tahun ini).
+// Angka final dari backend ('sisa_kuota_tahun_ini') dipakai bila tersedia.
+const getSisaTahunBerjalan = (pegawai) => {
+    if (pegawai?.sisa_kuota_tahun_ini != null) {
+        return Math.max(0, Number(pegawai.sisa_kuota_tahun_ini) || 0);
+    }
+    const sisa = getSisaTahunIni(pegawai) - getTerpakaiTampil(pegawai);
+    return Math.max(0, sisa);
+};
+
+// Teks tooltip untuk Tgh tahun lalu (N-1): menambah Total Tersedia.
+const KETERANGAN_TGH_N1 = "Tgh tahun lalu menambah Total Tersedia";
+
+// Teks tooltip untuk Tgh dua tahun lalu (N-2): hanya catatan.
+const KETERANGAN_TGH_N2 = "Catatan Admin HR (tidak memengaruhi saldo)";
+
+// Teks tooltip untuk angka hasil hitungan yang bisa diklik (sorot rumusnya).
+const KETERANGAN_KLIK_RUMUS = "Klik untuk menyorot kolom sumber rumusnya";
 
 // Menerima 'dataPegawai' (satu baris per pegawai), bukan 'pengajuan'
 const props = defineProps({
@@ -172,6 +268,13 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    // true = semua pegawai aktif sudah punya dompet tahun depan
+    // (dikirim RekapKuotaDetailController::index()). Tombol Generate dikunci.
+    // Nilai ini mengacu ke tahun kalender depan (currentYear + 1).
+    sudahGenerateTahunDepan: {
+        type: Boolean,
+        default: false,
+    },
 });
 
 const search = ref(props.filters?.search || "");
@@ -183,11 +286,48 @@ const filterKelompok = ref(props.filters?.kelompok_substansi || "");
 // props.filters.tahun, misalnya setelah reload/pagination).
 //
 // 'tahunAktif' adalah SATU-SATUNYA sumber tahun untuk seluruh label di
-// halaman ini (header kolom, KPI modal, form edit saldo, dll).
+// halaman ini (header kolom, KPI modal, edit inline, tombol Generate, dll).
 // ================================================================
 const filterTahun = ref(Number(props.filters?.tahun) || currentYear);
 
 const tahunAktif = computed(() => Number(filterTahun.value) || currentYear);
+
+// [TERPAKAI DIKUNCI] Link ke Rekap Laporan, sudah terfilter ke pegawai &
+// tahun yang sedang dilihat, tempat Terpakai diubah per bulan.
+const urlRekapLaporan = (pegawai) =>
+    route("admin.rekap", {
+        tahun: tahunAktif.value,
+        search: pegawai?.nip || pegawai?.nama || undefined,
+    });
+
+// Tooltip kotak Terpakai: keterangan kunci + bulan yang dikoreksi.
+const titleTerpakai = (pegawai) => {
+    let teks = KETERANGAN_TERPAKAI_DIKUNCI;
+    if (adaKoreksi(pegawai)) {
+        const bulan = bulanDikoreksi(pegawai);
+        teks += ` Dikoreksi Admin HR${bulan.length ? ` (bulan: ${bulan.join(", ")})` : ""}, sistem mencatat ${getTerpakaiSistemTampil(pegawai)} hari.`;
+    }
+    return teks;
+};
+
+// Tgh tahun ini tetap tercatat dan menjadi bagian dari Terpakai.
+const KETERANGAN_TGH_TAHUN_INI = computed(
+    () =>
+        `Cuti ${tahunAktif.value} yang ditangguhkan: tetap tercatat dan sudah termasuk dalam Terpakai ${tahunAktif.value}.`,
+);
+
+// Tooltip kolom "Sisa {tahun}" (kolom hitungan otomatis, tidak bisa diedit).
+const KETERANGAN_SISA_TAHUN_INI = computed(
+    () =>
+        `Sisa jatah ${tahunAktif.value} = Hak − Terpakai (Terpakai sudah termasuk Tgh ${tahunAktif.value}; belum termasuk bawaan). Dihitung otomatis.`,
+);
+
+// Tooltip Bawaan: aturannya bukan penjumlahan, jadi dijelaskan di sini
+// (bukan lewat panel) supaya sorotan warna tetap bersih.
+const KETERANGAN_BAWAAN = computed(
+    () =>
+        `Bawaan = yang lebih kecil antara 6 dan Sisa ${tahunAktif.value - 1}. Bila Sisa ${tahunAktif.value - 2} dan Sisa ${tahunAktif.value - 1} sama-sama 12, bawaan 12. Klik untuk menyorot sumbernya.`,
+);
 
 // Daftar tahun standar dari composable (satu sumber logika untuk semua
 // halaman). Default: tahun berjalan +1 sampai -2
@@ -246,287 +386,864 @@ const kpiRataRataSaldoAkhir = computed(
 const kpiAkumulasiPenuh = computed(() => props.kpi?.akumulasi_penuh ?? 0);
 // ================= END KPI CARDS =================
 
-// ================================================================
-// KARTU PEGAWAI (TAMPILAN MOBILE / TABLET)
-// Di layar di bawah breakpoint 'lg' (1024px), tabel 12 kolom diganti kartu per
-// pegawai supaya tidak perlu geser horizontal. Angkanya TETAP memakai
-// helper yang sama dengan tabel (satu sumber logika).
-// ================================================================
-const getStatKartu = (pegawai) => {
-    const t = tahunAktif.value;
-    const akhirTahun = (tahun) => String(tahun).slice(-2);
-
-    return [
-        {
-            key: "sisa-n2",
-            label: `Sisa ${t - 2}`,
-            nilai: getSisaDuaTahunLalu(pegawai),
-            kelas: "bg-slate-200 text-slate-700 border-slate-300/80",
-            labelKelas: "text-slate-500",
-        },
-        {
-            key: "tgh-n2",
-            label: `Tgh '${akhirTahun(t - 2)}`,
-            nilai: getSisaDitangguhkanN2(pegawai),
-            kelas: "bg-orange-100 text-orange-800 border-orange-300/80",
-            labelKelas: "text-orange-600",
-            title: KETERANGAN_TGH,
-        },
-        {
-            key: "sisa-n1",
-            label: `Sisa ${t - 1}`,
-            nilai: getSisaTahunLalu(pegawai),
-            kelas: "bg-slate-200 text-slate-700 border-slate-300/80",
-            labelKelas: "text-slate-500",
-        },
-        {
-            key: "tgh-n1",
-            label: `Tgh '${akhirTahun(t - 1)}`,
-            nilai: getSisaDitangguhkanN1(pegawai),
-            kelas: "bg-orange-100 text-orange-800 border-orange-300/80",
-            labelKelas: "text-orange-600",
-            title: KETERANGAN_TGH,
-        },
-        {
-            key: "bawaan",
-            label: `Bawaan ${t}`,
-            nilai: getSaldoBawaanEligible(pegawai),
-            kelas: "bg-emerald-100 text-emerald-800 border-emerald-300/80",
-            labelKelas: "text-slate-500",
-        },
-        {
-            key: "hak",
-            label: `Hak ${t}`,
-            nilai: getSisaTahunIni(pegawai),
-            kelas: "bg-blue-100 text-blue-800 border-blue-300/80",
-            labelKelas: "text-slate-500",
-        },
-        {
-            key: "total",
-            label: `Total ${t}`,
-            nilai: getTotalTersedia(pegawai),
-            kelas: "bg-indigo-100 text-indigo-800 border-indigo-300/80",
-            labelKelas: "text-slate-500",
-        },
-        {
-            key: "terpakai",
-            label: `Terpakai ${t}`,
-            nilai: pegawai.cuti_terpakai || 0,
-            kelas: "bg-rose-100 text-rose-800 border-rose-300/80",
-            labelKelas: "text-slate-500",
-            bintang: adaKoreksi(pegawai),
-            title: adaKoreksi(pegawai)
-                ? `Dikoreksi Admin HR (sistem mencatat ${getTerpakaiSistem(pegawai)} hari)`
-                : "",
-        },
-    ];
-};
-
-// State untuk Modal Detail Riwayat Cuti
-const showModal = ref(false);
-const selectedPegawai = ref(null);
-
-// Menyimpan ID riwayat cuti yang sedang di-expand (dibuka rinciannya)
-const expandedRiwayatId = ref(null);
-
 // ========================================== //
-// ---> FITUR: EDIT SALDO CUTI PERORANGAN <---
+// ---> FITUR: EDIT SALDO INLINE (KLIK ANGKA) <---
 // ========================================== //
-// Satu-satunya tempat mengubah kuota/saldo cuti pegawai (single source
-// of truth). Isian sejajar dengan kolom sumber di sheet "Saldo Tahunan"
-// Excel, supaya input manual & Impor Kuota menghasilkan data yang sama:
-//   - hak_tahun_ini                     -> Hak {tahun} (jatah tahunan)
-//   - pakai_sistem + koreksi_saldo      -> Koreksi Jumlah Cuti Terpakai
-//                                          (angka FINAL, bukan +/-)
-//   - carry_forward_normal              -> Sisa {tahun-1}
-//   - sisa_cuti_dua_tahun_lalu          -> Sisa {tahun-2}
-//   - pakai_sistem_tgh_n1 + ditangguhkan_n1 -> Ditangguhkan {tahun-1}
-//   - pakai_sistem_tgh_n2 + ditangguhkan_n2 -> Ditangguhkan {tahun-2}
-// Saldo Bawaan Eligible, Total Tersedia & Saldo Akhir dihitung otomatis.
+// Klik salah satu angka yang boleh diedit (Sisa N-2, Tgh N-2, Sisa N-1,
+// Tgh N-1, Tgh N, Hak) -> SEMUA kapsul editable di baris itu berubah jadi
+// input seukuran kapsul (baris tidak melebar), fokus ke angka yang diklik.
+// Hanya SATU baris yang boleh diedit pada satu waktu ('editingId').
+// Isian sejajar dengan sheet "Saldo Tahunan" Excel:
+//   - hak           -> hak_tahun_ini            (Hak {tahun})
+//   - sisa_n1       -> carry_forward_normal     (Sisa {tahun-1})
+//   - sisa_n2       -> sisa_cuti_dua_tahun_lalu (Sisa {tahun-2})
+//   - tgh_n2/n1/n0  -> sisa_ditangguhkan_*      (N-2 hanya catatan; N-1
+//                                                menambah Total; N sudah
+//                                                termasuk di Terpakai)
+// Bawaan Eligible, Sisa {tahun}, Total Tersedia, Terpakai & Saldo Akhir
+// dihitung otomatis (pratinjau langsung saat mengetik; angka final tetap
+// dari backend).
 //
-// Saat disimpan, form ikut mengirim 'tahun' (= tahunAktif) lewat
-// transform di simpanSaldo(). 'tahun' tidak dimasukkan ke field form
-// agar isDirty hanya bereaksi pada isian yang benar-benar diubah admin.
+// [TERPAKAI DIKUNCI] Terpakai TIDAK bisa diedit di sini. Admin HR mengubahnya
+// per bulan di Rekap Laporan. Mengubah Tgh tahun ini tetap menggeser angka
+// Terpakai yang tampil (Terpakai = cuti terpakai + Tgh tahun ini).
 //
-// KOREKSI CUTI TERPAKAI (checkbox "Gunakan data dari sistem"):
-//   - pakai_sistem = true  -> koreksi_saldo dikirim null (ikut angka sistem)
-//   - pakai_sistem = false -> angka di kotak dikirim apa adanya, TERMASUK 0
-// Nilai LAMA ditimpa (bukan diakumulasi): mengubah 3 -> 4 berarti
-// Terpakai = 4.
-//
-// DITANGGUHKAN (Tgh) — pola override yang SAMA dengan koreksi terpakai:
-//   - pakai_sistem_tgh_nX = true  -> ditangguhkan_nX dikirim null (ikut
-//                                    hitungan sistem dari cuti_ditangguhkans)
-//   - pakai_sistem_tgh_nX = false -> angka di kotak dipakai apa adanya,
-//                                    TERMASUK 0
-// Tgh hanya informasi pelaporan; mengubahnya TIDAK mengubah Terpakai,
-// Bawaan, maupun Saldo Akhir (saldo sudah dikembalikan oleh alur
-// Penangguhan Cuti).
-const saldoForm = useForm({
-    hak_tahun_ini: 0,
-    pakai_sistem: true,
-    koreksi_saldo: "",
-    carry_forward_normal: 0,
-    sisa_cuti_dua_tahun_lalu: 0,
-    pakai_sistem_tgh_n1: true,
-    ditangguhkan_n1: 0,
-    pakai_sistem_tgh_n2: true,
-    ditangguhkan_n2: 0,
+// Enter = Simpan, Esc = Batal.
+const editingId = ref(null);
+
+// useForm hanya dipakai untuk processing, errors, dan kirim PUT.
+// Isian disimpan di 'draft' (reactive biasa) supaya tidak bergantung pada
+// perilaku defaults()/isDirty milik useForm.
+const saldoForm = useForm({});
+
+const draft = reactive({
+    sisa_n2: 0,
+    tgh_n2: 0,
+    sisa_n1: 0,
+    tgh_n1: 0,
+    tgh_n0: 0,
+    hak: 0,
 });
+const snapshotDraft = ref("");
+const isDirty = computed(() => JSON.stringify(draft) !== snapshotDraft.value);
+
+// Ubah isian (bisa '' saat dikosongkan) jadi angka bulat >= 0.
+const angka = (v) => Math.max(0, Number(v) || 0);
 
 const isSavingSaldo = computed(() => saldoForm.processing);
 
-// Pesan sukses singkat di dalam modal setelah Simpan Saldo (modal tidak
-// ditutup otomatis).
+// Pesan sukses singkat di atas halaman setelah Simpan Saldo.
 const pesanSukses = ref("");
 let timerPesanSukses = null;
 
-// Nilai dari data pegawai dijadikan "defaults" form, sehingga
-// saldoForm.isDirty hanya true kalau admin benar-benar mengubah isian.
-// Tanpa koreksi (null): checkbox tercentang dan kotak menampilkan angka
-// sistem. Dengan koreksi (termasuk 0): checkbox mati dan kotak berisi
-// angka koreksi. Aturan yang sama berlaku untuk Ditangguhkan N-1 & N-2.
-const isiSaldoFormDariPegawai = (pegawai) => {
-    const koreksi = getKoreksiSaldo(pegawai);
-    const koreksiTghN1 = getKoreksiTgh(pegawai?.koreksi_ditangguhkan_n1);
-    const koreksiTghN2 = getKoreksiTgh(pegawai?.koreksi_ditangguhkan_n2);
+const isEditing = (pegawai) =>
+    editingId.value !== null && editingId.value === pegawai?.id;
 
-    saldoForm.defaults({
-        hak_tahun_ini: getSisaTahunIni(pegawai),
-        pakai_sistem: koreksi === null,
-        koreksi_saldo: koreksi ?? getTerpakaiSistem(pegawai),
-        carry_forward_normal: getSisaTahunLalu(pegawai),
-        sisa_cuti_dua_tahun_lalu: getSisaDuaTahunLalu(pegawai),
-        pakai_sistem_tgh_n1: koreksiTghN1 === null,
-        ditangguhkan_n1: koreksiTghN1 ?? getTghSistemN1(pegawai),
-        pakai_sistem_tgh_n2: koreksiTghN2 === null,
-        ditangguhkan_n2: koreksiTghN2 ?? getTghSistemN2(pegawai),
-    });
-    saldoForm.reset();
+// Data pegawai (dari props terbaru) yang sedang diedit.
+const pegawaiEdit = computed(
+    () =>
+        daftarPegawaiHalamanIni.value.find((p) => p.id === editingId.value) ??
+        null,
+);
+
+// Semua pesan error validasi backend untuk baris yang sedang diedit.
+const daftarErrorEdit = computed(() =>
+    Object.values(saldoForm.errors || {}).filter(Boolean),
+);
+
+// Pratinjau hitungan saat mengetik. Rumus SAMA dengan getSaldoBawaanEligible
+// & SaldoCuti::hitungBawaan di backend. Angka final tetap dari backend.
+const previewEdit = computed(() => {
+    const p = pegawaiEdit.value;
+    if (!p) return null;
+
+    const hak = angka(draft.hak);
+    const n1 = angka(draft.sisa_n1);
+    const n2 = angka(draft.sisa_n2);
+    // Tgh tahun ini sudah termasuk di Terpakai (tampil).
+    const tghTahunIni = angka(draft.tgh_n0);
+
+    const normal = n2 === 12 && n1 === 12 ? 12 : Math.min(6, n1);
+    // [DIUBAH] Batas 24 dinonaktifkan: Bawaan tidak bergantung pada Hak
+    // (selaras dengan SaldoCuti::TERAPKAN_BATAS_ATAS_TOTAL_HAK = false).
+    const bawaan = Math.max(0, normal);
+    // Terpakai (dikunci) dari backend + Tgh tahun ini hasil ketikan.
+    const terpakai = (Number(p.cuti_terpakai) || 0) + tghTahunIni;
+    // Tgh N-1 menambah Total Tersedia (sama dengan backend). Tgh N-2 hanya
+    // catatan, jadi tidak masuk.
+    const total = hak + bawaan + angka(draft.tgh_n1);
+
+    return {
+        bawaan,
+        total,
+        terpakai,
+        // Tgh tahun ini sudah ada di dalam 'terpakai', jangan dikurangkan lagi.
+        saldoAkhir: Math.max(0, total - terpakai),
+    };
+});
+
+// Nilai yang ditampilkan: pratinjau saat baris sedang diedit, angka
+// backend saat tidak. Dipakai tabel DAN kartu supaya satu sumber logika.
+const nilaiSisaN2 = (p) =>
+    isEditing(p) ? angka(draft.sisa_n2) : getSisaDuaTahunLalu(p);
+const nilaiSisaN1 = (p) =>
+    isEditing(p) ? angka(draft.sisa_n1) : getSisaTahunLalu(p);
+const nilaiHak = (p) => (isEditing(p) ? angka(draft.hak) : getSisaTahunIni(p));
+const nilaiTghN2 = (p) =>
+    isEditing(p) ? angka(draft.tgh_n2) : getSisaDitangguhkanN2(p);
+const nilaiTghN1 = (p) =>
+    isEditing(p) ? angka(draft.tgh_n1) : getSisaDitangguhkanN1(p);
+const nilaiTghN0 = (p) =>
+    isEditing(p) ? angka(draft.tgh_n0) : getSisaDitangguhkanTahunIni(p);
+const nilaiBawaan = (p) =>
+    isEditing(p) && previewEdit.value
+        ? previewEdit.value.bawaan
+        : getSaldoBawaanEligible(p);
+const nilaiTotal = (p) =>
+    isEditing(p) && previewEdit.value
+        ? previewEdit.value.total
+        : getTotalTersedia(p);
+// Terpakai tampil = cuti terpakai + Tgh tahun ini.
+const nilaiTerpakai = (p) =>
+    isEditing(p) && previewEdit.value
+        ? previewEdit.value.terpakai
+        : getTerpakaiTampil(p);
+const nilaiSaldoAkhir = (p) =>
+    isEditing(p) && previewEdit.value
+        ? previewEdit.value.saldoAkhir
+        : getSaldoAkhir(p);
+
+// Sisa jatah tahun berjalan = Hak - Terpakai (belum termasuk bawaan).
+// Terpakai sudah memuat Tgh tahun ini, jadi Tgh tidak dikurangkan lagi.
+// Kolom hitungan otomatis (tidak bisa diedit). Memakai nilaiHak() dan
+// nilaiTerpakai(), jadi ikut berubah langsung saat baris sedang diedit.
+const nilaiSisaTahunIni = (p) => Math.max(0, nilaiHak(p) - nilaiTerpakai(p));
+
+// ================================================================
+// FITUR: SOROT RUMUS DENGAN WARNA (KLIK ANGKA HASIL)
+// Kolom hasil hitungan (Sisa N, Bawaan, Total, Terpakai, Saldo Akhir)
+// masing-masing punya WARNA sendiri. Klik angka hasil di satu baris:
+//   - angka yang diklik terisi penuh dengan warnanya,
+//   - kolom sumber rumusnya terisi warna yang SAMA (lebih muda) dan diberi
+//     tanda + / − di atasnya,
+//   - kolom lain di baris itu meredup,
+//   - header kolom sumber ikut diberi warna.
+// Tidak ada panel penjelasan; cukup lewat warna. Aturan Bawaan (bukan
+// penjumlahan) dijelaskan lewat tooltip.
+//
+// Rumus (sesuai catatan Admin HR):
+//   1. Sisa N        = Hak N − Terpakai N
+//   2. Bawaan N      = min(6, Sisa N-1), atau 12 bila Sisa N-2 dan N-1
+//                      sama-sama 12 (lihat getSaldoBawaanEligible)
+//   3. Total N       = Tgh N-1 + Bawaan N + Hak N
+//   4. Saldo Akhir N = Total N − Terpakai N
+//   5. Terpakai N    = cuti terpakai (dikunci) + Tgh N
+// [TERPAKAI DIKUNCI] Klik angka Terpakai sekarang menyorot sumbernya
+// (Tgh tahun ini), bukan masuk mode edit.
+//
+// Hanya SATU baris yang disorot pada satu waktu.
+// SOROTAN TETAP MENYALA selama baris itu diedit, jadi admin bisa menyorot
+// Sisa N, lalu mengklik Hak untuk mengubahnya sambil melihat pratinjau.
+// Sorotan ditutup oleh: Simpan berhasil, Batal, Esc, klik di luar area
+// baris/rumus, pindah ke baris lain, atau klik angka yang sama lagi.
+//
+// Klik angka hasil juga MELEPAS seleksi kotak input sebelumnya
+// ('fokusEdit' = null), jadi cincin oranye / lencana Δ dari kotak yang
+// tadi difokus tidak ikut menempel.
+// ================================================================
+const rumusAktif = ref(null); // { id, kolom: 'sisa'|'bawaan'|'total'|'terpakai'|'saldo' }
+
+const toggleRumus = (p, kolom) => {
+    // Pindah ke kolom lain: seleksi (sorot dampak) kotak sebelumnya dilepas.
+    fokusEdit.value = null;
+
+    const a = rumusAktif.value;
+    rumusAktif.value =
+        a?.id === p.id && a?.kolom === kolom ? null : { id: p.id, kolom };
 };
 
-// Saat checkbox dicentang, kotak kembali menampilkan angka sistem supaya
-// tidak ada angka koreksi lama yang tertinggal di layar.
-watch(
-    () => saldoForm.pakai_sistem,
-    (dicentang) => {
-        if (dicentang && selectedPegawai.value) {
-            saldoForm.koreksi_saldo = getTerpakaiSistem(selectedPegawai.value);
-            saldoForm.clearErrors("koreksi_saldo");
-        }
-    },
-);
+const rumusDibuka = (p, kolom) =>
+    rumusAktif.value?.id === p.id && rumusAktif.value?.kolom === kolom;
 
-// Sama untuk Ditangguhkan N-1 dan N-2: dicentang -> kotak kembali ke angka
-// hitungan sistem.
-watch(
-    () => saldoForm.pakai_sistem_tgh_n1,
-    (dicentang) => {
-        if (dicentang && selectedPegawai.value) {
-            saldoForm.ditangguhkan_n1 = getTghSistemN1(selectedPegawai.value);
-            saldoForm.clearErrors("ditangguhkan_n1");
-        }
-    },
-);
+// Kolom sumber (kunci sel) untuk tiap hasil hitungan.
+const SUMBER_RUMUS = {
+    sisa: ["hak", "terpakai"],
+    bawaan: ["sisa_n2", "sisa_n1"],
+    total: ["tgh_n1", "bawaan", "hak"],
+    terpakai: ["tgh_n0"],
+    saldo: ["total", "terpakai"],
+};
 
-watch(
-    () => saldoForm.pakai_sistem_tgh_n2,
-    (dicentang) => {
-        if (dicentang && selectedPegawai.value) {
-            saldoForm.ditangguhkan_n2 = getTghSistemN2(selectedPegawai.value);
-            saldoForm.clearErrors("ditangguhkan_n2");
-        }
-    },
-);
+// Kunci sel untuk angka hasil yang diklik (target).
+const KUNCI_TARGET_RUMUS = {
+    sisa: "sisa_n0",
+    bawaan: "bawaan",
+    total: "total",
+    terpakai: "terpakai",
+    saldo: "saldo",
+};
 
-// Kembalikan isian ke data tersimpan tanpa menutup modal.
-const resetSaldoForm = () => {
-    saldoForm.reset();
+// Warna per hasil hitungan. Ditulis literal supaya terbaca Tailwind.
+//   dasar       = warna kolom saat tidak disorot
+//   pilih       = kolom yang diklik (terisi penuh)
+//   sumber      = kolom yang masuk rumus (warna kolom yang diklik)
+//   lencana     = bulatan tanda + / −
+//   header      = warna header kolom sumber; headerPilih = header kolom target
+const WARNA_HASIL = {
+    sisa: {
+        dasar: "bg-sky-100 text-sky-800 border-sky-300/80",
+        pilih: "bg-sky-600 text-white border-sky-700 ring-2 ring-offset-1 ring-sky-600",
+        sumber: "bg-sky-200 text-sky-900 border-sky-500 ring-2 ring-offset-1 ring-sky-500",
+        lencana: "bg-sky-600 text-white",
+        header: "bg-sky-100",
+        headerPilih: "bg-sky-200",
+    },
+    bawaan: {
+        dasar: "bg-emerald-100 text-emerald-800 border-emerald-300/80",
+        pilih: "bg-emerald-600 text-white border-emerald-700 ring-2 ring-offset-1 ring-emerald-600",
+        sumber: "bg-emerald-200 text-emerald-900 border-emerald-500 ring-2 ring-offset-1 ring-emerald-500",
+        lencana: "bg-emerald-600 text-white",
+        header: "bg-emerald-100",
+        headerPilih: "bg-emerald-200",
+    },
+    total: {
+        dasar: "bg-indigo-100 text-indigo-800 border-indigo-300/80",
+        pilih: "bg-indigo-600 text-white border-indigo-700 ring-2 ring-offset-1 ring-indigo-600",
+        sumber: "bg-indigo-200 text-indigo-900 border-indigo-500 ring-2 ring-offset-1 ring-indigo-500",
+        lencana: "bg-indigo-600 text-white",
+        header: "bg-indigo-100",
+        headerPilih: "bg-indigo-200",
+    },
+    terpakai: {
+        dasar: "bg-rose-100 text-rose-800 border-rose-300/80",
+        pilih: "bg-rose-600 text-white border-rose-700 ring-2 ring-offset-1 ring-rose-600",
+        sumber: "bg-rose-200 text-rose-900 border-rose-500 ring-2 ring-offset-1 ring-rose-500",
+        lencana: "bg-rose-600 text-white",
+        header: "bg-rose-100",
+        headerPilih: "bg-rose-200",
+    },
+    saldo: {
+        dasar: "bg-slate-800 text-white border-slate-900",
+        pilih: "bg-slate-800 text-white border-slate-900 ring-2 ring-offset-1 ring-slate-900",
+        sumber: "bg-amber-200 text-amber-900 border-amber-500 ring-2 ring-offset-1 ring-amber-500",
+        lencana: "bg-amber-600 text-white",
+        header: "bg-amber-100",
+        headerPilih: "bg-slate-300",
+    },
+};
+
+// Kolom input (Sisa N-2, Sisa N-1, Tgh, Hak) TIDAK berwarna: putih netral.
+// Warnanya baru muncul sebagai kolom sumber saat ada rumus yang disorot.
+const KELAS_INPUT_NETRAL = "bg-white text-slate-700 border-slate-300";
+
+// Tanda operasi di atas kolom sumber. Bawaan sengaja kosong karena
+// aturannya bukan penjumlahan (dijelaskan lewat tooltip).
+const OPERATOR_SUMBER = {
+    sisa: { hak: "+", terpakai: "−" },
+    total: { tgh_n1: "+", bawaan: "+", hak: "+" },
+    terpakai: { tgh_n0: "+" },
+    saldo: { total: "+", terpakai: "−" },
+};
+
+// ================================================================
+// FITUR: SOROT DAMPAK EDIT (ARAH KEBALIKAN DARI SOROT RUMUS)
+// Sorot rumus menjawab "angka ini dihitung dari kolom mana?". Fitur ini
+// menjawab pertanyaan yang muncul saat admin klik edit: "kalau saya ubah
+// kolom ini, kolom mana yang ikut berubah?".
+//
+// Saat baris diedit dan satu kotak input sedang difokus ('fokusEdit'):
+//   - kotak yang difokus tetap normal,
+//   - kolom yang ikut berubah diberi cincin ORANYE + lencana "Δ", header-nya
+//     berwarna oranye, dan tidak diredupkan,
+//   - kolom yang tidak terkait meredup.
+//
+// Fokus dilacak lewat 'focusin' pada atribut data-edit-field. Fitur ini
+// BERJALAN BERSAMAAN dengan sorot rumus.
+//
+// PETA DAMPAK (harus selaras dengan rumus di atas dan previewEdit):
+//   Sisa N-2 / Sisa N-1 -> Bawaan -> Total -> Saldo Akhir
+//   Tgh N-1             -> Total -> Saldo Akhir
+//   Hak                 -> Sisa N, Total -> Saldo Akhir
+//   Tgh N               -> Terpakai -> Sisa N, Saldo Akhir
+//   Tgh N-2             -> (hanya catatan, tidak memengaruhi kolom lain)
+// Kalau rumus di backend/previewEdit berubah, UBAH PETA INI JUGA.
+// ================================================================
+const DAMPAK_EDIT = {
+    sisa_n2: ["bawaan", "total", "saldo"],
+    tgh_n2: [],
+    sisa_n1: ["bawaan", "total", "saldo"],
+    tgh_n1: ["total", "saldo"],
+    tgh_n0: ["terpakai", "sisa_n0", "saldo"],
+    hak: ["sisa_n0", "total", "saldo"],
+};
+
+// Cincin oranye untuk kolom yang terdampak (literal supaya terbaca Tailwind).
+const KELAS_DAMPAK = "ring-2 ring-offset-1 ring-orange-400";
+
+// Nama field draft yang sedang difokus pada baris yang diedit.
+const fokusEdit = ref(null);
+
+// 'fokus' | 'dampak' | 'redup' | null untuk satu sel di baris pegawai p.
+const statusDampak = (p, key) => {
+    if (!isEditing(p) || !fokusEdit.value) return null;
+    if (key === fokusEdit.value) return "fokus";
+    return DAMPAK_EDIT[fokusEdit.value]?.includes(key) ? "dampak" : "redup";
+};
+
+// Lacak kotak input yang sedang difokus (tabel & kartu HP memakai atribut
+// data-edit-field yang sama).
+// Setiap kali kotak input berpindah fokus (klik atau Tab), seleksi lama
+// DITUTUP dan hanya kotak baru yang aktif: sorotan dampak pindah ke kotak
+// yang baru difokus, sorotan rumus sebelumnya ditutup.
+const lacakFokusEdit = (e) => {
+    if (editingId.value === null) return;
+    const field = e.target?.getAttribute?.("data-edit-field");
+    if (!field) return;
+    fokusEdit.value = field;
+    rumusAktif.value = null;
+};
+
+// Keluar dari mode edit = sorotan dampak ikut hilang.
+watch(editingId, (id) => {
+    if (id === null) fokusEdit.value = null;
+});
+// ================= END FITUR SOROT DAMPAK EDIT =================
+
+// 'pilih' | 'sumber' | 'redup' | null untuk satu sel di baris pegawai p.
+const statusSel = (p, key) => {
+    const a = rumusAktif.value;
+    if (!a || a.id !== p.id) return null;
+    if (KUNCI_TARGET_RUMUS[a.kolom] === key) return "pilih";
+    if (SUMBER_RUMUS[a.kolom].includes(key)) return "sumber";
+    return "redup";
+};
+
+// Warna sel: warna target/sumber kalau sedang disorot, kalau tidak warna dasarnya.
+// Kolom yang terdampak edit (dan tidak sedang menjadi target/sumber rumus)
+// diberi cincin oranye.
+const kelasSel = (p, key, dasar) => {
+    const s = statusSel(p, key);
+    const a = rumusAktif.value;
+    if (s === "pilih") return WARNA_HASIL[a.kolom].pilih;
+    if (s === "sumber") return WARNA_HASIL[a.kolom].sumber;
+    if (statusDampak(p, key) === "dampak") return `${dasar} ${KELAS_DAMPAK}`;
+    return dasar;
+};
+
+// Hanya warna sorotan (tanpa warna dasar). Dipakai kotak INPUT yang sedang
+// diedit supaya warna sumber/target tetap terlihat. Kosong kalau tidak disorot.
+const kelasSorot = (p, key) => {
+    const s = statusSel(p, key);
+    const a = rumusAktif.value;
+    if (s === "pilih") return WARNA_HASIL[a.kolom].pilih;
+    if (s === "sumber") return WARNA_HASIL[a.kolom].sumber;
+    if (statusDampak(p, key) === "dampak") return KELAS_DAMPAK;
+    return "";
+};
+
+// Sel yang tidak ikut rumus meredup. Sel yang terdampak edit (atau yang
+// sedang difokus) tidak diredupkan; sel di luar dampak edit meredup lebih
+// ringan supaya tetap bisa diklik.
+const kelasRedup = (p, key) => {
+    const r = statusSel(p, key);
+    const d = statusDampak(p, key);
+    if (r === "pilih" || r === "sumber") return "";
+    if (d === "dampak" || d === "fokus") return "";
+    if (r === "redup") return "opacity-30";
+    if (d === "redup") return "opacity-40";
+    return "";
+};
+
+// Header kolom ikut berwarna (sama untuk semua baris). Selalu mengembalikan
+// background PENUH (tanpa opacity) karena header menempel (sticky) di atas
+// isi tabel; kalau transparan, isi baris akan tembus ke header.
+// Urutan: warna rumus (target/sumber) -> warna dampak edit (kotak difokus
+// hijau, kolom terdampak oranye) -> redup bila ada sorotan lain.
+const kelasHeader = (key) => {
+    const a = rumusAktif.value;
+    if (a) {
+        if (KUNCI_TARGET_RUMUS[a.kolom] === key)
+            return WARNA_HASIL[a.kolom].headerPilih;
+        if (SUMBER_RUMUS[a.kolom].includes(key))
+            return WARNA_HASIL[a.kolom].header;
+    }
+
+    const f = fokusEdit.value;
+    const sedangEdit = editingId.value !== null && Boolean(f);
+    if (sedangEdit) {
+        if (key === f) return "bg-emerald-100";
+        if (DAMPAK_EDIT[f]?.includes(key)) return "bg-orange-100";
+    }
+
+    if (a || sedangEdit) return "bg-slate-50 text-slate-300";
+    return "bg-slate-50";
+};
+
+// Teks operasi (+ / −) untuk kolom sumber, atau null.
+const lencanaOp = (p, key) => {
+    const a = rumusAktif.value;
+    if (statusSel(p, key) !== "sumber") return null;
+    return OPERATOR_SUMBER[a.kolom]?.[key] ?? null;
+};
+
+// Bulatan kecil di atas kolom: tanda +/− untuk kolom sumber rumus, atau
+// "Δ" oranye untuk kolom yang ikut berubah saat kotak input diedit.
+// Taruh di dalam elemen 'relative' (<td class="relative"> atau pembungkus
+// kartu). 'atas' = posisi vertikal.
+const LencanaOp = (propsLencana) => {
+    const posisi = `absolute left-1/2 ${propsLencana.atas || "top-0.5"} z-10 flex h-4 w-4 -translate-x-1/2 items-center justify-center rounded-full text-[11px] font-bold leading-none pointer-events-none`;
+
+    const teks = lencanaOp(propsLencana.p, propsLencana.kunci);
+    if (teks) {
+        return h(
+            "span",
+            {
+                class: `${posisi} ${WARNA_HASIL[rumusAktif.value.kolom].lencana}`,
+                "aria-hidden": "true",
+            },
+            teks,
+        );
+    }
+
+    // Kolom yang bukan sumber rumus tapi ikut berubah karena edit.
+    const s = statusSel(propsLencana.p, propsLencana.kunci);
+    if (
+        s !== "sumber" &&
+        s !== "pilih" &&
+        statusDampak(propsLencana.p, propsLencana.kunci) === "dampak"
+    ) {
+        return h(
+            "span",
+            {
+                class: `${posisi} bg-orange-500 text-white`,
+                title: "Ikut berubah saat kolom yang diedit diubah",
+                "aria-hidden": "true",
+            },
+            "Δ",
+        );
+    }
+
+    return null;
+};
+LencanaOp.props = ["p", "kunci", "atas"];
+
+// Kartu HP: kunci stat memakai '-' (mis. 'sisa-n2'), kunci rumus memakai '_'.
+const kunciRumus = (key) => key.replace(/-/g, "_");
+
+// Kartu HP: stat hasil hitungan yang bisa diklik -> kolom rumusnya.
+const KOLOM_RUMUS_KARTU = {
+    "sisa-n0": "sisa",
+    bawaan: "bawaan",
+    total: "total",
+    terpakai: "terpakai",
+};
+
+// Klik di luar area rumus (angka hasil / kapsul & input di baris) menutup
+// sorotan. Memakai composedPath() karena saat kapsul diklik ia langsung
+// berganti jadi <input>; elemen lamanya sudah lepas dari DOM sehingga
+// closest() akan keliru menganggapnya "di luar".
+const tutupRumusSaatKlikLuar = (e) => {
+    if (!rumusAktif.value) return;
+    const didalamArea = e
+        .composedPath()
+        .some((n) => n instanceof Element && n.hasAttribute("data-rumus-area"));
+    if (!didalamArea) rumusAktif.value = null;
+};
+// ================= END FITUR SOROT RUMUS =================
+
+// Isi draft dari data pegawai, lalu simpan kondisinya sebagai baseline
+// (isDirty = false sampai admin benar-benar mengubah isian).
+const isiDraftDariPegawai = (p) => {
+    saldoForm.clearErrors();
+    Object.assign(draft, {
+        sisa_n2: getSisaDuaTahunLalu(p),
+        tgh_n2: getSisaDitangguhkanN2(p),
+        sisa_n1: getSisaTahunLalu(p),
+        tgh_n1: getSisaDitangguhkanN1(p),
+        tgh_n0: getSisaDitangguhkanTahunIni(p),
+        hak: getSisaTahunIni(p),
+    });
+    snapshotDraft.value = JSON.stringify(draft);
+};
+
+// Ubah satu isian draft.
+const ubahDraft = (field, nilai) => {
+    draft[field] = nilai;
+};
+
+// Fokus ke kotak yang sedang terlihat (tabel & kartu sama-sama ada di DOM,
+// salah satunya disembunyikan CSS, jadi pilih yang offsetParent-nya ada).
+const fokuskan = async (field) => {
+    await nextTick();
+    const el = [
+        ...document.querySelectorAll(`[data-edit-field="${field}"]`),
+    ].find((e) => e.offsetParent !== null);
+    el?.focus();
+};
+
+// Masuk mode edit untuk satu baris. Kalau ada baris lain yang sedang
+// diedit, perubahannya dibuang (hanya satu baris aktif). Kalau baris ini
+// sudah diedit, hanya pindah fokus.
+// Kotak yang diklik langsung menjadi fokus sorotan dampak edit (menggantikan
+// seleksi kotak sebelumnya).
+const mulaiEdit = (pegawai, field = "hak") => {
+    if (isSavingSaldo.value) return;
+    // Klik kotak baru = sorotan rumus sebelumnya ditutup.
+    rumusAktif.value = null;
+    if (!isEditing(pegawai)) {
+        editingId.value = pegawai.id;
+        clearTimeout(timerPesanSukses);
+        pesanSukses.value = "";
+        isiDraftDariPegawai(pegawai);
+    }
+    fokusEdit.value = field;
+    fokuskan(field);
+};
+
+// Keluar dari mode edit tanpa menyimpan (sorotan ikut ditutup).
+const batalEdit = () => {
+    if (isSavingSaldo.value) return;
+    editingId.value = null;
+    rumusAktif.value = null;
+    fokusEdit.value = null;
     saldoForm.clearErrors();
 };
 
-// Setelah simpan, modal TETAP TERBUKA. Data pegawai terbaru diambil dari
-// props (yang sudah diperbarui Inertia), lalu dimasukkan lagi ke
-// 'selectedPegawai' supaya kartu KPI, kotak rumus, dan form ikut
-// menampilkan angka terbaru.
-const simpanSaldo = () => {
-    if (!selectedPegawai.value || isSavingSaldo.value) return;
+// Setelah simpan, baris kembali ke mode tampil. Data terbaru datang dari
+// props (diperbarui Inertia), sehingga angka di baris ikut berubah.
+// [TERPAKAI DIKUNCI] 'koreksi_saldo' & 'pakai_sistem' tidak dikirim lagi.
+const simpanSaldo = (pegawai) => {
+    if (!pegawai || !isEditing(pegawai) || isSavingSaldo.value) return;
+    if (!isDirty.value) return;
 
-    const idAktif = selectedPegawai.value.id;
+    const namaPegawai = pegawai.nama;
+    const idAktif = pegawai.id;
 
     saldoForm
-        .transform((data) => ({
-            ...data,
-            // Dicentang -> null (ikut sistem).
-            // Tidak dicentang -> angka apa adanya, TERMASUK 0.
-            // Kotak kosong saat tidak dicentang dikirim null, lalu ditolak
-            // backend dengan pesan error (tidak disimpan diam-diam jadi 0).
-            koreksi_saldo: data.pakai_sistem
-                ? null
-                : data.koreksi_saldo === "" || data.koreksi_saldo == null
-                  ? null
-                  : Number(data.koreksi_saldo),
-            // Ditangguhkan N-1 & N-2: aturan yang sama dengan koreksi terpakai.
-            ditangguhkan_n1: data.pakai_sistem_tgh_n1
-                ? null
-                : data.ditangguhkan_n1 === "" || data.ditangguhkan_n1 == null
-                  ? null
-                  : Number(data.ditangguhkan_n1),
-            ditangguhkan_n2: data.pakai_sistem_tgh_n2
-                ? null
-                : data.ditangguhkan_n2 === "" || data.ditangguhkan_n2 == null
-                  ? null
-                  : Number(data.ditangguhkan_n2),
+        .transform(() => ({
+            hak_tahun_ini: angka(draft.hak),
+            carry_forward_normal: angka(draft.sisa_n1),
+            sisa_cuti_dua_tahun_lalu: angka(draft.sisa_n2),
+            sisa_ditangguhkan_dua_tahun_lalu: angka(draft.tgh_n2),
+            sisa_ditangguhkan_tahun_lalu: angka(draft.tgh_n1),
+            sisa_ditangguhkan_tahun_ini: angka(draft.tgh_n0),
             tahun: tahunAktif.value,
         }))
         .put(route("admin.rekap-kuota.update-saldo", idAktif), {
             preserveScroll: true,
             preserveState: true,
             onSuccess: async () => {
-                // Tunggu props terbaru masuk, lalu segarkan isi modal
                 await nextTick();
-                const terbaru = props.dataPegawai?.data?.find(
-                    (p) => p.id === idAktif,
-                );
-                if (terbaru) {
-                    selectedPegawai.value = terbaru;
-                    isiSaldoFormDariPegawai(terbaru);
+                if (editingId.value === idAktif) {
+                    editingId.value = null;
                 }
-                pesanSukses.value =
-                    "Saldo berhasil disimpan. Angka di atas sudah diperbarui.";
+                // Simpan berhasil: sorotan rumus & dampak ikut ditutup.
+                rumusAktif.value = null;
+                fokusEdit.value = null;
+                saldoForm.clearErrors();
+                pesanSukses.value = `Saldo ${namaPegawai} tahun ${tahunAktif.value} berhasil disimpan.`;
                 clearTimeout(timerPesanSukses);
                 timerPesanSukses = setTimeout(
                     () => (pesanSukses.value = ""),
-                    4000,
+                    5000,
                 );
             },
         });
 };
-// ================= END FITUR EDIT SALDO CUTI PERORANGAN =================
 
-// Tab aktif di dalam popup: "saldo" (Kelola Saldo) atau "riwayat".
-// Selalu mulai dari tab Kelola Saldo saat popup dibuka.
-const modalTab = ref("saldo");
+// Tahun berganti / halaman atau hasil filter berganti: baris yang sedang
+// diedit mungkin sudah tidak ada, jadi mode edit dibatalkan.
+watch(filterTahun, () => {
+    editingId.value = null;
+    rumusAktif.value = null;
+    fokusEdit.value = null;
+    saldoForm.clearErrors();
+});
+
+watch(
+    () => props.dataPegawai?.data,
+    () => {
+        if (
+            rumusAktif.value &&
+            !daftarPegawaiHalamanIni.value.some(
+                (p) => p.id === rumusAktif.value.id,
+            )
+        ) {
+            rumusAktif.value = null;
+        }
+        if (editingId.value !== null && !pegawaiEdit.value) {
+            editingId.value = null;
+            saldoForm.clearErrors();
+        }
+    },
+);
+// ================= END FITUR EDIT SALDO INLINE =================
+
+// ================================================================
+// KARTU PEGAWAI (TAMPILAN MOBILE / TABLET)
+// Di layar di bawah breakpoint 'lg' (1024px), tabel 14 kolom diganti kartu per
+// pegawai supaya tidak perlu geser horizontal. Angkanya TETAP memakai
+// helper yang sama dengan tabel (satu sumber logika).
+// 'field' = nama field draft bila kotak itu bisa diedit inline.
+// 'kunci' = kotak dikunci (hanya tampil), yaitu Terpakai.
+//
+// URUTAN SAMA DENGAN TABEL: Sisa tahun ini (hitungan otomatis) dan Tgh tahun
+// ini (bagian dari Terpakai) diletakkan tepat di samping Tgh tahun lalu,
+// sebelum Bawaan.
+//
+// WARNA: kolom input (Sisa N-2, Sisa N-1, Tgh, Hak) putih netral, dan kolom
+// hasil hitungan memakai warna dari WARNA_HASIL (sama dengan tabel).
+// ================================================================
+const getStatKartu = (pegawai) => {
+    const t = tahunAktif.value;
+    const akhirTahun = (tahun) => String(tahun).slice(-2);
+    const netral = KELAS_INPUT_NETRAL;
+
+    return [
+        {
+            key: "sisa-n2",
+            label: `Sisa ${t - 2}`,
+            nilai: nilaiSisaN2(pegawai),
+            kelas: netral,
+            labelKelas: "text-slate-500",
+            field: "sisa_n2",
+            max: 12,
+        },
+        {
+            key: "tgh-n2",
+            label: `Tgh '${akhirTahun(t - 2)}`,
+            nilai: nilaiTghN2(pegawai),
+            kelas: netral,
+            labelKelas: "text-slate-500",
+            field: "tgh_n2",
+            title: KETERANGAN_TGH_N2,
+        },
+        {
+            key: "sisa-n1",
+            label: `Sisa ${t - 1}`,
+            nilai: nilaiSisaN1(pegawai),
+            kelas: netral,
+            labelKelas: "text-slate-500",
+            field: "sisa_n1",
+            max: 12,
+        },
+        {
+            key: "tgh-n1",
+            label: `Tgh '${akhirTahun(t - 1)}`,
+            nilai: nilaiTghN1(pegawai),
+            kelas: netral,
+            labelKelas: "text-slate-500",
+            field: "tgh_n1",
+            title: KETERANGAN_TGH_N1,
+        },
+        {
+            // Hitungan otomatis (Hak - Terpakai), tanpa 'field' = tidak bisa
+            // diedit. Bisa diklik untuk menyorot rumusnya.
+            key: "sisa-n0",
+            label: `Sisa ${t}`,
+            nilai: nilaiSisaTahunIni(pegawai),
+            kelas: WARNA_HASIL.sisa.dasar,
+            labelKelas: "text-slate-500",
+            title: KETERANGAN_SISA_TAHUN_INI.value,
+        },
+        {
+            key: "tgh-n0",
+            label: `Tgh '${akhirTahun(t)}`,
+            nilai: nilaiTghN0(pegawai),
+            kelas: netral,
+            labelKelas: "text-slate-500",
+            field: "tgh_n0",
+            title: KETERANGAN_TGH_TAHUN_INI.value,
+        },
+        {
+            key: "bawaan",
+            label: `Bawaan ${t}`,
+            nilai: nilaiBawaan(pegawai),
+            kelas: WARNA_HASIL.bawaan.dasar,
+            labelKelas: "text-slate-500",
+            title: KETERANGAN_BAWAAN.value,
+        },
+        {
+            key: "hak",
+            label: `Hak ${t}`,
+            nilai: nilaiHak(pegawai),
+            kelas: netral,
+            labelKelas: "text-slate-500",
+            field: "hak",
+            max: 365,
+        },
+        {
+            key: "total",
+            label: `Total ${t}`,
+            nilai: nilaiTotal(pegawai),
+            kelas: WARNA_HASIL.total.dasar,
+            labelKelas: "text-slate-500",
+        },
+        {
+            // [TERPAKAI DIKUNCI] tanpa 'field': hanya tampil. Diketuk untuk
+            // menyorot sumbernya (Tgh tahun ini).
+            key: "terpakai",
+            label: `Terpakai ${t}`,
+            nilai: nilaiTerpakai(pegawai),
+            kelas: WARNA_HASIL.terpakai.dasar,
+            labelKelas: "text-slate-500",
+            bintang: !isEditing(pegawai) && adaKoreksi(pegawai),
+            kunci: true,
+            title: titleTerpakai(pegawai),
+        },
+    ];
+};
+
+// State untuk Modal Rincian & Riwayat Cuti (hanya-baca, tanpa form edit)
+const showModal = ref(false);
+const selectedPegawai = ref(null);
+
+// Menyimpan ID riwayat cuti yang sedang di-expand (dibuka rinciannya)
+const expandedRiwayatId = ref(null);
+
+// ================================================================
+// HELPER DURASI (dipakai filter riwayat & kartu riwayat)
+// ================================================================
+// Hitung durasi hari otomatis dari tanggal (fallback), dipakai kalau
+// field 'jumlah_hari' kosong/tidak terisi di suatu pengajuan.
+const hitungDurasi = (mulai, selesai) => {
+    if (!mulai || !selesai) return 1;
+    const tglMulai = new Date(mulai);
+    const tglSelesai = new Date(selesai);
+    const selisihWaktu = tglSelesai - tglMulai;
+    const selisihHari = Math.ceil(selisihWaktu / (1000 * 60 * 60 * 24)) + 1;
+    return selisihHari > 0 ? selisihHari : 1;
+};
+
+const getDurasi = (item) => {
+    if (item?.jumlah_hari && item.jumlah_hari > 0) {
+        return item.jumlah_hari;
+    }
+    return hitungDurasi(item?.tanggal_mulai, item?.tanggal_selesai);
+};
+
+// ================================================================
+// FILTER RIWAYAT DI MODAL RINCIAN
+// Membantu Admin HR memverifikasi angka Terpakai sebelum mengoreksi
+// (koreksi dilakukan per bulan di Rekap Laporan):
+//   - Chip status (default: Disetujui, yang menjadi dasar hitungan Terpakai)
+//   - "Hanya Cuti Tahunan" (default aktif; jenis lain tidak mengurangi kuota)
+//   - Ringkasan total hari Cuti Tahunan disetujui di tahun aktif, dibanding
+//     angka sistem. Hari lintas tahun memakai 'hari_di_tahun_ini' dari backend.
+//
+// 'Ditangguhkan' (dibatalkan_ditangguhkan: dilakukan atasan, masuk Tgh) dan
+// 'Dibatalkan' (dibatalkan_reguler: dilakukan pemohon, hari dikembalikan)
+// adalah DUA chip terpisah. Key chip = nilai status asli, jadi
+// cocokStatusRiwayat cukup membandingkan langsung.
+// ================================================================
+const filterStatusRiwayat = ref("disetujui");
+const hanyaCutiTahunan = ref(true);
+
+const OPSI_STATUS_RIWAYAT = [
+    { key: "semua", label: "Semua" },
+    { key: "disetujui", label: "Disetujui" },
+    { key: "menunggu", label: "Menunggu" },
+    { key: "ditolak", label: "Ditolak" },
+    { key: "dibatalkan_ditangguhkan", label: "Ditangguhkan" },
+    { key: "dibatalkan_reguler", label: "Dibatalkan" },
+];
+
+const cocokStatusRiwayat = (riwayat, key) => {
+    if (key === "semua") return true;
+    if (key === "menunggu") return String(riwayat.status).includes("menunggu");
+    return riwayat.status === key;
+};
+
+// Riwayat setelah filter jenis cuti (dasar untuk hitungan jumlah per chip).
+const riwayatSesuaiJenis = computed(() => {
+    const semua = selectedPegawai.value?.pengajuan_cuti || [];
+    return hanyaCutiTahunan.value
+        ? semua.filter((r) => r.jenis_cuti === "Cuti Tahunan")
+        : semua;
+});
+
+const jumlahPerStatus = computed(() => {
+    const hasil = {};
+    OPSI_STATUS_RIWAYAT.forEach((o) => {
+        hasil[o.key] = riwayatSesuaiJenis.value.filter((r) =>
+            cocokStatusRiwayat(r, o.key),
+        ).length;
+    });
+    return hasil;
+});
+
+const riwayatTersaring = computed(() =>
+    riwayatSesuaiJenis.value.filter((r) =>
+        cocokStatusRiwayat(r, filterStatusRiwayat.value),
+    ),
+);
+
+// Total hari Cuti Tahunan disetujui yang jatuh di tahun aktif (hitungan
+// manual dari riwayat), dibandingkan dengan angka sistem dari backend.
+// (Angka sistem di sini = cuti disetujui saja, belum termasuk Tgh.)
+const ringkasanDisetujui = computed(() => {
+    const semua = selectedPegawai.value?.pengajuan_cuti || [];
+    const disetujui = semua.filter(
+        (r) => r.jenis_cuti === "Cuti Tahunan" && r.status === "disetujui",
+    );
+    const total = disetujui.reduce(
+        (jumlah, r) => jumlah + (Number(r.hari_di_tahun_ini) || 0),
+        0,
+    );
+    const sistem = selectedPegawai.value
+        ? getTerpakaiSistem(selectedPegawai.value)
+        : 0;
+
+    return { jumlahPengajuan: disetujui.length, total, sistem };
+});
+
+// Cuti lintas tahun: kapsul kecil "dihitung di {tahun}: n hari" hanya muncul
+// kalau hari yang dihitung berbeda dari durasi penuh pengajuan.
+const hariDihitungBeda = (riwayat) => {
+    const hitung = Number(riwayat?.hari_di_tahun_ini);
+    return Number.isFinite(hitung) && hitung !== Number(getDurasi(riwayat));
+};
+
+// Kelas warna kartu & badge per status (satu sumber supaya tidak berulang).
+// Ditangguhkan = oranye, Dibatalkan = abu-abu.
+const kelasGarisStatus = (status) => {
+    if (status === "disetujui")
+        return "border-l-4 border-l-emerald-500 hover:bg-emerald-100";
+    if (String(status).includes("menunggu"))
+        return "border-l-4 border-l-amber-500 hover:bg-amber-100";
+    if (status === "ditolak")
+        return "border-l-4 border-l-rose-500 hover:bg-rose-100";
+    if (status === "dibatalkan_ditangguhkan")
+        return "border-l-4 border-l-orange-400 hover:bg-orange-100";
+    if (status === "dibatalkan_reguler")
+        return "border-l-4 border-l-gray-400 hover:bg-gray-200";
+    return "border-l-4 border-l-gray-300 hover:bg-gray-100";
+};
+
+const kelasBadgeStatus = (status) => {
+    if (status === "disetujui")
+        return "bg-emerald-50 text-emerald-700 border border-emerald-200";
+    if (String(status).includes("menunggu"))
+        return "bg-amber-50 text-amber-700 border border-amber-200";
+    if (status === "ditolak")
+        return "bg-rose-50 text-rose-700 border border-rose-200";
+    if (status === "dibatalkan_ditangguhkan")
+        return "bg-orange-50 text-orange-700 border border-orange-200";
+    return "bg-gray-100 text-gray-700 border border-gray-200";
+};
 
 const openDetailModal = (pegawai) => {
     selectedPegawai.value = pegawai;
-    modalTab.value = "saldo";
     expandedRiwayatId.value = null; // Reset saat buka pegawai baru
-    clearTimeout(timerPesanSukses);
-    pesanSukses.value = "";
-    isiSaldoFormDariPegawai(pegawai);
-    saldoForm.clearErrors();
+    filterStatusRiwayat.value = "disetujui";
+    hanyaCutiTahunan.value = true;
     showModal.value = true;
 };
 
 const closeModal = () => {
     showModal.value = false;
     selectedPegawai.value = null;
-    modalTab.value = "saldo";
     expandedRiwayatId.value = null;
-    clearTimeout(timerPesanSukses);
-    pesanSukses.value = "";
-    saldoForm.clearErrors();
 };
 
 // Geser ke bawah pada handle/header (HP) untuk menutup bottom sheet.
@@ -554,7 +1271,8 @@ const statusLabels = {
     menunggu_l4: "Menunggu Kepala Biro Perencanaan (L4)",
     disetujui: "Disetujui",
     ditolak: "Ditolak",
-    dibatalkan_ditangguhkan: "Dibatalkan/Ditangguhkan",
+    dibatalkan_ditangguhkan: "Ditangguhkan",
+    dibatalkan_reguler: "Dibatalkan",
     kedaluwarsa: "Kedaluwarsa",
 };
 
@@ -636,24 +1354,6 @@ const getVisibleApprovalChain = (chainAsli, pegawai = null) => {
     return chain;
 };
 // ================= END APPROVAL CHAIN =================
-
-// Hitung durasi hari otomatis dari tanggal (fallback), dipakai kalau
-// field 'jumlah_hari' kosong/tidak terisi di suatu pengajuan.
-const hitungDurasi = (mulai, selesai) => {
-    if (!mulai || !selesai) return 1;
-    const tglMulai = new Date(mulai);
-    const tglSelesai = new Date(selesai);
-    const selisihWaktu = tglSelesai - tglMulai;
-    const selisihHari = Math.ceil(selisihWaktu / (1000 * 60 * 60 * 24)) + 1;
-    return selisihHari > 0 ? selisihHari : 1;
-};
-
-const getDurasi = (item) => {
-    if (item?.jumlah_hari && item.jumlah_hari > 0) {
-        return item.jumlah_hari;
-    }
-    return hitungDurasi(item?.tanggal_mulai, item?.tanggal_selesai);
-};
 
 // Helper pembersih kalimat keterangan (konsisten dengan AntreanApproval.vue)
 const formatKeteranganRapi = (text) => {
@@ -749,20 +1449,29 @@ const tutupDropdownSaatKlikLuar = (event) => {
 };
 
 // Tombol Esc menutup modal yang sedang terbuka (paling atas dulu).
+// Kalau tidak ada modal: Esc membatalkan mode edit inline (sekaligus
+// menutup sorotan rumus & dampak); kalau tidak sedang edit, Esc menutup
+// sorotan.
 const tutupModalSaatEsc = (event) => {
     if (event.key !== "Escape") return;
     if (isGenerateSaldoModalOpen.value) closeGenerateSaldoModal();
     else if (isImportModalOpen.value) closeImportModal();
     else if (showModal.value) closeModal();
+    else if (editingId.value !== null) batalEdit();
+    else if (rumusAktif.value) rumusAktif.value = null;
 };
 
 onMounted(() => {
     document.addEventListener("click", tutupDropdownSaatKlikLuar);
+    document.addEventListener("click", tutupRumusSaatKlikLuar);
     document.addEventListener("keydown", tutupModalSaatEsc);
+    document.addEventListener("focusin", lacakFokusEdit);
 });
 onBeforeUnmount(() => {
     document.removeEventListener("click", tutupDropdownSaatKlikLuar);
+    document.removeEventListener("click", tutupRumusSaatKlikLuar);
     document.removeEventListener("keydown", tutupModalSaatEsc);
+    document.removeEventListener("focusin", lacakFokusEdit);
     clearTimeout(timerPesanSukses);
     clearTimeout(timerPesanImpor);
     // Pastikan scroll halaman tidak tertinggal terkunci
@@ -826,7 +1535,7 @@ const linkBerikutnya = computed(() => {
 // ========================================== //
 // ---> FITUR: IMPOR KUOTA CUTI <---
 // ========================================== //
-// Modal terpisah dari modal Detail Riwayat, dengan useForm terpisah
+// Modal terpisah dari modal Rincian Riwayat, dengan useForm terpisah
 // karena payload-nya berupa file upload.
 const isImportModalOpen = ref(false);
 
@@ -887,40 +1596,134 @@ const submitImportForm = () => {
 // ========================================== //
 // Memanggil route 'admin.saldo.generate' (AdminController::
 // generateSaldoManual), yang menjalankan Artisan Command
-// 'saldo-cuti:generate-tahun-baru' — SAMA PERSIS dengan yang dijalankan
-// otomatis oleh Laravel Scheduler setiap 1 Januari.
+// 'saldo-cuti:generate-tahun-baru'. Tidak ada jadwal otomatis;
+// dompet tahun baru hanya dibuat lewat tombol ini.
 //
-// Memakai modal konfirmasi karena ini aksi massal untuk SEMUA pegawai.
-// Default tahun generate = 'currentYear + 1' (tahun kalender sebenarnya),
-// TIDAK mengikuti Filter Tahun.
+// Memakai modal DUA LANGKAH karena ini aksi massal untuk SEMUA pegawai:
+//   Langkah 1 : pilih tahun + penjelasan logika
+//   Langkah 2 : dialog konfirmasi akhir ("Ya, Generate Saldo {tahun}")
+// Request baru dikirim setelah langkah 2 dikonfirmasi.
+//
+// TAHUN TUJUAN DINAMIS: mengikuti tahun yang sedang dilihat di Filter
+// Tahun, yaitu 'tahunAktif + 1'.
+//   - Lihat 2026 -> tombol "Generate Saldo 2027"
+//   - Lihat 2027 -> tombol "Generate Saldo 2028"
+// Tombol HANYA aktif kalau tahun tujuan sama dengan tahun kalender depan
+// (currentYear + 1) — batas yang sama dengan validasi backend. Jadi saat
+// admin melihat 2027 (tujuan 2028), tombol tetap tampil dengan label yang
+// benar tetapi terkunci, dengan alasan yang dijelaskan di bawah judul.
 const isGenerateSaldoModalOpen = ref(false);
+// false = langkah 1 (pilih tahun), true = langkah 2 (konfirmasi akhir)
+const langkahKonfirmasiGenerate = ref(false);
+
+// Tahun yang akan digenerate = tahun yang sedang dilihat + 1.
+const tahunTujuanGenerate = computed(() => tahunAktif.value + 1);
+
+// Satu-satunya tahun yang diizinkan digenerate: tahun kalender depan.
+// Batas sebenarnya tetap divalidasi di backend.
+const TAHUN_GENERATE_DIIZINKAN = currentYear + 1;
 
 const generateSaldoForm = useForm({
-    tahun: currentYear + 1,
+    tahun: TAHUN_GENERATE_DIIZINKAN,
 });
 
-// Tahun yang boleh digenerate. Sengaja hanya tahun depan. Kalau suatu saat
-// perlu membuka tahun berjalan, cukup tambahkan currentYear ke daftar ini
-// (peringatan di modal akan muncul otomatis). Batas sebenarnya tetap
-// divalidasi di backend.
-// Dropdown di template membaca array ini lewat v-for.
-const pilihanTahunGenerate = [currentYear + 1];
+// Opsi dropdown di modal (dibaca template lewat v-for). Hanya berisi tahun
+// tujuan yang sedang aktif. Kalau suatu saat tahun berjalan perlu dibuka,
+// tambahkan currentYear ke daftar ini dan ke aturan 'tahunTujuanDiizinkan'
+// (peringatan di modal akan muncul otomatis).
+const pilihanTahunGenerate = computed(() => [tahunTujuanGenerate.value]);
+
+// Tahun tujuan sesuai tahun yang boleh digenerate?
+const tahunTujuanDiizinkan = computed(
+    () => tahunTujuanGenerate.value === TAHUN_GENERATE_DIIZINKAN,
+);
+
+// ---- Waktu yang diizinkan ----
+// Generate tahun depan baru dibuka mulai bulan ini (1 = Januari ...
+// 12 = Desember). Ubah angka ini bila aturan biro berbeda (mis. 12 kalau
+// hanya boleh pada Desember). Batas yang sama HARUS ada juga di backend
+// (AdminController::generateSaldoManual), karena jam browser bisa diubah
+// pengguna; pengecekan di sini hanya pengaman tampilan.
+const BULAN_BUKA_GENERATE = 12;
+const NAMA_BULAN_PANJANG = [
+    "Januari",
+    "Februari",
+    "Maret",
+    "April",
+    "Mei",
+    "Juni",
+    "Juli",
+    "Agustus",
+    "September",
+    "Oktober",
+    "November",
+    "Desember",
+];
+
+// Periode generate (pengaman tampilan; server juga mengecek).
+const dalamPeriodeGenerate = new Date().getMonth() + 1 >= BULAN_BUKA_GENERATE;
+
+// Tombol aktif kalau:
+//   1) tahun tujuan = tahun kalender depan,
+//   2) periodenya sudah dibuka, DAN
+//   3) masih ada pegawai aktif yang belum punya dompet tahun depan.
+const generateDibuka = computed(
+    () =>
+        tahunTujuanDiizinkan.value &&
+        dalamPeriodeGenerate &&
+        !props.sudahGenerateTahunDepan,
+);
+
+const alasanGenerateTutup = computed(() => {
+    const tujuan = tahunTujuanGenerate.value;
+
+    // Tahun yang dilihat terlalu jauh ke depan (mis. lihat 2027, tujuan 2028)
+    if (tujuan > TAHUN_GENERATE_DIIZINKAN) {
+        return `Saldo ${tujuan} belum bisa digenerate. Baru dibuka mulai 1 ${NAMA_BULAN_PANJANG[BULAN_BUKA_GENERATE - 1]} ${tujuan - 1}.`;
+    }
+
+    // Tahun yang dilihat sudah lewat (tujuan sudah berlalu)
+    if (tujuan < TAHUN_GENERATE_DIIZINKAN) {
+        return `Saldo ${tujuan} sudah melewati periode generate. Generate hanya untuk tahun ${TAHUN_GENERATE_DIIZINKAN}.`;
+    }
+
+    if (!dalamPeriodeGenerate) {
+        return `Generate saldo ${tujuan} baru dibuka mulai 1 ${NAMA_BULAN_PANJANG[BULAN_BUKA_GENERATE - 1]} ${currentYear}.`;
+    }
+
+    return `Semua pegawai aktif sudah punya saldo ${tujuan}.`;
+});
 
 const openGenerateSaldoModal = () => {
-    generateSaldoForm.tahun = currentYear + 1;
+    if (!generateDibuka.value) return;
+    generateSaldoForm.tahun = tahunTujuanGenerate.value;
     generateSaldoForm.clearErrors();
+    langkahKonfirmasiGenerate.value = false;
     isGenerateSaldoModalOpen.value = true;
 };
 
 const closeGenerateSaldoModal = () => {
     isGenerateSaldoModalOpen.value = false;
+    langkahKonfirmasiGenerate.value = false;
+};
+
+const lanjutKonfirmasiGenerate = () => {
+    generateSaldoForm.clearErrors();
+    langkahKonfirmasiGenerate.value = true;
 };
 
 const submitGenerateSaldo = () => {
+    if (!generateDibuka.value || generateSaldoForm.processing) return;
+
+    // Pastikan tahun yang dikirim selalu sama dengan label tombol.
+    generateSaldoForm.tahun = tahunTujuanGenerate.value;
+
     generateSaldoForm.post(route("admin.saldo.generate"), {
         preserveScroll: true,
-        onSuccess: () => {
-            closeGenerateSaldoModal();
+        onSuccess: () => closeGenerateSaldoModal(),
+        // Error tahun tampil di langkah 1, jadi kembalikan ke sana
+        onError: () => {
+            langkahKonfirmasiGenerate.value = false;
         },
     });
 };
@@ -953,6 +1756,24 @@ watch(adaModalTerbuka, (terbuka) => {
                  error. Komentar ini sengaja diletakkan DI DALAM div (bukan
                  sejajar di luarnya), supaya root slot tetap satu elemen. -->
             <div class="p-3 sm:p-6 bg-white rounded-xl shadow-sm">
+                <!-- Banner sukses Simpan Saldo inline. Hilang sendiri setelah
+                     5 detik dan bisa ditutup manual. -->
+                <div
+                    v-if="pesanSukses"
+                    role="status"
+                    class="mb-4 flex items-start justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 sm:px-4 py-3 text-sm text-emerald-800"
+                >
+                    <p class="min-w-0 break-words">{{ pesanSukses }}</p>
+                    <button
+                        type="button"
+                        @click="pesanSukses = ''"
+                        aria-label="Tutup pesan"
+                        class="shrink-0 px-1 text-lg leading-none font-bold text-emerald-700 hover:text-emerald-900 cursor-pointer"
+                    >
+                        &times;
+                    </button>
+                </div>
+
                 <!-- Banner hasil impor (flash 'success'). Bisa ditutup manual
                      dan hilang sendiri setelah 15 detik. -->
                 <div
@@ -978,6 +1799,7 @@ watch(adaModalTerbuka, (terbuka) => {
                  baris kedua tapi tetap rata kanan. Di HP / tablet kecil
                  tombol berada di bawah judul.
 
+
                  Skema warna tombol per jenis aksi:
                    - Impor           -> Blue
                    - Generate Saldo  -> Emerald
@@ -986,12 +1808,16 @@ watch(adaModalTerbuka, (terbuka) => {
                     class="flex flex-col gap-3 sm:gap-4 mb-4 sm:mb-5 lg:flex-row lg:items-center lg:justify-between"
                 >
                     <div class="lg:min-w-[14rem] lg:flex-1">
-                        <h2 class="text-base sm:text-lg font-bold text-gray-800">
+                        <h2
+                            class="text-base sm:text-lg font-bold text-gray-800"
+                        >
                             Rekap Kuota Detail Cuti
                         </h2>
                         <p class="text-xs sm:text-sm text-gray-500 mt-0.5">
-                            Lihat sisa, kelola saldo, dan riwayat pemakaian
-                            kuota cuti tahunan tiap pegawai.
+                            Lihat sisa, edit saldo langsung di baris (klik
+                            angkanya), dan riwayat pemakaian kuota cuti tahunan
+                            tiap pegawai. Cuti Terpakai hanya tampil di sini;
+                            ubah per bulan di Rekap Laporan.
                         </p>
                     </div>
 
@@ -1023,12 +1849,28 @@ watch(adaModalTerbuka, (terbuka) => {
                             Impor Kuota
                         </button>
 
-                        <!-- Tombol Generate Saldo Tahun Baru (Manual) -->
+                        <!-- Tombol Generate Saldo Tahun Baru (Manual).
+                             Label memuat TAHUN TUJUAN yang DINAMIS (tahun
+                             yang sedang dilihat + 1). Nonaktif kalau tahun
+                             tujuan bukan tahun kalender depan, di luar waktu
+                             yang diizinkan, atau kalau semua pegawai aktif
+                             sudah punya saldo tahun depan; alasannya tampil
+                             di bawah judul dan sebagai tooltip. -->
                         <button
                             type="button"
                             @click="openGenerateSaldoModal"
-                            title="Generate Saldo Tahun Baru (Manual)"
-                            class="inline-flex items-center justify-center gap-1.5 sm:gap-2 min-h-[44px] sm:min-h-0 px-3 sm:px-4 xl:px-5 py-2.5 bg-emerald-600 border border-transparent rounded-full font-semibold text-xs sm:text-sm text-white text-center leading-tight sm:whitespace-nowrap hover:bg-emerald-700 transition ease-in-out duration-150 shadow-sm cursor-pointer sm:flex-none"
+                            :disabled="!generateDibuka"
+                            :title="
+                                generateDibuka
+                                    ? `Generate Saldo ${tahunTujuanGenerate} (Manual)`
+                                    : alasanGenerateTutup
+                            "
+                            :aria-describedby="
+                                !generateDibuka
+                                    ? 'ket-generate-tutup'
+                                    : undefined
+                            "
+                            class="inline-flex items-center justify-center gap-1.5 sm:gap-2 min-h-[44px] sm:min-h-0 px-3 sm:px-4 xl:px-5 py-2.5 bg-emerald-600 border border-transparent rounded-full font-semibold text-xs sm:text-sm text-white text-center leading-tight sm:whitespace-nowrap hover:bg-emerald-700 transition ease-in-out duration-150 shadow-sm cursor-pointer sm:flex-none disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-emerald-600"
                         >
                             <svg
                                 class="w-4 h-4 shrink-0"
@@ -1043,7 +1885,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                     d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                                 />
                             </svg>
-                            Generate Tahun Baru
+                            Generate Saldo {{ tahunTujuanGenerate }}
                         </button>
 
                         <!-- Tombol Export — href memakai 'exportUrl' sehingga file
@@ -1070,6 +1912,18 @@ watch(adaModalTerbuka, (terbuka) => {
                         </a>
                     </div>
                 </div>
+
+                <!-- Alasan tombol Generate nonaktif. Tampil kalau tahun
+                     tujuan tidak diizinkan, di luar waktu yang diizinkan,
+                     DAN saat semua pegawai aktif sudah punya saldo tahun
+                     depan. -->
+                <p
+                    v-if="!generateDibuka"
+                    id="ket-generate-tutup"
+                    class="-mt-2 mb-4 text-xs text-amber-700 lg:text-right"
+                >
+                    {{ alasanGenerateTutup }}
+                </p>
 
                 <!-- KPI Cards (versi putih). Angka diambil dari prop 'kpi'
                  backend, dihitung dari SELURUH data hasil filter. -->
@@ -1105,7 +1959,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                 class="text-xl sm:text-2xl font-extrabold text-rose-500"
                                 >{{ kpiRataRataTerpakai }}</span
                             >
-                            <span class="text-xs sm:text-sm font-medium text-slate-400"
+                            <span
+                                class="text-xs sm:text-sm font-medium text-slate-400"
                                 >hari</span
                             >
                         </div>
@@ -1124,7 +1979,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                 class="text-xl sm:text-2xl font-extrabold text-emerald-500"
                                 >{{ kpiRataRataSaldoAkhir }}</span
                             >
-                            <span class="text-xs sm:text-sm font-medium text-slate-400"
+                            <span
+                                class="text-xs sm:text-sm font-medium text-slate-400"
                                 >hari</span
                             >
                         </div>
@@ -1143,7 +1999,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                 class="text-xl sm:text-2xl font-extrabold text-blue-600"
                                 >{{ kpiAkumulasiPenuh }}</span
                             >
-                            <span class="text-xs sm:text-sm font-medium text-slate-400"
+                            <span
+                                class="text-xs sm:text-sm font-medium text-slate-400"
                                 >orang</span
                             >
                         </div>
@@ -1167,7 +2024,9 @@ watch(adaModalTerbuka, (terbuka) => {
                     class="grid grid-cols-[minmax(0,1fr)_auto] gap-2 mb-3 lg:flex lg:items-center"
                 >
                     <!-- Search (dengan tombol hapus saat ada isi) -->
-                    <div class="relative order-1 min-w-0 lg:min-w-[12rem] lg:flex-1">
+                    <div
+                        class="relative order-1 min-w-0 lg:min-w-[12rem] lg:flex-1"
+                    >
                         <div
                             class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
                         >
@@ -1289,7 +2148,10 @@ watch(adaModalTerbuka, (terbuka) => {
                             role="listbox"
                             class="absolute right-0 top-full z-30 mt-1 max-h-60 w-full min-w-[8rem] overflow-y-auto overscroll-contain rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
                         >
-                            <li v-for="tahun in daftarTahunPilihan" :key="tahun">
+                            <li
+                                v-for="tahun in daftarTahunPilihan"
+                                :key="tahun"
+                            >
                                 <button
                                     type="button"
                                     role="option"
@@ -1355,7 +2217,8 @@ watch(adaModalTerbuka, (terbuka) => {
                             <svg
                                 class="w-3.5 h-3.5 text-gray-500 transition-transform"
                                 :class="{
-                                    'rotate-180': dropdownTerbuka === 'kelompok',
+                                    'rotate-180':
+                                        dropdownTerbuka === 'kelompok',
                                 }"
                                 fill="none"
                                 stroke="currentColor"
@@ -1426,7 +2289,9 @@ watch(adaModalTerbuka, (terbuka) => {
                         :key="chip.key"
                         class="inline-flex max-w-full items-center gap-1.5 bg-emerald-50 text-emerald-700 font-semibold pl-3 pr-2 py-1 rounded-full"
                     >
-                        <span class="min-w-0 break-words">{{ chip.label }}</span>
+                        <span class="min-w-0 break-words">{{
+                            chip.label
+                        }}</span>
                         <button
                             type="button"
                             @click="chip.clear()"
@@ -1472,9 +2337,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                 ></path>
                             </svg>
                         </div>
-                        <p
-                            class="text-sm font-semibold text-gray-600 max-w-sm"
-                        >
+                        <p class="text-sm font-semibold text-gray-600 max-w-sm">
                             Tidak ada data pegawai ditemukan untuk tahun
                             {{ tahunAktif }}.
                         </p>
@@ -1504,18 +2367,47 @@ watch(adaModalTerbuka, (terbuka) => {
 
                 <!-- ===================== KARTU PEGAWAI (HP & TABLET) =====================
                      Tampil di bawah breakpoint 'lg' (1024px). Satu kartu per pegawai:
-                     nama + Saldo Akhir di atas, 8 angka rincian di tengah
-                     (grid 4 kolom), tombol Kelola Kuota di bawah.
-                     Tanda * = Terpakai dikoreksi manual Admin HR. -->
+                     nama + Saldo Akhir di atas, angka rincian di tengah
+                     (grid 4 kolom), tombol aksi di bawah.
+                     EDIT INLINE: ketuk salah satu angka yang bisa diedit,
+                     lalu Sisa N-2, Tgh, Sisa N-1, dan Hak berubah
+                     menjadi input; Bawaan, Sisa tahun ini, Total, Terpakai, dan
+                     Saldo Akhir menampilkan pratinjau langsung.
+                     Ikon pensil di label = kotak bisa diedit (kotak yang
+                     punya 'field' di getStatKartu).
+                     [TERPAKAI DIKUNCI] Ikon gembok di label Terpakai = hanya
+                     tampil; ubah per bulan di Rekap Laporan (ada tautannya).
+                     Tanda * = Terpakai dikoreksi Admin HR.
+                     SOROT RUMUS: ketuk Sisa tahun ini, Bawaan, Total, Terpakai,
+                     atau Saldo Akhir -> kotak sumbernya terisi warna yang sama
+                     dan diberi tanda + / −, kotak lain meredup. Sorotan TETAP
+                     menyala saat kotak sumber diketuk untuk diedit.
+                     SOROT DAMPAK EDIT: saat sebuah kotak difokus untuk diedit,
+                     kotak yang ikut berubah diberi cincin oranye + tanda Δ. -->
                 <p
                     v-if="punyaData"
                     class="mb-2 text-[11px] leading-relaxed text-slate-500 lg:hidden"
                 >
-                    <span class="font-semibold text-orange-600">Tgh</span> =
-                    cuti ditangguhkan (saldo sudah dikembalikan, hanya
-                    informasi).
+                    <span class="font-semibold text-slate-700">Tgh</span> = cuti
+                    ditangguhkan. Tgh tahun {{ tahunAktif }} sudah termasuk
+                    dalam Terpakai.
                     <span class="font-semibold text-amber-600">*</span> =
-                    Terpakai dikoreksi manual Admin HR.
+                    Terpakai dikoreksi Admin HR di Rekap Laporan.
+                    <span class="inline-block align-middle"
+                        ><IkonPensil
+                    /></span>
+                    = bisa diedit, ketuk angkanya.
+                    <span class="inline-block align-middle"
+                        ><IkonGembok
+                    /></span>
+                    = Terpakai dikunci, ubah di Rekap Laporan. Ketuk Sisa
+                    {{ tahunAktif }}, Bawaan, Total, Terpakai, atau Saldo Akhir
+                    untuk menyorot kolom sumber rumusnya.
+                    <span
+                        class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-orange-500 align-middle text-[11px] font-bold leading-none text-white"
+                        >Δ</span
+                    >
+                    = ikut berubah saat kotak yang sedang diedit diubah.
                 </p>
                 <div
                     v-if="punyaData"
@@ -1524,7 +2416,12 @@ watch(adaModalTerbuka, (terbuka) => {
                     <div
                         v-for="(pegawai, index) in dataPegawai.data"
                         :key="pegawai.id"
-                        class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
+                        class="rounded-xl border bg-white p-3 shadow-sm transition-colors"
+                        :class="
+                            isEditing(pegawai)
+                                ? 'border-emerald-400 ring-2 ring-emerald-200 bg-emerald-50/30 md:col-span-2'
+                                : 'border-slate-200'
+                        "
                     >
                         <div class="flex items-start gap-2.5">
                             <span
@@ -1552,83 +2449,264 @@ watch(adaModalTerbuka, (terbuka) => {
                                 >
                                     Saldo Akhir
                                 </p>
-                                <span
-                                    class="mt-1 inline-block min-w-[40px] rounded-md border border-slate-900 bg-slate-800 px-2.5 py-1 text-sm font-extrabold text-white shadow-sm"
+                                <!-- Saldo Akhir: ketuk untuk menyorot rumus -->
+                                <button
+                                    type="button"
+                                    data-rumus-area
+                                    @click="toggleRumus(pegawai, 'saldo')"
+                                    :aria-pressed="
+                                        rumusDibuka(pegawai, 'saldo')
+                                    "
+                                    :title="KETERANGAN_KLIK_RUMUS"
+                                    class="mt-1 inline-block min-w-[40px] cursor-pointer rounded-md border px-2.5 py-1 text-sm font-extrabold shadow-sm transition"
+                                    :class="
+                                        kelasSel(
+                                            pegawai,
+                                            'saldo',
+                                            WARNA_HASIL.saldo.dasar,
+                                        )
+                                    "
                                 >
-                                    {{ getSaldoAkhir(pegawai) }}
-                                </span>
+                                    {{ nilaiSaldoAkhir(pegawai) }}
+                                </button>
                             </div>
                         </div>
 
                         <div
                             class="mt-3 grid grid-cols-4 gap-x-2 gap-y-2.5 border-t border-slate-100 pt-3"
                         >
+                            <!-- data-rumus-area: klik di dalam kotak ini TIDAK
+                                 menutup sorotan rumus (kotak berganti jadi
+                                 input saat diketuk). -->
                             <div
                                 v-for="stat in getStatKartu(pegawai)"
                                 :key="stat.key"
-                                class="flex flex-col items-center gap-1 text-center"
+                                data-rumus-area
+                                class="relative flex flex-col items-center gap-1 rounded-lg p-0.5 text-center transition"
+                                :class="
+                                    kelasRedup(pegawai, kunciRumus(stat.key))
+                                "
                                 :title="stat.title"
                             >
+                                <!-- Tanda + / − untuk kolom sumber rumus, atau
+                                     Δ untuk kolom yang ikut berubah saat edit -->
+                                <LencanaOp
+                                    :p="pegawai"
+                                    :kunci="kunciRumus(stat.key)"
+                                    atas="-top-2"
+                                />
+
+                                <!-- Label + ikon pensil (kotak yang bisa
+                                     diedit) atau ikon gembok (kotak dikunci) -->
                                 <span
-                                    class="text-[10px] font-semibold leading-tight"
+                                    class="inline-flex items-center justify-center gap-0.5 text-[10px] font-semibold leading-tight"
                                     :class="stat.labelKelas"
                                 >
                                     {{ stat.label }}
+                                    <IkonPensil v-if="stat.field" />
+                                    <IkonGembok v-else-if="stat.kunci" />
                                 </span>
-                                <span
-                                    class="inline-block min-w-[32px] rounded-md border px-2 py-1 text-xs font-bold"
-                                    :class="stat.kelas"
+
+                                <!-- Kotak yang bisa diedit: ketuk -> semua kotak
+                                     editable di kartu ini jadi input -->
+                                <SelAngka
+                                    v-if="stat.field"
+                                    besar
+                                    :field="stat.field"
+                                    :model-value="draft[stat.field]"
+                                    @update:model-value="
+                                        ubahDraft(stat.field, $event)
+                                    "
+                                    :nilai="stat.nilai"
+                                    :editing="isEditing(pegawai)"
+                                    :bintang="stat.bintang"
+                                    :label="stat.label"
+                                    :max="stat.max"
+                                    :title="stat.title"
+                                    :kelas="
+                                        kelasSel(
+                                            pegawai,
+                                            kunciRumus(stat.key),
+                                            stat.kelas,
+                                        )
+                                    "
+                                    :sorot="
+                                        kelasSorot(
+                                            pegawai,
+                                            kunciRumus(stat.key),
+                                        )
+                                    "
+                                    @mulai="mulaiEdit(pegawai, stat.field)"
+                                    @simpan="simpanSaldo(pegawai)"
+                                />
+                                <!-- Hasil hitungan yang bisa diklik: Sisa N,
+                                     Bawaan, Total, Terpakai (dikunci) -->
+                                <button
+                                    v-else-if="KOLOM_RUMUS_KARTU[stat.key]"
+                                    type="button"
+                                    data-rumus-area
+                                    @click="
+                                        toggleRumus(
+                                            pegawai,
+                                            KOLOM_RUMUS_KARTU[stat.key],
+                                        )
+                                    "
+                                    :aria-pressed="
+                                        rumusDibuka(
+                                            pegawai,
+                                            KOLOM_RUMUS_KARTU[stat.key],
+                                        )
+                                    "
+                                    :title="stat.title || KETERANGAN_KLIK_RUMUS"
+                                    class="inline-block min-w-[36px] cursor-pointer rounded-md border px-2 py-1 text-xs font-bold transition"
+                                    :class="
+                                        kelasSel(
+                                            pegawai,
+                                            kunciRumus(stat.key),
+                                            stat.kelas,
+                                        )
+                                    "
                                 >
                                     {{ stat.nilai
                                     }}<sup
                                         v-if="stat.bintang"
-                                        class="font-black text-amber-600"
+                                        class="ml-0.5 font-black text-amber-600"
                                         >*</sup
                                     >
+                                </button>
+                                <span
+                                    v-else
+                                    class="inline-block min-w-[36px] rounded-md border px-2 py-1 text-xs font-bold"
+                                    :class="stat.kelas"
+                                >
+                                    {{ stat.nilai }}
                                 </span>
                             </div>
+                        </div>
+
+                        <!-- Info Terpakai dikunci + error validasi (hanya saat
+                             baris ini diedit). -->
+                        <div
+                            v-if="isEditing(pegawai)"
+                            data-rumus-area
+                            class="mt-3 space-y-2 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2"
+                        >
+                            <p class="text-xs text-amber-800">
+                                Terpakai dikunci di sini.
+                                <Link
+                                    :href="urlRekapLaporan(pegawai)"
+                                    class="font-semibold underline"
+                                    >Ubah per bulan di Rekap Laporan</Link
+                                >.
+                            </p>
+                            <ul
+                                v-if="daftarErrorEdit.length > 0"
+                                class="space-y-0.5 text-[11px] text-red-600"
+                            >
+                                <li
+                                    v-for="(pesan, i) in daftarErrorEdit"
+                                    :key="i"
+                                >
+                                    {{ pesan }}
+                                </li>
+                            </ul>
                         </div>
 
                         <!-- Rumus ringkas + tombol aksi dalam satu baris -->
                         <div
                             class="mt-3 flex items-center justify-between gap-2 border-t border-slate-100 pt-3"
                         >
-                            <p class="min-w-0 text-[11px] leading-snug text-slate-500">
+                            <p
+                                class="min-w-0 text-[11px] leading-snug text-slate-500"
+                            >
                                 Total
                                 <span class="font-semibold text-slate-700">{{
-                                    getTotalTersedia(pegawai)
+                                    nilaiTotal(pegawai)
                                 }}</span>
                                 &minus; Terpakai
                                 <span class="font-semibold text-slate-700">{{
-                                    pegawai.cuti_terpakai || 0
+                                    nilaiTerpakai(pegawai)
                                 }}</span>
                                 = Saldo
                                 <span class="font-bold text-slate-800">{{
-                                    getSaldoAkhir(pegawai)
+                                    nilaiSaldoAkhir(pegawai)
                                 }}</span>
                             </p>
-                            <button
-                                @click="openDetailModal(pegawai)"
-                                type="button"
-                                class="inline-flex min-h-[40px] shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-full border border-gray-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 hover:text-gray-900"
-                                title="Lihat Riwayat & Kelola Kuota"
+
+                            <!-- Mode tampil: Riwayat + ubah Terpakai -->
+                            <div
+                                v-if="!isEditing(pegawai)"
+                                class="flex shrink-0 items-center gap-1.5"
                             >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    class="h-4 w-4 text-gray-500"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                    stroke="currentColor"
+                                <Link
+                                    :href="urlRekapLaporan(pegawai)"
+                                    class="inline-flex min-h-[40px] min-w-[40px] cursor-pointer items-center justify-center rounded-full border border-gray-300 bg-white px-2.5 py-1.5 text-gray-600 shadow-sm transition hover:bg-gray-50 hover:text-gray-900"
+                                    title="Ubah Terpakai per bulan di Rekap Laporan"
+                                    aria-label="Ubah Terpakai di Rekap Laporan"
                                 >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                    />
-                                </svg>
-                                Kelola
-                            </button>
+                                    <svg
+                                        class="h-4 w-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                        />
+                                    </svg>
+                                </Link>
+                                <button
+                                    @click="openDetailModal(pegawai)"
+                                    type="button"
+                                    class="inline-flex min-h-[40px] min-w-[40px] cursor-pointer items-center justify-center rounded-full border border-gray-300 bg-white px-2.5 py-1.5 text-gray-600 shadow-sm transition hover:bg-gray-50 hover:text-gray-900"
+                                    title="Lihat Rincian & Riwayat"
+                                    aria-label="Lihat Rincian dan Riwayat"
+                                >
+                                    <svg
+                                        class="h-4 w-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                        />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <!-- Mode edit: Batal + Simpan -->
+                            <div
+                                v-else
+                                class="flex shrink-0 items-center gap-1.5"
+                            >
+                                <button
+                                    type="button"
+                                    @click="batalEdit"
+                                    :disabled="isSavingSaldo"
+                                    class="min-h-[40px] cursor-pointer rounded-full bg-gray-200 px-3.5 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Batal
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="simpanSaldo(pegawai)"
+                                    :disabled="isSavingSaldo || !isDirty"
+                                    class="inline-flex min-h-[40px] cursor-pointer items-center justify-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    {{
+                                        isSavingSaldo
+                                            ? "Menyimpan..."
+                                            : "Simpan"
+                                    }}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -1638,16 +2716,69 @@ watch(adaModalTerbuka, (terbuka) => {
           Semua label tahun di header DINAMIS mengikuti Filter Tahun
           ('tahunAktif'). Setiap angka dibungkus "kapsul" warna dengan
           min-w tetap supaya sejajar; Saldo Akhir diberi background gelap
-          sebagai fokus utama. Dua kolom Tgh hanya informasi.
+          sebagai fokus utama.
+
+
+          HEADER FREEZE: wadah tabel punya tinggi maksimal dan scroll
+          sendiri (overflow-auto + max-h), sehingga header 'sticky top-0'
+          tetap terlihat saat baris digulir. Kolom No & Nama menempel di
+          kiri DAN header-nya menempel di atas (z-30, di atas sel isi z-10).
+
+
+          URUTAN KOLOM: No, Nama, Sisa N-2, Tgh N-2, Sisa N-1, Tgh N-1,
+          Sisa N (hitungan otomatis), Tgh N (bagian dari Terpakai), Bawaan, Hak,
+          Total, Terpakai, Saldo Akhir, Aksi.
+
+
+          ATURAN Tgh: Tgh N (tahun yang dilihat) tetap tercatat dan SUDAH
+          TERMASUK dalam Terpakai N (Terpakai = cuti terpakai + Tgh N), jadi
+          tidak dikurangkan lagi dari Sisa N dan Saldo Akhir.
+          Tgh N-1 MENAMBAH Total Tersedia. Tgh N-2 hanya catatan Admin HR.
+
+
+          PENANDA KOLOM BISA DIEDIT: ikon pensil kecil di header kolom
+          Sisa N-2, Tgh N-2, Sisa N-1, Tgh N-1, Tgh N, dan Hak.
+          Kolom hitungan otomatis (Sisa N, Bawaan, Total, Saldo Akhir) tidak
+          diberi ikon.
+          [TERPAKAI DIKUNCI] Kolom Terpakai diberi ikon GEMBOK: hanya tampil,
+          diubah per bulan di Rekap Laporan (ikon tautan di sebelah angkanya).
+
+
+          WARNA KOLOM: kolom input (Sisa N-2, Tgh, Sisa N-1, Hak) putih
+          netral. Hanya kolom hasil yang berwarna: Sisa N (sky), Bawaan
+          (emerald), Total (indigo), Terpakai (rose), Saldo Akhir (gelap).
+
+
+          SOROT RUMUS: angka Sisa N, Bawaan, Total, Terpakai, dan Saldo Akhir
+          bisa diklik. Angka yang diklik terisi penuh, kolom sumber rumusnya
+          terisi warna yang sama dan diberi tanda + / −, kolom lain meredup,
+          dan header kolom sumber ikut berwarna. Sorotan TETAP menyala saat
+          kolom sumber (mis. Hak) diklik untuk diedit, dan ditutup oleh
+          Simpan / Batal / Esc / klik di luar. Mengklik angka hasil juga
+          melepas seleksi (sorot dampak) kotak input sebelumnya.
+
+
+          SOROT DAMPAK EDIT: saat sebuah kotak input difokus (klik atau Tab),
+          kolom yang ikut berubah diberi cincin oranye + lencana Δ, header-nya
+          berwarna oranye, dan kolom lain meredup. Berjalan bersamaan dengan
+          sorot rumus.
+
+
+          EDIT INLINE: klik salah satu kapsul yang bisa diedit (Sisa, Tgh,
+          Hak) -> semua kapsul editable di baris itu menjadi input
+          seukuran kapsul. Sisa N, Bawaan, Total, Terpakai, dan Saldo Akhir
+          menampilkan pratinjau langsung. Kolom Aksi berubah jadi Simpan
+          (centang) dan Batal (X). Enter = Simpan, Esc = Batal.
+
 
           Tampilan disamakan dengan Rekap Laporan: kartu ber-border membulat,
           kolom No & Nama menempel (sticky) di kiri saat tabel digeser, efek
-          hover ungu. Tabel 'w-full' dan rapat ('px-2 py-3') — hanya bisa
-          digeser kalau layar tidak muat. Di layar kecil diganti kartu di atas.
+          hover ungu. Tabel 'w-full' dan rapat ('px-2 py-3'). Di layar kecil
+          diganti kartu di atas.
         -->
                 <div
                     v-if="punyaData"
-                    class="hidden lg:block overflow-x-auto rounded-lg border border-slate-200 bg-white"
+                    class="hidden lg:block overflow-auto max-h-[calc(100dvh-10rem)] rounded-lg border border-slate-200 bg-white"
                 >
                     <table class="w-full text-left border-collapse">
                         <thead>
@@ -1655,222 +2786,920 @@ watch(adaModalTerbuka, (terbuka) => {
                                 class="bg-slate-50 border-b border-slate-200 text-[10px] leading-tight text-slate-500 uppercase tracking-wide font-bold align-middle"
                             >
                                 <th
-                                    class="sticky left-0 z-20 bg-slate-50 w-12 min-w-[3rem] px-2 py-3 text-center border-r border-slate-200"
+                                    class="sticky left-0 top-0 z-30 bg-slate-50 w-12 min-w-[3rem] px-2 py-3 text-center border-r border-slate-200 shadow-[inset_0_-1px_0_0_#e2e8f0]"
                                 >
                                     No
                                 </th>
                                 <th
-                                    class="sticky left-12 z-20 bg-slate-50 min-w-[190px] px-3 py-3 border-r-2 border-slate-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)]"
+                                    class="sticky left-12 top-0 z-30 bg-slate-50 min-w-[190px] px-3 py-3 border-r-2 border-slate-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08),inset_0_-1px_0_0_#e2e8f0]"
                                 >
                                     Nama Pegawai
                                 </th>
-                                <th class="px-2 py-3 text-center">
-                                    Sisa {{ tahunAktif - 2 }}
+                                <!-- Sisa N-2 (bisa diedit) -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('sisa_n2')"
+                                    :title="KETERANGAN_BISA_DIEDIT"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                    >
+                                        Sisa {{ tahunAktif - 2 }}
+                                        <IkonPensil />
+                                    </span>
+                                </th>
+                                <!-- Tgh N-2 (bisa diedit, hanya catatan) -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('tgh_n2')"
+                                    :title="`${KETERANGAN_TGH_N2}. ${KETERANGAN_BISA_DIEDIT}`"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                    >
+                                        Tgh '{{
+                                            (tahunAktif - 2)
+                                                .toString()
+                                                .slice(-2)
+                                        }}
+                                        <IkonPensil />
+                                    </span>
+                                </th>
+                                <!-- Sisa N-1 (bisa diedit) -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('sisa_n1')"
+                                    :title="KETERANGAN_BISA_DIEDIT"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                    >
+                                        Sisa {{ tahunAktif - 1 }}
+                                        <IkonPensil />
+                                    </span>
+                                </th>
+                                <!-- Tgh N-1 (bisa diedit, menambah Total Tersedia) -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('tgh_n1')"
+                                    :title="`${KETERANGAN_TGH_N1}. ${KETERANGAN_BISA_DIEDIT}`"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                    >
+                                        Tgh '{{
+                                            (tahunAktif - 1)
+                                                .toString()
+                                                .slice(-2)
+                                        }}
+                                        <IkonPensil />
+                                    </span>
+                                </th>
+                                <!-- Sisa N: hitungan otomatis (Hak - Terpakai),
+                                     TIDAK bisa diedit, jadi tanpa ikon pensil.
+                                     Angkanya bisa diklik untuk menyorot rumus. -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('sisa_n0')"
+                                    :title="KETERANGAN_SISA_TAHUN_INI"
+                                >
+                                    Sisa {{ tahunAktif }}
+                                </th>
+                                <!-- Ditangguhkan tahun ini (tetap tercatat, sudah
+                                     termasuk dalam Terpakai): tepat di samping
+                                     Sisa tahun ini (bisa diedit) -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('tgh_n0')"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                        :title="KETERANGAN_BISA_DIEDIT"
+                                    >
+                                        <span
+                                            >Tgh '{{
+                                                tahunAktif.toString().slice(-2)
+                                            }}</span
+                                        >
+                                        <IkonPensil />
+                                        <span
+                                            role="img"
+                                            tabindex="0"
+                                            :title="KETERANGAN_TGH_TAHUN_INI"
+                                            :aria-label="
+                                                KETERANGAN_TGH_TAHUN_INI
+                                            "
+                                            class="inline-flex h-3.5 w-3.5 shrink-0 cursor-help items-center justify-center rounded-full border border-slate-400 text-[9px] font-bold normal-case leading-none text-slate-500"
+                                            >?</span
+                                        >
+                                    </span>
                                 </th>
                                 <th
-                                    class="px-2 py-3 text-center text-orange-600"
-                                    :title="KETERANGAN_TGH"
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('bawaan')"
+                                    :title="KETERANGAN_BAWAAN"
                                 >
-                                    Tgh '{{
-                                        (tahunAktif - 2).toString().slice(-2)
-                                    }}
-                                </th>
-                                <th class="px-2 py-3 text-center">
-                                    Sisa {{ tahunAktif - 1 }}
-                                </th>
-                                <th
-                                    class="px-2 py-3 text-center text-orange-600"
-                                    :title="KETERANGAN_TGH"
-                                >
-                                    Tgh '{{
-                                        (tahunAktif - 1).toString().slice(-2)
-                                    }}
-                                </th>
-                                <th class="px-2 py-3 text-center">
                                     Bawaan Eligible {{ tahunAktif }}
                                 </th>
-                                <th class="px-2 py-3 text-center">
-                                    Hak {{ tahunAktif }}
+                                <!-- Hak (bisa diedit) -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('hak')"
+                                    :title="KETERANGAN_BISA_DIEDIT"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                    >
+                                        Hak {{ tahunAktif }}
+                                        <IkonPensil />
+                                    </span>
                                 </th>
-                                <th class="px-2 py-3 text-center">
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('total')"
+                                >
                                     Total Tersedia {{ tahunAktif }}
                                 </th>
-                                <th class="px-2 py-3 text-center">
-                                    Terpakai {{ tahunAktif }}
+                                <!-- [TERPAKAI DIKUNCI] ikon gembok: hanya tampil -->
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('terpakai')"
+                                    :title="KETERANGAN_TERPAKAI_DIKUNCI"
+                                >
+                                    <span
+                                        class="inline-flex items-center justify-center gap-1"
+                                    >
+                                        Terpakai {{ tahunAktif }}
+                                        <IkonGembok />
+                                    </span>
                                 </th>
-                                <th class="px-2 py-3 text-center text-slate-800">
+                                <th
+                                    class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                    :class="kelasHeader('saldo')"
+                                >
                                     Saldo Akhir {{ tahunAktif }}
                                 </th>
-                                <th class="px-2 py-3 text-center">Aksi</th>
+                                <th
+                                    class="sticky top-0 z-20 bg-slate-50 px-2 py-3 text-center min-w-[6.5rem] shadow-[inset_0_-1px_0_0_#e2e8f0]"
+                                >
+                                    Aksi
+                                </th>
                             </tr>
                         </thead>
                         <tbody class="text-sm align-middle">
-                            <tr
+                            <template
                                 v-for="(pegawai, index) in dataPegawai.data"
                                 :key="pegawai.id"
-                                class="group border-b border-slate-100 hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)] transition-all duration-150"
                             >
-                                <!-- No urut (ikut halaman paginasi) -->
-                                <td
-                                    class="sticky left-0 z-10 bg-white group-hover:bg-violet-50 w-12 min-w-[3rem] px-2 py-3 text-center text-sm font-semibold text-slate-800 border-r border-slate-200 transition-colors duration-150"
+                                <tr
+                                    class="group border-b border-slate-100 transition-all duration-150"
+                                    :class="
+                                        isEditing(pegawai)
+                                            ? 'bg-emerald-50/60 shadow-[inset_4px_0_0_0_theme(colors.emerald.500)]'
+                                            : 'hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)]'
+                                    "
                                 >
-                                    {{ (dataPegawai.from ?? 1) + index }}
-                                </td>
-
-                                <!-- Nama & Kelompok Substansi (boleh membungkus) -->
-                                <td
-                                    class="sticky left-12 z-10 bg-white group-hover:bg-violet-50 min-w-[190px] px-3 py-3 border-r-2 border-slate-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors duration-150"
-                                >
-                                    <div
-                                        class="font-bold text-slate-800 text-sm"
-                                    >
-                                        {{ pegawai.nama }}
-                                    </div>
-                                    <div
-                                        class="text-[11px] text-slate-500 mt-0.5"
-                                    >
-                                        {{ getKelompok(pegawai) }}
-                                    </div>
-                                </td>
-
-                                <!-- Sisa N-2 -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-slate-200 text-slate-700 rounded-md font-semibold text-xs border border-slate-300/80"
-                                    >
-                                        {{ getSisaDuaTahunLalu(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Ditangguhkan N-2 (Oranye): informasi,
-                                     tidak menjadi bawaan -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-orange-100 text-orange-800 rounded-md font-bold text-xs border border-orange-300/80"
-                                        :title="KETERANGAN_TGH"
-                                    >
-                                        {{ getSisaDitangguhkanN2(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Sisa N-1 -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-slate-200 text-slate-700 rounded-md font-semibold text-xs border border-slate-300/80"
-                                    >
-                                        {{ getSisaTahunLalu(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Ditangguhkan N-1 (Oranye): informasi,
-                                     tidak menjadi bawaan -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-orange-100 text-orange-800 rounded-md font-bold text-xs border border-orange-300/80"
-                                        :title="KETERANGAN_TGH"
-                                    >
-                                        {{ getSisaDitangguhkanN1(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Saldo Bawaan Eligible (Hijau) -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md font-bold text-xs border border-emerald-300/80"
-                                    >
-                                        {{ getSaldoBawaanEligible(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Hak tahun berjalan (Biru) -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-bold text-xs border border-blue-300/80"
-                                    >
-                                        {{ getSisaTahunIni(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Total Hak Tersedia (Indigo) -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-indigo-100 text-indigo-800 rounded-md font-bold text-xs border border-indigo-300/80"
-                                    >
-                                        {{ getTotalTersedia(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Terpakai (Merah) — angka final (override
-                                     Admin bila ada, kalau tidak angka sistem).
-                                     Tanda * kecil muncul kalau angkanya hasil
-                                     koreksi manual Admin HR (termasuk koreksi 0). -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[32px] px-2 py-1 bg-rose-100 text-rose-800 rounded-md font-bold text-xs border border-rose-300/80"
-                                        :title="
-                                            adaKoreksi(pegawai)
-                                                ? `Dikoreksi Admin HR (sistem mencatat ${getTerpakaiSistem(pegawai)} hari)`
-                                                : ''
+                                    <!-- No urut (ikut halaman paginasi) -->
+                                    <td
+                                        class="sticky left-0 z-10 w-12 min-w-[3rem] px-2 py-3 text-center text-sm font-semibold text-slate-800 border-r border-slate-200 transition-colors duration-150"
+                                        :class="
+                                            isEditing(pegawai)
+                                                ? 'bg-emerald-50'
+                                                : 'bg-white group-hover:bg-violet-50'
                                         "
                                     >
-                                        {{ pegawai.cuti_terpakai || 0
-                                        }}<sup
-                                            v-if="adaKoreksi(pegawai)"
-                                            class="text-amber-600 font-black"
-                                            >*</sup
-                                        >
-                                    </span>
-                                </td>
+                                        {{ (dataPegawai.from ?? 1) + index }}
+                                    </td>
 
-                                <!-- Saldo Akhir (gelap agar paling menonjol) -->
-                                <td class="px-2 py-3 text-center">
-                                    <span
-                                        class="inline-block min-w-[36px] px-2.5 py-1 bg-slate-800 text-white rounded-md font-extrabold text-xs shadow-sm border border-slate-900"
+                                    <!-- Nama & Kelompok Substansi (boleh membungkus) -->
+                                    <td
+                                        class="sticky left-12 z-10 min-w-[190px] px-3 py-3 border-r-2 border-slate-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors duration-150"
+                                        :class="
+                                            isEditing(pegawai)
+                                                ? 'bg-emerald-50'
+                                                : 'bg-white group-hover:bg-violet-50'
+                                        "
                                     >
-                                        {{ getSaldoAkhir(pegawai) }}
-                                    </span>
-                                </td>
-
-                                <!-- Aksi (Tombol Kelola Kuota) -->
-                                <td class="px-2 py-3 text-center">
-                                    <button
-                                        @click="openDetailModal(pegawai)"
-                                        type="button"
-                                        class="inline-flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-300 rounded-full text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 hover:text-gray-900 transition shadow-sm cursor-pointer whitespace-nowrap"
-                                        title="Lihat Riwayat & Kelola Kuota"
-                                        aria-label="Kelola Kuota"
-                                    >
-                                        <svg
-                                            xmlns="http://www.w3.org/2000/svg"
-                                            class="w-4 h-4 text-gray-500"
-                                            fill="none"
-                                            viewBox="0 0 24 24"
-                                            stroke="currentColor"
+                                        <div
+                                            class="font-bold text-slate-800 text-sm"
                                         >
-                                            <path
-                                                stroke-linecap="round"
-                                                stroke-linejoin="round"
-                                                stroke-width="2"
-                                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+                                            {{ pegawai.nama }}
+                                        </div>
+                                        <div
+                                            class="text-[11px] text-slate-500 mt-0.5"
+                                        >
+                                            {{ getKelompok(pegawai) }}
+                                        </div>
+                                    </td>
+
+                                    <!-- Sisa N-2 (EDITABLE, klik angka; putih netral).
+                                         Sumber rumus Bawaan. data-rumus-area =
+                                         klik di sini tidak menutup sorotan. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="sisa_n2"
+                                        />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-block rounded-md transition"
+                                            :class="
+                                                kelasRedup(pegawai, 'sisa_n2')
+                                            "
+                                        >
+                                            <SelAngka
+                                                field="sisa_n2"
+                                                :model-value="draft.sisa_n2"
+                                                @update:model-value="
+                                                    ubahDraft('sisa_n2', $event)
+                                                "
+                                                :nilai="
+                                                    getSisaDuaTahunLalu(pegawai)
+                                                "
+                                                :editing="isEditing(pegawai)"
+                                                :label="`Sisa ${tahunAktif - 2}`"
+                                                :max="12"
+                                                :kelas="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'sisa_n2',
+                                                        KELAS_INPUT_NETRAL,
+                                                    )
+                                                "
+                                                :sorot="
+                                                    kelasSorot(
+                                                        pegawai,
+                                                        'sisa_n2',
+                                                    )
+                                                "
+                                                @mulai="
+                                                    mulaiEdit(
+                                                        pegawai,
+                                                        'sisa_n2',
+                                                    )
+                                                "
+                                                @simpan="simpanSaldo(pegawai)"
                                             />
-                                        </svg>
-                                        <!-- Tombol Aksi di tabel SELALU hanya ikon (tooltip
-                                             + aria-label tetap ada) supaya tampilannya sama
-                                             di semua lebar layar dan zoom. -->
-                                    </button>
-                                </td>
-                            </tr>
+                                        </div>
+                                    </td>
+
+                                    <!-- Ditangguhkan N-2 (netral, EDITABLE):
+                                         hanya catatan, tidak memengaruhi saldo -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="tgh_n2"
+                                        />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-block rounded-md transition"
+                                            :class="
+                                                kelasRedup(pegawai, 'tgh_n2')
+                                            "
+                                        >
+                                            <SelAngka
+                                                field="tgh_n2"
+                                                :model-value="draft.tgh_n2"
+                                                @update:model-value="
+                                                    ubahDraft('tgh_n2', $event)
+                                                "
+                                                :nilai="
+                                                    getSisaDitangguhkanN2(
+                                                        pegawai,
+                                                    )
+                                                "
+                                                :editing="isEditing(pegawai)"
+                                                :label="`Tgh ${tahunAktif - 2}`"
+                                                :title="KETERANGAN_TGH_N2"
+                                                :kelas="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'tgh_n2',
+                                                        KELAS_INPUT_NETRAL,
+                                                    )
+                                                "
+                                                :sorot="
+                                                    kelasSorot(
+                                                        pegawai,
+                                                        'tgh_n2',
+                                                    )
+                                                "
+                                                @mulai="
+                                                    mulaiEdit(pegawai, 'tgh_n2')
+                                                "
+                                                @simpan="simpanSaldo(pegawai)"
+                                            />
+                                        </div>
+                                    </td>
+
+                                    <!-- Sisa N-1 (EDITABLE; putih netral; sumber
+                                         rumus Bawaan) -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="sisa_n1"
+                                        />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-block rounded-md transition"
+                                            :class="
+                                                kelasRedup(pegawai, 'sisa_n1')
+                                            "
+                                        >
+                                            <SelAngka
+                                                field="sisa_n1"
+                                                :model-value="draft.sisa_n1"
+                                                @update:model-value="
+                                                    ubahDraft('sisa_n1', $event)
+                                                "
+                                                :nilai="
+                                                    getSisaTahunLalu(pegawai)
+                                                "
+                                                :editing="isEditing(pegawai)"
+                                                :label="`Sisa ${tahunAktif - 1}`"
+                                                :max="12"
+                                                :kelas="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'sisa_n1',
+                                                        KELAS_INPUT_NETRAL,
+                                                    )
+                                                "
+                                                :sorot="
+                                                    kelasSorot(
+                                                        pegawai,
+                                                        'sisa_n1',
+                                                    )
+                                                "
+                                                @mulai="
+                                                    mulaiEdit(
+                                                        pegawai,
+                                                        'sisa_n1',
+                                                    )
+                                                "
+                                                @simpan="simpanSaldo(pegawai)"
+                                            />
+                                        </div>
+                                    </td>
+
+                                    <!-- Ditangguhkan N-1 (netral, EDITABLE):
+                                         MENAMBAH Total Tersedia (sumber rumus
+                                         Total) -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="tgh_n1"
+                                        />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-block rounded-md transition"
+                                            :class="
+                                                kelasRedup(pegawai, 'tgh_n1')
+                                            "
+                                        >
+                                            <SelAngka
+                                                field="tgh_n1"
+                                                :model-value="draft.tgh_n1"
+                                                @update:model-value="
+                                                    ubahDraft('tgh_n1', $event)
+                                                "
+                                                :nilai="
+                                                    getSisaDitangguhkanN1(
+                                                        pegawai,
+                                                    )
+                                                "
+                                                :editing="isEditing(pegawai)"
+                                                :label="`Tgh ${tahunAktif - 1}`"
+                                                :title="KETERANGAN_TGH_N1"
+                                                :kelas="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'tgh_n1',
+                                                        KELAS_INPUT_NETRAL,
+                                                    )
+                                                "
+                                                :sorot="
+                                                    kelasSorot(
+                                                        pegawai,
+                                                        'tgh_n1',
+                                                    )
+                                                "
+                                                @mulai="
+                                                    mulaiEdit(pegawai, 'tgh_n1')
+                                                "
+                                                @simpan="simpanSaldo(pegawai)"
+                                            />
+                                        </div>
+                                    </td>
+
+                                    <!-- Sisa tahun ini = Hak - Terpakai
+                                         (sky, hitungan OTOMATIS, tidak bisa diedit).
+                                         Terpakai sudah termasuk Tgh tahun ini.
+                                         Saat baris diedit menampilkan pratinjau.
+                                         Klik angkanya untuk menyorot rumus. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="sisa_n0"
+                                        />
+                                        <button
+                                            type="button"
+                                            data-rumus-area
+                                            @click="
+                                                toggleRumus(pegawai, 'sisa')
+                                            "
+                                            :aria-pressed="
+                                                rumusDibuka(pegawai, 'sisa')
+                                            "
+                                            :title="`${KETERANGAN_SISA_TAHUN_INI} ${KETERANGAN_KLIK_RUMUS}.`"
+                                            class="inline-block min-w-[40px] px-2 py-1 rounded-md font-semibold text-xs border cursor-pointer transition"
+                                            :class="[
+                                                kelasSel(
+                                                    pegawai,
+                                                    'sisa_n0',
+                                                    WARNA_HASIL.sisa.dasar,
+                                                ),
+                                                kelasRedup(pegawai, 'sisa_n0'),
+                                            ]"
+                                        >
+                                            {{ nilaiSisaTahunIni(pegawai) }}
+                                        </button>
+                                    </td>
+
+                                    <!-- Ditangguhkan tahun ini (netral, EDITABLE):
+                                         tetap tercatat dan sudah termasuk dalam
+                                         Terpakai (sumber rumus Terpakai). Tepat di
+                                         samping Sisa tahun ini. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="tgh_n0"
+                                        />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-block rounded-md transition"
+                                            :class="
+                                                kelasRedup(pegawai, 'tgh_n0')
+                                            "
+                                        >
+                                            <SelAngka
+                                                field="tgh_n0"
+                                                :model-value="draft.tgh_n0"
+                                                @update:model-value="
+                                                    ubahDraft('tgh_n0', $event)
+                                                "
+                                                :nilai="
+                                                    getSisaDitangguhkanTahunIni(
+                                                        pegawai,
+                                                    )
+                                                "
+                                                :editing="isEditing(pegawai)"
+                                                :label="`Tgh ${tahunAktif}`"
+                                                :title="
+                                                    KETERANGAN_TGH_TAHUN_INI
+                                                "
+                                                :kelas="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'tgh_n0',
+                                                        KELAS_INPUT_NETRAL,
+                                                    )
+                                                "
+                                                :sorot="
+                                                    kelasSorot(
+                                                        pegawai,
+                                                        'tgh_n0',
+                                                    )
+                                                "
+                                                @mulai="
+                                                    mulaiEdit(pegawai, 'tgh_n0')
+                                                "
+                                                @simpan="simpanSaldo(pegawai)"
+                                            />
+                                        </div>
+                                    </td>
+
+                                    <!-- Saldo Bawaan Eligible (Emerald) — otomatis;
+                                         saat edit menampilkan pratinjau. Klik
+                                         untuk menyorot sumbernya. Aturannya
+                                         (bukan penjumlahan) ada di tooltip. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="bawaan"
+                                        />
+                                        <button
+                                            type="button"
+                                            data-rumus-area
+                                            @click="
+                                                toggleRumus(pegawai, 'bawaan')
+                                            "
+                                            :aria-pressed="
+                                                rumusDibuka(pegawai, 'bawaan')
+                                            "
+                                            :title="KETERANGAN_BAWAAN"
+                                            class="inline-block min-w-[40px] px-2 py-1 rounded-md font-bold text-xs border cursor-pointer transition"
+                                            :class="[
+                                                kelasSel(
+                                                    pegawai,
+                                                    'bawaan',
+                                                    WARNA_HASIL.bawaan.dasar,
+                                                ),
+                                                kelasRedup(pegawai, 'bawaan'),
+                                            ]"
+                                        >
+                                            {{ nilaiBawaan(pegawai) }}
+                                        </button>
+                                    </td>
+
+                                    <!-- Hak tahun berjalan (EDITABLE, putih netral);
+                                         sumber rumus Total dan Sisa N -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp :p="pegawai" kunci="hak" />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-block rounded-md transition"
+                                            :class="kelasRedup(pegawai, 'hak')"
+                                        >
+                                            <SelAngka
+                                                field="hak"
+                                                :model-value="draft.hak"
+                                                @update:model-value="
+                                                    ubahDraft('hak', $event)
+                                                "
+                                                :nilai="
+                                                    getSisaTahunIni(pegawai)
+                                                "
+                                                :editing="isEditing(pegawai)"
+                                                :label="`Hak ${tahunAktif}`"
+                                                :kelas="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'hak',
+                                                        KELAS_INPUT_NETRAL,
+                                                    )
+                                                "
+                                                :sorot="
+                                                    kelasSorot(pegawai, 'hak')
+                                                "
+                                                @mulai="
+                                                    mulaiEdit(pegawai, 'hak')
+                                                "
+                                                @simpan="simpanSaldo(pegawai)"
+                                            />
+                                        </div>
+                                    </td>
+
+                                    <!-- Total Hak Tersedia (Indigo) — otomatis;
+                                         saat edit menampilkan pratinjau. Klik
+                                         untuk menyorot rumus. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp :p="pegawai" kunci="total" />
+                                        <button
+                                            type="button"
+                                            data-rumus-area
+                                            @click="
+                                                toggleRumus(pegawai, 'total')
+                                            "
+                                            :aria-pressed="
+                                                rumusDibuka(pegawai, 'total')
+                                            "
+                                            :title="KETERANGAN_KLIK_RUMUS"
+                                            class="inline-block min-w-[40px] px-2 py-1 rounded-md font-bold text-xs border cursor-pointer transition"
+                                            :class="[
+                                                kelasSel(
+                                                    pegawai,
+                                                    'total',
+                                                    WARNA_HASIL.total.dasar,
+                                                ),
+                                                kelasRedup(pegawai, 'total'),
+                                            ]"
+                                        >
+                                            {{ nilaiTotal(pegawai) }}
+                                        </button>
+                                    </td>
+
+                                    <!-- [TERPAKAI DIKUNCI] Terpakai (Rose) — HANYA
+                                         TAMPIL. Angka TAMPIL = cuti terpakai (sudah
+                                         ikut koreksi bulanan Rekap Laporan) + Tgh
+                                         tahun ini. Tanda * kecil muncul kalau
+                                         angkanya hasil koreksi Admin HR. Klik
+                                         angkanya = menyorot sumbernya (Tgh tahun
+                                         ini). Ikon kalender di sampingnya = tautan
+                                         ke Rekap Laporan (sudah terfilter ke
+                                         pegawai ini) untuk mengubah per bulan. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp
+                                            :p="pegawai"
+                                            kunci="terpakai"
+                                        />
+                                        <div
+                                            data-rumus-area
+                                            class="inline-flex items-center gap-1 rounded-md transition"
+                                            :class="
+                                                kelasRedup(pegawai, 'terpakai')
+                                            "
+                                        >
+                                            <button
+                                                type="button"
+                                                data-rumus-area
+                                                @click="
+                                                    toggleRumus(
+                                                        pegawai,
+                                                        'terpakai',
+                                                    )
+                                                "
+                                                :aria-pressed="
+                                                    rumusDibuka(
+                                                        pegawai,
+                                                        'terpakai',
+                                                    )
+                                                "
+                                                :title="titleTerpakai(pegawai)"
+                                                class="inline-block min-w-[40px] px-2 py-1 rounded-md font-bold text-xs border cursor-pointer transition"
+                                                :class="
+                                                    kelasSel(
+                                                        pegawai,
+                                                        'terpakai',
+                                                        WARNA_HASIL.terpakai
+                                                            .dasar,
+                                                    )
+                                                "
+                                            >
+                                                {{ nilaiTerpakai(pegawai)
+                                                }}<sup
+                                                    v-if="
+                                                        !isEditing(pegawai) &&
+                                                        adaKoreksi(pegawai)
+                                                    "
+                                                    class="ml-0.5 font-black text-amber-600"
+                                                    >*</sup
+                                                >
+                                            </button>
+                                            <Link
+                                                :href="urlRekapLaporan(pegawai)"
+                                                title="Ubah Terpakai per bulan di Rekap Laporan"
+                                                aria-label="Ubah Terpakai per bulan di Rekap Laporan"
+                                                class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-300"
+                                            >
+                                                <svg
+                                                    class="h-3.5 w-3.5"
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                >
+                                                    <path
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                                    />
+                                                </svg>
+                                            </Link>
+                                        </div>
+                                    </td>
+
+                                    <!-- Saldo Akhir (gelap agar paling menonjol) —
+                                         saat edit menampilkan pratinjau. Klik
+                                         untuk menyorot rumus (Total dan Terpakai
+                                         berwarna amber). 'relative' + LencanaOp
+                                         dipakai untuk lencana Δ dampak edit. -->
+                                    <td class="relative px-2 py-3 text-center">
+                                        <LencanaOp :p="pegawai" kunci="saldo" />
+                                        <button
+                                            type="button"
+                                            data-rumus-area
+                                            @click="
+                                                toggleRumus(pegawai, 'saldo')
+                                            "
+                                            :aria-pressed="
+                                                rumusDibuka(pegawai, 'saldo')
+                                            "
+                                            :title="KETERANGAN_KLIK_RUMUS"
+                                            class="inline-block min-w-[40px] px-2.5 py-1 rounded-md font-extrabold text-xs shadow-sm border cursor-pointer transition"
+                                            :class="[
+                                                kelasSel(
+                                                    pegawai,
+                                                    'saldo',
+                                                    WARNA_HASIL.saldo.dasar,
+                                                ),
+                                                kelasRedup(pegawai, 'saldo'),
+                                            ]"
+                                        >
+                                            {{ nilaiSaldoAkhir(pegawai) }}
+                                        </button>
+                                    </td>
+
+                                    <!-- Aksi: mode tampil = Riwayat;
+                                         mode edit = Simpan (centang) + Batal (X) -->
+                                    <td class="px-2 py-3 text-center">
+                                        <div
+                                            class="inline-flex items-center gap-1"
+                                        >
+                                            <template
+                                                v-if="!isEditing(pegawai)"
+                                            >
+                                                <button
+                                                    @click="
+                                                        openDetailModal(pegawai)
+                                                    "
+                                                    type="button"
+                                                    class="inline-flex items-center px-2.5 py-1.5 border border-gray-300 rounded-full text-gray-600 bg-white hover:bg-gray-50 hover:text-gray-900 transition shadow-sm cursor-pointer"
+                                                    title="Lihat Rincian & Riwayat"
+                                                    aria-label="Lihat Rincian dan Riwayat"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                                        />
+                                                    </svg>
+                                                </button>
+                                            </template>
+                                            <template v-else>
+                                                <button
+                                                    type="button"
+                                                    @click="
+                                                        simpanSaldo(pegawai)
+                                                    "
+                                                    :disabled="
+                                                        isSavingSaldo ||
+                                                        !isDirty
+                                                    "
+                                                    class="inline-flex items-center px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    title="Simpan (Enter)"
+                                                    aria-label="Simpan"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M5 13l4 4L19 7"
+                                                        />
+                                                    </svg>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    @click="batalEdit"
+                                                    :disabled="isSavingSaldo"
+                                                    class="inline-flex items-center px-2.5 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-full transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    title="Batal (Esc)"
+                                                    aria-label="Batal edit"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M6 18L18 6M6 6l12 12"
+                                                        />
+                                                    </svg>
+                                                </button>
+                                            </template>
+                                        </div>
+                                    </td>
+                                </tr>
+
+                                <!-- Baris pesan error validasi backend (hanya
+                                     muncul untuk baris yang sedang diedit).
+                                     colspan = jumlah kolom tabel (14). -->
+                                <tr
+                                    v-if="
+                                        isEditing(pegawai) &&
+                                        daftarErrorEdit.length > 0
+                                    "
+                                    class="border-b border-slate-100 bg-red-50"
+                                >
+                                    <td colspan="14" class="px-4 py-2">
+                                        <ul
+                                            class="space-y-0.5 text-xs text-red-600"
+                                        >
+                                            <li
+                                                v-for="(
+                                                    pesan, i
+                                                ) in daftarErrorEdit"
+                                                :key="i"
+                                            >
+                                                {{ pesan }}
+                                            </li>
+                                        </ul>
+                                    </td>
+                                </tr>
+                            </template>
                         </tbody>
                     </table>
                 </div>
 
-                <!-- Catatan kaki: hanya tampil kalau ada minimal 1 baris yang
-                     angka Terpakai-nya dikoreksi manual Admin HR. -->
+                <!-- Legenda ikon pensil & gembok (layar lebar): menjelaskan
+                     penanda di header kolom. Selalu tampil selama tabel tampil. -->
                 <p
-                    v-if="adaItemDikoreksi"
-                    class="mt-3 text-xs text-amber-700"
+                    v-if="punyaData"
+                    class="mt-2 hidden lg:flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500"
                 >
-                    * Angka bertanda bintang disesuaikan manual oleh Admin HR. Lihat angka sistem di “Kelola Kuota”.
+                    <IkonPensil />
+                    <span>= kolom bisa diedit, klik angkanya.</span>
+                    <IkonGembok />
+                    <span
+                        >= Terpakai dikunci, ubah per bulan di Rekap
+                        Laporan.</span
+                    >
+                    <span class="text-slate-400">
+                        Sisa {{ tahunAktif }}, Bawaan, Total, dan Saldo Akhir
+                        dihitung otomatis. Tgh {{ tahunAktif }} tetap tercatat
+                        dan sudah termasuk dalam Terpakai.
+                    </span>
+                </p>
+
+                <!-- Legenda warna hasil hitungan (layar lebar). Klik angka
+                     berwarna untuk menyorot kolom sumbernya, termasuk Terpakai
+                     (menyorot Tgh tahun ini). Esc atau klik di luar untuk
+                     menutup sorotan. -->
+                <p
+                    v-if="punyaData"
+                    class="mt-1 hidden lg:flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"
+                >
+                    <span
+                        >Klik angka berwarna untuk menyorot sumber
+                        rumusnya:</span
+                    >
+                    <span
+                        class="rounded px-1.5 py-0.5 font-semibold"
+                        :class="WARNA_HASIL.sisa.dasar"
+                        >Sisa {{ tahunAktif }}</span
+                    >
+                    <span
+                        class="rounded px-1.5 py-0.5 font-semibold"
+                        :class="WARNA_HASIL.bawaan.dasar"
+                        >Bawaan</span
+                    >
+                    <span
+                        class="rounded px-1.5 py-0.5 font-semibold"
+                        :class="WARNA_HASIL.total.dasar"
+                        >Total</span
+                    >
+                    <span
+                        class="rounded px-1.5 py-0.5 font-semibold"
+                        :class="WARNA_HASIL.terpakai.dasar"
+                        >Terpakai</span
+                    >
+                    <span
+                        class="rounded px-1.5 py-0.5 font-semibold"
+                        :class="WARNA_HASIL.saldo.dasar"
+                        >Saldo Akhir</span
+                    >
+                </p>
+
+                <!-- Legenda dampak edit (layar lebar): arti lencana Δ oranye. -->
+                <p
+                    v-if="punyaData"
+                    class="mt-1 hidden lg:flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500"
+                >
+                    <span
+                        class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-orange-500 text-[11px] font-bold leading-none text-white"
+                        >Δ</span
+                    >
+                    <span
+                        >= kolom yang ikut berubah saat kotak yang sedang diedit
+                        diubah. Header kolomnya juga berwarna oranye.</span
+                    >
+                </p>
+
+                <!-- Petunjuk mode edit inline (layar lebar) -->
+                <p
+                    v-if="editingId !== null"
+                    class="mt-3 hidden lg:block text-xs text-emerald-700"
+                >
+                    Mode edit tahun {{ tahunAktif }}: ubah angka di baris yang
+                    disorot. Sisa {{ tahunAktif }}, Bawaan, Total, Terpakai, dan
+                    Saldo Akhir dihitung otomatis. Tekan Enter untuk menyimpan
+                    atau Esc untuk membatalkan.
+                </p>
+
+                <!-- Catatan kaki: hanya tampil kalau ada minimal 1 baris yang
+                     angka Terpakai-nya dikoreksi Admin HR. -->
+                <p v-if="adaItemDikoreksi" class="mt-3 text-xs text-amber-700">
+                    * Angka bertanda bintang dikoreksi Admin HR di Rekap
+                    Laporan. Arahkan kursor ke angkanya untuk melihat bulan yang
+                    dikoreksi, atau klik ikon kalender untuk membuka Rekap
+                    Laporan pegawai itu.
                 </p>
 
                 <!-- Pagination (link dari Laravel paginator, gaya Rekap Laporan).
@@ -1964,289 +3793,250 @@ watch(adaModalTerbuka, (terbuka) => {
                  menutupi bagian atas modal, backdrop menutup seluruh layar).
                  Tetap berada di dalam div pembungkus tunggal. -->
             <Teleport to="body">
-            <!-- ============================================================
-                 MODAL DETAIL KUOTA + EDIT SALDO + RIWAYAT CUTI PEGAWAI
+                <!-- ============================================================
+                 MODAL RINCIAN KUOTA & RIWAYAT CUTI PEGAWAI (HANYA-BACA)
+                 Form edit saldo ada di baris tabel (klik angka).
+                 Modal ini hanya menampilkan KPI, rumus Saldo Akhir, dan
+                 seluruh riwayat pengajuan.
                  Struktur 3 bagian:
                    1) Header  : tetap di atas (judul, pegawai, tombol X)
                    2) Body    : SATU-SATUNYA area yang scroll
-                   3) Footer  : tetap di bawah (Batalkan, Simpan, Tutup)
+                   3) Footer  : tetap di bawah (Tutup)
                  HP   : bottom sheet (sudut atas membulat, handle, tinggi
                         maks 88dvh), bisa ditutup dengan X, klik backdrop,
                         geser ke bawah, atau Esc.
-                 >= sm: dialog di tengah. Lebar dibatasi 'sm:max-w-lg'
-                        (512px) supaya tidak terlalu lebar; tinggi maks =
-                        layar - 2rem, sehingga muat di zoom 100%.
+                 >= sm: dialog di tengah, lebar 'sm:max-w-lg'.
                  ============================================================ -->
-            <div
-                v-if="showModal"
-                @click.self="closeModal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="judul-modal-rincian"
-                class="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-xs"
-            >
                 <div
-                    class="bg-white w-full sm:max-w-lg shadow-2xl relative animate-in fade-in zoom-in duration-200 flex flex-col overflow-hidden rounded-t-3xl sm:rounded-2xl max-h-[88dvh] sm:max-h-[calc(100dvh-2rem)]"
+                    v-if="showModal"
+                    @click.self="closeModal"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="judul-modal-rincian"
+                    class="fixed inset-0 z-[9999] flex items-end sm:items-center justify-center bg-black/60 p-0 sm:p-4 backdrop-blur-xs"
                 >
-                    <!-- ============ 1) HEADER (tetap) ============ -->
                     <div
-                        class="shrink-0 border-b bg-gray-50"
-                        @touchstart.passive="mulaiGeserSheet"
-                        @touchend.passive="selesaiGeserSheet"
+                        class="bg-white w-full sm:max-w-lg shadow-2xl relative animate-in fade-in zoom-in duration-200 flex flex-col overflow-hidden rounded-t-3xl sm:rounded-2xl max-h-[88dvh] sm:max-h-[calc(100dvh-2rem)]"
                     >
-                        <!-- Handle bottom sheet (HP) -->
-                        <div class="sm:hidden flex justify-center pt-2">
-                            <span
-                                class="h-1.5 w-10 rounded-full bg-gray-300"
-                            ></span>
-                        </div>
-
+                        <!-- ============ 1) HEADER (tetap) ============ -->
                         <div
-                            class="flex items-start justify-between gap-3 px-4 sm:px-6 pt-2 sm:pt-3.5 pb-3"
+                            class="shrink-0 border-b bg-gray-50"
+                            @touchstart.passive="mulaiGeserSheet"
+                            @touchend.passive="selesaiGeserSheet"
                         >
-                            <div class="min-w-0 flex-1">
-                                <h3
-                                    id="judul-modal-rincian"
-                                    class="text-sm sm:text-lg font-bold text-gray-900 leading-snug"
-                                >
-                                    Rincian Kuota & Riwayat Pegawai
-                                </h3>
-                                <p
-                                    class="hidden sm:block text-xs text-gray-500 mt-0.5"
-                                >
-                                    Kelola saldo cuti pegawai dan lihat riwayat
-                                    pengajuannya di satu tempat
-                                </p>
-
-                                <!-- Profil pegawai ringkas (satu baris) -->
-                                <div
-                                    v-if="selectedPegawai"
-                                    class="mt-2 flex items-center gap-2.5 min-w-0"
-                                >
-                                    <div
-                                        class="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm uppercase shadow-sm shrink-0"
-                                    >
-                                        {{
-                                            selectedPegawai.nama?.charAt(0) ||
-                                            "?"
-                                        }}
-                                    </div>
-                                    <div class="min-w-0">
-                                        <p
-                                            class="font-bold text-gray-900 text-sm leading-tight truncate"
-                                        >
-                                            {{ selectedPegawai.nama }}
-                                        </p>
-                                        <p
-                                            class="text-[11px] text-gray-500 leading-tight mt-0.5 truncate"
-                                        >
-                                            NIP:
-                                            {{ selectedPegawai.nip || "-" }}
-                                            &middot;
-                                            {{
-                                                selectedPegawai.jabatan ||
-                                                "Staf / Pegawai"
-                                            }}
-                                        </p>
-                                    </div>
-                                </div>
+                            <!-- Handle bottom sheet (HP) -->
+                            <div class="sm:hidden flex justify-center pt-2">
+                                <span
+                                    class="h-1.5 w-10 rounded-full bg-gray-300"
+                                ></span>
                             </div>
 
-                            <!-- Tombol X (selalu terlihat, target sentuh 40px) -->
-                            <button
-                                @click="closeModal"
-                                type="button"
-                                aria-label="Tutup rincian"
-                                class="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded-full text-gray-500 hover:text-red-500 bg-white border border-gray-200 hover:bg-gray-100 transition cursor-pointer"
-                            >
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    class="w-5 h-5"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                    stroke="currentColor"
-                                >
-                                    <path
-                                        stroke-linecap="round"
-                                        stroke-linejoin="round"
-                                        stroke-width="2"
-                                        d="M6 18L18 6M6 6l12 12"
-                                    />
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- ============ 2) BODY (satu area scroll) ============ -->
-                    <div
-                        v-if="selectedPegawai"
-                        class="flex-1 min-h-0 overflow-y-auto overscroll-contain"
-                    >
-                        <!-- Pembungkus KPI + Tab. Layar >= sm: MENEMPEL di atas
-                             saat isi di-scroll, supaya Saldo Akhir selalu terlihat
-                             ketika admin mengubah angka. HP: 'contents' (tidak
-                             menempel) agar ruang form tetap lega; hanya tab yang
-                             menempel seperti sebelumnya. -->
-                        <div
-                            class="contents sm:block sm:sticky sm:top-0 sm:z-10 sm:bg-white"
-                        >
-                        <!-- 4 KPI ringkas (Hak → Terpakai → Sisa → Saldo Akhir).
-                             HP: 2x2. >= sm: satu baris. -->
-                        <div class="px-3 sm:px-6 pt-3 sm:pt-3 pb-3 sm:pb-2.5">
                             <div
-                                class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5"
+                                class="flex items-start justify-between gap-3 px-4 sm:px-6 pt-2 sm:pt-3.5 pb-3"
                             >
-                                <!-- KPI 1: Hak -->
-                                <div
-                                    class="bg-white px-2.5 py-2 rounded-xl border border-gray-200 shadow-sm text-center"
-                                >
-                                    <p
-                                        class="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-tight"
+                                <div class="min-w-0 flex-1">
+                                    <h3
+                                        id="judul-modal-rincian"
+                                        class="text-sm sm:text-lg font-bold text-gray-900 leading-snug"
                                     >
-                                        Hak {{ tahunAktif }}
+                                        Rincian Kuota & Riwayat Pegawai
+                                    </h3>
+                                    <p
+                                        class="hidden sm:block text-xs text-gray-500 mt-0.5"
+                                    >
+                                        Lihat rincian saldo dan riwayat
+                                        pengajuan cuti. Untuk mengubah saldo,
+                                        klik angkanya pada baris pegawai. Cuti
+                                        Terpakai diubah di Rekap Laporan.
                                     </p>
-                                    <p
-                                        class="text-lg sm:text-xl font-black text-gray-800 leading-tight mt-0.5"
+
+                                    <!-- Profil pegawai ringkas (satu baris) -->
+                                    <div
+                                        v-if="selectedPegawai"
+                                        class="mt-2 flex items-center gap-2.5 min-w-0"
                                     >
-                                        {{ getSisaTahunIni(selectedPegawai) }}
-                                        <span class="text-[11px] font-normal"
-                                            >hari</span
+                                        <div
+                                            class="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm uppercase shadow-sm shrink-0"
                                         >
-                                    </p>
+                                            {{
+                                                selectedPegawai.nama?.charAt(
+                                                    0,
+                                                ) || "?"
+                                            }}
+                                        </div>
+                                        <div class="min-w-0">
+                                            <p
+                                                class="font-bold text-gray-900 text-sm leading-tight truncate"
+                                            >
+                                                {{ selectedPegawai.nama }}
+                                            </p>
+                                            <p
+                                                class="text-[11px] text-gray-500 leading-tight mt-0.5 truncate"
+                                            >
+                                                NIP:
+                                                {{ selectedPegawai.nip || "-" }}
+                                                &middot;
+                                                {{
+                                                    selectedPegawai.jabatan ||
+                                                    "Staf / Pegawai"
+                                                }}
+                                            </p>
+                                        </div>
+                                    </div>
                                 </div>
 
-                                <!-- KPI 2: Terpakai (Rose) -->
-                                <div
-                                    class="bg-rose-50 px-2.5 py-2 rounded-xl border border-rose-100 shadow-sm text-center"
+                                <!-- Tombol X (selalu terlihat, target sentuh 40px) -->
+                                <button
+                                    @click="closeModal"
+                                    type="button"
+                                    aria-label="Tutup rincian"
+                                    class="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded-full text-gray-500 hover:text-red-500 bg-white border border-gray-200 hover:bg-gray-100 transition cursor-pointer"
                                 >
-                                    <p
-                                        class="text-[10px] font-bold text-rose-500 uppercase tracking-wider leading-tight"
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        class="w-5 h-5"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        stroke="currentColor"
                                     >
-                                        Terpakai {{ tahunAktif }}
-                                    </p>
-                                    <p
-                                        class="text-lg sm:text-xl font-black text-rose-600 leading-tight mt-0.5"
-                                    >
-                                        {{ selectedPegawai.cuti_terpakai || 0 }}
-                                        <span class="text-[11px] font-normal"
-                                            >hari</span
-                                        >
-                                    </p>
-                                </div>
-
-                                <!-- KPI 3: Sisa (Biru) -->
-                                <div
-                                    class="bg-blue-50 px-2.5 py-2 rounded-xl border border-blue-100 shadow-sm text-center"
-                                >
-                                    <p
-                                        class="text-[10px] font-bold text-blue-500 uppercase tracking-wider leading-tight"
-                                    >
-                                        Sisa {{ tahunAktif }}
-                                    </p>
-                                    <p
-                                        class="text-lg sm:text-xl font-black text-blue-600 leading-tight mt-0.5"
-                                    >
-                                        {{
-                                            getSisaTahunBerjalan(
-                                                selectedPegawai,
-                                            )
-                                        }}
-                                        <span class="text-[11px] font-normal"
-                                            >hari</span
-                                        >
-                                    </p>
-                                </div>
-
-                                <!-- KPI 4: Saldo Akhir (Hitam Solid) -->
-                                <div
-                                    class="bg-slate-800 border border-slate-900 text-white px-2.5 py-2 rounded-xl shadow-md text-center"
-                                >
-                                    <p
-                                        class="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight"
-                                    >
-                                        Saldo Akhir {{ tahunAktif }}
-                                    </p>
-                                    <p
-                                        class="text-lg sm:text-xl font-black text-white leading-tight mt-0.5"
-                                    >
-                                        {{ getSaldoAkhir(selectedPegawai) }}
-                                        <span class="text-[11px] font-normal"
-                                            >hari</span
-                                        >
-                                    </p>
-                                </div>
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M6 18L18 6M6 6l12 12"
+                                        />
+                                    </svg>
+                                </button>
                             </div>
                         </div>
-                        <!-- ================= END KPI ================= -->
 
-                        <!-- TAB: Kelola Saldo | Riwayat. Label dipendekkan di
-                             HP ("Saldo"). Angka pada tab Riwayat = jumlah
-                             seluruh riwayat. Tab menempel di atas saat scroll. -->
+                        <!-- ============ 2) BODY (satu area scroll) ============ -->
                         <div
-                            class="sticky top-0 z-10 sm:static bg-white border-b border-gray-200 px-3 sm:px-6"
-                            role="tablist"
+                            v-if="selectedPegawai"
+                            class="flex-1 min-h-0 overflow-y-auto overscroll-contain"
                         >
-                            <div class="flex gap-1">
-                                <button
-                                    type="button"
-                                    role="tab"
-                                    :aria-selected="modalTab === 'saldo'"
-                                    @click="modalTab = 'saldo'"
-                                    class="flex-1 sm:flex-none px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition cursor-pointer"
-                                    :class="
-                                        modalTab === 'saldo'
-                                            ? 'border-green-600 text-green-700'
-                                            : 'border-transparent text-gray-500 hover:text-gray-700'
-                                    "
+                            <!-- 4 KPI ringkas (Hak → Terpakai → Sisa → Saldo Akhir).
+                             HP: 2x2. >= sm: satu baris. -->
+                            <div class="px-3 sm:px-6 pt-3 pb-3 sm:pb-2.5">
+                                <div
+                                    class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5"
                                 >
-                                    <span class="sm:hidden">Saldo</span>
-                                    <span class="hidden sm:inline"
-                                        >Kelola Saldo</span
+                                    <!-- KPI 1: Hak -->
+                                    <div
+                                        class="bg-white px-2.5 py-2 rounded-xl border border-gray-200 shadow-sm text-center"
                                     >
-                                </button>
-                                <button
-                                    type="button"
-                                    role="tab"
-                                    :aria-selected="modalTab === 'riwayat'"
-                                    @click="modalTab = 'riwayat'"
-                                    class="flex-1 sm:flex-none px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition cursor-pointer"
-                                    :class="
-                                        modalTab === 'riwayat'
-                                            ? 'border-green-600 text-green-700'
-                                            : 'border-transparent text-gray-500 hover:text-gray-700'
-                                    "
-                                >
-                                    Riwayat
-                                    <span
-                                        class="ml-1 inline-block min-w-[20px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-bold"
-                                        >{{
-                                            selectedPegawai.pengajuan_cuti
-                                                ?.length || 0
-                                        }}</span
+                                        <p
+                                            class="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-tight"
+                                        >
+                                            Hak {{ tahunAktif }}
+                                        </p>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-gray-800 leading-tight mt-0.5"
+                                        >
+                                            {{
+                                                getSisaTahunIni(selectedPegawai)
+                                            }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
+                                        </p>
+                                    </div>
+
+                                    <!-- KPI 2: Terpakai (Rose) — angka tampil,
+                                         sudah termasuk Tgh tahun ini -->
+                                    <div
+                                        class="bg-rose-50 px-2.5 py-2 rounded-xl border border-rose-100 shadow-sm text-center"
                                     >
-                                </button>
+                                        <p
+                                            class="text-[10px] font-bold text-rose-500 uppercase tracking-wider leading-tight"
+                                        >
+                                            Terpakai {{ tahunAktif }}
+                                        </p>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-rose-600 leading-tight mt-0.5"
+                                        >
+                                            {{
+                                                getTerpakaiTampil(
+                                                    selectedPegawai,
+                                                )
+                                            }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
+                                        </p>
+                                    </div>
+
+                                    <!-- KPI 3: Sisa (Biru) -->
+                                    <div
+                                        class="bg-blue-50 px-2.5 py-2 rounded-xl border border-blue-100 shadow-sm text-center"
+                                    >
+                                        <p
+                                            class="text-[10px] font-bold text-blue-500 uppercase tracking-wider leading-tight"
+                                        >
+                                            Sisa {{ tahunAktif }}
+                                        </p>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-blue-600 leading-tight mt-0.5"
+                                        >
+                                            {{
+                                                getSisaTahunBerjalan(
+                                                    selectedPegawai,
+                                                )
+                                            }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
+                                        </p>
+                                    </div>
+
+                                    <!-- KPI 4: Saldo Akhir (Hitam Solid) -->
+                                    <div
+                                        class="bg-slate-800 border border-slate-900 text-white px-2.5 py-2 rounded-xl shadow-md text-center"
+                                    >
+                                        <p
+                                            class="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight"
+                                        >
+                                            Saldo Akhir {{ tahunAktif }}
+                                        </p>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-white leading-tight mt-0.5"
+                                        >
+                                            {{ getSaldoAkhir(selectedPegawai) }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
+                                        </p>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                            <!-- ================= END KPI ================= -->
 
-                        </div>
-                        <!-- END pembungkus KPI + Tab -->
-
-                        <!-- ISI TAB -->
-                        <div class="p-3 sm:px-6 sm:py-4 space-y-3 sm:space-y-4">
-                            <template v-if="modalTab === 'saldo'">
+                            <div
+                                class="p-3 sm:px-6 sm:py-4 space-y-3 sm:space-y-4"
+                            >
                                 <!-- Kotak Cara Perhitungan Saldo Akhir:
-                                 "Saldo Akhir {tahun}: Hak X + Bawaan Y - Terpakai Z = N hari".
-                                 'Terpakai' dari backend SUDAH final (angka Admin
-                                 bila ada, kalau tidak angka sistem). Kalau Admin
-                                 mengisi koreksi, catatan kecil di bawah rumus
-                                 menjelaskan bahwa angka sistem tidak dipakai. -->
+                                     "Saldo Akhir {tahun}: Hak X + Bawaan Y [+ Tgh
+                                     tahun lalu T] − Terpakai Z = N hari".
+                                     'Terpakai' = cuti terpakai (ikut koreksi bulanan
+                                     Rekap Laporan) + Tgh tahun ini. Kalau Tgh tahun
+                                     ini > 0, rinciannya tampil di baris kecil di
+                                     bawah rumus.
+                                     Kalau ada koreksi, catatan kecil di bawahnya
+                                     menjelaskan bahwa angka sistem tidak dipakai
+                                     dan menunjuk bulan yang dikoreksi. -->
                                 <div
                                     class="bg-gray-50 px-3 sm:px-4 py-2 rounded-lg text-xs text-gray-600 border border-gray-100 leading-relaxed"
                                 >
                                     Saldo Akhir {{ tahunAktif }}:
                                     <span class="font-semibold text-gray-800"
                                         >Hak
-                                        {{ getSisaTahunIni(selectedPegawai) }}</span
+                                        {{
+                                            getSisaTahunIni(selectedPegawai)
+                                        }}</span
                                     >
                                     +
                                     <span class="font-semibold text-gray-800"
@@ -2257,11 +4047,29 @@ watch(adaModalTerbuka, (terbuka) => {
                                             )
                                         }}</span
                                     >
-                                    -
+                                    <template
+                                        v-if="
+                                            getSisaDitangguhkanN1(
+                                                selectedPegawai,
+                                            ) > 0
+                                        "
+                                    >
+                                        +
+                                        <span
+                                            class="font-semibold text-gray-800"
+                                            >Tgh {{ tahunAktif - 1 }}
+                                            {{
+                                                getSisaDitangguhkanN1(
+                                                    selectedPegawai,
+                                                )
+                                            }}</span
+                                        >
+                                    </template>
+                                    −
                                     <span class="font-semibold text-gray-800"
                                         >Terpakai
                                         {{
-                                            selectedPegawai.cuti_terpakai || 0
+                                            getTerpakaiTampil(selectedPegawai)
                                         }}</span
                                     >
                                     =
@@ -2272,392 +4080,83 @@ watch(adaModalTerbuka, (terbuka) => {
                                         hari</span
                                     >
                                     <p
+                                        v-if="
+                                            getSisaDitangguhkanTahunIni(
+                                                selectedPegawai,
+                                            ) > 0
+                                        "
+                                        class="mt-1 text-[11px] text-gray-500"
+                                    >
+                                        (Terpakai
+                                        {{ getTerpakaiTampil(selectedPegawai) }}
+                                        =
+                                        {{
+                                            getTerpakaiTampil(selectedPegawai) -
+                                            getSisaDitangguhkanTahunIni(
+                                                selectedPegawai,
+                                            )
+                                        }}
+                                        hari digunakan +
+                                        {{
+                                            getSisaDitangguhkanTahunIni(
+                                                selectedPegawai,
+                                            )
+                                        }}
+                                        hari ditangguhkan)
+                                    </p>
+                                    <p
                                         v-if="adaKoreksi(selectedPegawai)"
                                         class="mt-1 text-[11px] text-amber-700"
                                     >
                                         Terpakai memakai angka koreksi Admin HR
                                         ({{
-                                            getKoreksiSaldo(selectedPegawai)
+                                            getTerpakaiTampil(selectedPegawai)
                                         }}
-                                        hari). Angka dari sistem:
+                                        hari<template
+                                            v-if="
+                                                bulanDikoreksi(selectedPegawai)
+                                                    .length > 0
+                                            "
+                                            >, dikoreksi pada bulan
+                                            {{
+                                                bulanDikoreksi(
+                                                    selectedPegawai,
+                                                ).join(", ")
+                                            }}</template
+                                        >). Angka dari sistem:
                                         {{
-                                            getTerpakaiSistem(selectedPegawai)
+                                            getTerpakaiSistemTampil(
+                                                selectedPegawai,
+                                            )
                                         }}
                                         hari.
+                                    </p>
+                                    <p class="mt-1.5 text-[11px] text-gray-500">
+                                        Terpakai dikunci di halaman ini.
+                                        <Link
+                                            :href="
+                                                urlRekapLaporan(selectedPegawai)
+                                            "
+                                            class="font-semibold text-emerald-700 underline"
+                                            >Ubah per bulan di Rekap
+                                            Laporan</Link
+                                        >.
                                     </p>
                                 </div>
                                 <!-- ================= END KOTAK PERHITUNGAN ================= -->
 
-                                <!-- ========================================== -->
-                                <!-- FITUR: EDIT SALDO PERORANGAN               -->
-                                <!-- Satu-satunya tempat mengubah kuota/saldo    -->
-                                <!-- cuti pegawai. Tombol Simpan & Batalkan ada  -->
-                                <!-- di footer modal (terhubung lewat form=id).  -->
-                                <!-- ========================================== -->
-                                <div
-                                    class="rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 sm:p-4"
+                                <!-- Catatan Admin HR (catatan_saldo), hanya tampil
+                                     kalau ada isinya. Kotak oranye "Sisa
+                                     Ditangguhkan" sudah dihapus karena angkanya
+                                     sudah terlihat di rumus dan di kolom Tgh. -->
+                                <p
+                                    v-if="selectedPegawai.catatan_saldo"
+                                    class="rounded-lg border border-gray-100 bg-gray-50 px-3 sm:px-4 py-2 text-xs text-gray-600 italic break-words"
                                 >
-                                    <div
-                                        class="flex items-center justify-between gap-2"
-                                    >
-                                        <p
-                                            class="text-sm font-bold text-emerald-900"
-                                        >
-                                            Edit Saldo Perorangan
-                                        </p>
-                                        <span
-                                            class="shrink-0 text-[10px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-300 rounded-full px-2 py-0.5 uppercase tracking-wide"
-                                        >
-                                            Admin HR
-                                        </span>
-                                    </div>
-                                    <p
-                                        class="text-xs text-emerald-700/80 mt-0.5 mb-2.5"
-                                    >
-                                        Perubahan ini berlaku untuk tahun
-                                        {{ tahunAktif }}.
-                                    </p>
+                                    {{ selectedPegawai.catatan_saldo }}
+                                </p>
 
-                                    <!-- Form dibagi 2 kelompok, semua baris memakai
-                                         grid yang sama: [label] [kolom angka]. Kolom
-                                         angka SAMA lebar (5rem di HP, 6rem >= sm) dan
-                                         sejajar di kedua kelompok.
-                                           1) Tahun berjalan : Hak, Koreksi Terpakai
-                                           2) Saldo tahun lalu: Sisa N-1, Sisa N-2
-                                         'Ditangguhkan' (informasi, tidak memengaruhi
-                                         Saldo Akhir) tampil di bawah label Sisa N-1 /
-                                         N-2 sebagai kotak angka kecil yang bisa diedit,
-                                         lengkap dengan checkbox "Ikut data sistem",
-                                         karena penangguhan hanya ada untuk tahun lalu. -->
-                                    <form
-                                        id="form-saldo"
-                                        @submit.prevent="simpanSaldo"
-                                        class="space-y-3"
-                                    >
-                                        <!-- ===== KELOMPOK 1: TAHUN BERJALAN ===== -->
-                                        <div
-                                            class="overflow-hidden rounded-lg border border-emerald-100 bg-white divide-y divide-gray-100"
-                                        >
-                                            <div
-                                                class="bg-gray-50 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500"
-                                            >
-                                                Tahun {{ tahunAktif }}
-                                            </div>
-
-                                            <!-- Hak tahun berjalan -->
-                                            <div class="grid grid-cols-[minmax(0,1fr)_5rem] sm:grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 px-3 py-2.5">
-                                                <label
-                                                    for="input-hak-tahun"
-                                                    class="text-xs font-semibold leading-snug text-blue-800"
-                                                >
-                                                    Hak Cuti
-                                                    <span
-                                                        class="font-normal text-gray-500"
-                                                        >(Jatah Tahunan)</span
-                                                    >
-                                                </label>
-                                                <input
-                                                    id="input-hak-tahun"
-                                                    type="number"
-                                                    inputmode="numeric"
-                                                    v-model="saldoForm.hak_tahun_ini"
-                                                    min="0"
-                                                    class="w-full h-11 sm:h-9 rounded-md border border-gray-300 bg-white px-2 text-center text-base sm:text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500"
-                                                />
-                                                <p
-                                                    v-if="saldoForm.errors.hak_tahun_ini"
-                                                    class="col-span-2 mt-1 text-[11px] text-red-600"
-                                                >
-                                                    {{ saldoForm.errors.hak_tahun_ini }}
-                                                </p>
-                                            </div>
-
-                                            <!-- Koreksi Jumlah Cuti Terpakai (angka FINAL,
-                                                 bukan +/-). Checkbox dicentang = ikut angka
-                                                 sistem (kotak dinonaktifkan). Tidak dicentang
-                                                 = angka di kotak dipakai apa adanya, termasuk
-                                                 0. Batas 0..365 sesuai validasi backend.
-                                                 Angka dari sistem digabung ke label checkbox. -->
-                                            <div class="grid grid-cols-[minmax(0,1fr)_5rem] sm:grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 bg-amber-50/50 px-3 py-2.5">
-                                                <div class="min-w-0">
-                                                    <label
-                                                        for="input-koreksi-saldo"
-                                                        class="block text-xs font-semibold leading-snug text-amber-800"
-                                                    >
-                                                        Koreksi Jumlah Cuti Terpakai
-                                                        (Hari)
-                                                    </label>
-                                                    <label
-                                                        class="mt-1 flex cursor-pointer select-none items-center gap-2 py-0.5 text-[11px] font-medium text-amber-800"
-                                                    >
-                                                        <input
-                                                            type="checkbox"
-                                                            v-model="saldoForm.pakai_sistem"
-                                                            class="h-5 w-5 sm:h-4 sm:w-4 shrink-0 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-                                                        />
-                                                        <span
-                                                            >Gunakan data dari sistem
-                                                            ({{
-                                                                getTerpakaiSistem(
-                                                                    selectedPegawai,
-                                                                )
-                                                            }}
-                                                            hari)</span
-                                                        >
-                                                    </label>
-                                                </div>
-                                                <input
-                                                    id="input-koreksi-saldo"
-                                                    type="number"
-                                                    inputmode="numeric"
-                                                    step="1"
-                                                    min="0"
-                                                    max="365"
-                                                    v-model="saldoForm.koreksi_saldo"
-                                                    :disabled="saldoForm.pakai_sistem"
-                                                    :required="!saldoForm.pakai_sistem"
-                                                    class="w-full h-11 sm:h-9 rounded-md border border-amber-300 bg-white px-2 text-center text-base sm:text-sm focus:border-amber-500 focus:ring-2 focus:ring-amber-500 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-500"
-                                                />
-                                                <p
-                                                    v-if="saldoForm.errors.koreksi_saldo"
-                                                    class="col-span-2 mt-1 text-[11px] text-red-600"
-                                                >
-                                                    {{ saldoForm.errors.koreksi_saldo }}
-                                                </p>
-                                            </div>
-                                        </div>
-
-                                        <!-- ===== KELOMPOK 2: SALDO TAHUN LALU ===== -->
-                                        <div
-                                            class="overflow-hidden rounded-lg border border-emerald-100 bg-white divide-y divide-gray-100"
-                                        >
-                                            <div
-                                                class="bg-gray-50 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-gray-500"
-                                            >
-                                                Saldo Tahun Lalu
-                                            </div>
-
-                                            <!-- Sisa N-1 (carry forward) + Ditangguhkan N-1 (bisa diedit) -->
-                                            <div class="grid grid-cols-[minmax(0,1fr)_5rem] sm:grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 px-3 py-2.5">
-                                                <div class="min-w-0">
-                                                    <label
-                                                        for="input-sisa-n1"
-                                                        class="block text-xs font-semibold leading-snug text-emerald-800"
-                                                    >
-                                                        Sisa Cuti {{ tahunAktif - 1 }}
-                                                    </label>
-
-                                                    <!-- Ditangguhkan N-1: kotak angka + checkbox
-                                                         "Ikut data sistem". Hanya informasi,
-                                                         tidak memengaruhi Saldo Akhir. -->
-                                                    <div
-                                                        class="mt-1.5 flex items-center gap-1.5 text-[11px] text-orange-700"
-                                                        :title="KETERANGAN_TGH"
-                                                    >
-                                                        <label
-                                                            for="input-tgh-n1"
-                                                            class="font-semibold"
-                                                            >Ditangguhkan:</label
-                                                        >
-                                                        <input
-                                                            id="input-tgh-n1"
-                                                            type="number"
-                                                            inputmode="numeric"
-                                                            step="1"
-                                                            min="0"
-                                                            max="365"
-                                                            v-model="saldoForm.ditangguhkan_n1"
-                                                            :disabled="saldoForm.pakai_sistem_tgh_n1"
-                                                            :required="!saldoForm.pakai_sistem_tgh_n1"
-                                                            class="h-9 sm:h-8 w-16 sm:w-14 rounded-md border border-orange-300 bg-white px-1 text-center text-base sm:text-sm focus:border-orange-500 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-500"
-                                                        />
-                                                        <span>hari</span>
-                                                    </div>
-                                                    <label
-                                                        class="mt-1 flex cursor-pointer select-none items-center gap-2 py-0.5 text-[11px] font-medium text-orange-800"
-                                                    >
-                                                        <input
-                                                            type="checkbox"
-                                                            v-model="saldoForm.pakai_sistem_tgh_n1"
-                                                            class="h-5 w-5 sm:h-4 sm:w-4 shrink-0 rounded border-orange-300 text-orange-600 focus:ring-orange-500"
-                                                        />
-                                                        <span
-                                                            >Ikut data sistem
-                                                            ({{
-                                                                getTghSistemN1(
-                                                                    selectedPegawai,
-                                                                )
-                                                            }}
-                                                            hari)</span
-                                                        >
-                                                    </label>
-                                                    <p
-                                                        v-if="saldoForm.errors.ditangguhkan_n1"
-                                                        class="mt-1 text-[11px] text-red-600"
-                                                    >
-                                                        {{ saldoForm.errors.ditangguhkan_n1 }}
-                                                    </p>
-                                                </div>
-                                                <input
-                                                    id="input-sisa-n1"
-                                                    type="number"
-                                                    inputmode="numeric"
-                                                    v-model="saldoForm.carry_forward_normal"
-                                                    min="0"
-                                                    max="12"
-                                                    class="w-full h-11 sm:h-9 rounded-md border border-gray-300 bg-white px-2 text-center text-base sm:text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
-                                                />
-                                                <p
-                                                    v-if="saldoForm.errors.carry_forward_normal"
-                                                    class="col-span-2 mt-1 text-[11px] text-red-600"
-                                                >
-                                                    {{ saldoForm.errors.carry_forward_normal }}
-                                                </p>
-                                            </div>
-
-                                            <!-- Sisa N-2 + Ditangguhkan N-2 (bisa diedit) -->
-                                            <div class="grid grid-cols-[minmax(0,1fr)_5rem] sm:grid-cols-[minmax(0,1fr)_6rem] items-center gap-x-3 px-3 py-2.5">
-                                                <div class="min-w-0">
-                                                    <label
-                                                        for="input-sisa-n2"
-                                                        class="block text-xs font-semibold leading-snug text-emerald-800"
-                                                    >
-                                                        Sisa Cuti {{ tahunAktif - 2 }}
-                                                    </label>
-
-                                                    <!-- Ditangguhkan N-2: pola sama dengan N-1 -->
-                                                    <div
-                                                        class="mt-1.5 flex items-center gap-1.5 text-[11px] text-orange-700"
-                                                        :title="KETERANGAN_TGH"
-                                                    >
-                                                        <label
-                                                            for="input-tgh-n2"
-                                                            class="font-semibold"
-                                                            >Ditangguhkan:</label
-                                                        >
-                                                        <input
-                                                            id="input-tgh-n2"
-                                                            type="number"
-                                                            inputmode="numeric"
-                                                            step="1"
-                                                            min="0"
-                                                            max="365"
-                                                            v-model="saldoForm.ditangguhkan_n2"
-                                                            :disabled="saldoForm.pakai_sistem_tgh_n2"
-                                                            :required="!saldoForm.pakai_sistem_tgh_n2"
-                                                            class="h-9 sm:h-8 w-16 sm:w-14 rounded-md border border-orange-300 bg-white px-1 text-center text-base sm:text-sm focus:border-orange-500 focus:ring-2 focus:ring-orange-500 disabled:cursor-not-allowed disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-500"
-                                                        />
-                                                        <span>hari</span>
-                                                    </div>
-                                                    <label
-                                                        class="mt-1 flex cursor-pointer select-none items-center gap-2 py-0.5 text-[11px] font-medium text-orange-800"
-                                                    >
-                                                        <input
-                                                            type="checkbox"
-                                                            v-model="saldoForm.pakai_sistem_tgh_n2"
-                                                            class="h-5 w-5 sm:h-4 sm:w-4 shrink-0 rounded border-orange-300 text-orange-600 focus:ring-orange-500"
-                                                        />
-                                                        <span
-                                                            >Ikut data sistem
-                                                            ({{
-                                                                getTghSistemN2(
-                                                                    selectedPegawai,
-                                                                )
-                                                            }}
-                                                            hari)</span
-                                                        >
-                                                    </label>
-                                                    <p
-                                                        v-if="saldoForm.errors.ditangguhkan_n2"
-                                                        class="mt-1 text-[11px] text-red-600"
-                                                    >
-                                                        {{ saldoForm.errors.ditangguhkan_n2 }}
-                                                    </p>
-                                                </div>
-                                                <input
-                                                    id="input-sisa-n2"
-                                                    type="number"
-                                                    inputmode="numeric"
-                                                    v-model="saldoForm.sisa_cuti_dua_tahun_lalu"
-                                                    min="0"
-                                                    max="12"
-                                                    class="w-full h-11 sm:h-9 rounded-md border border-gray-300 bg-white px-2 text-center text-base sm:text-sm focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500"
-                                                />
-                                                <p
-                                                    v-if="saldoForm.errors.sisa_cuti_dua_tahun_lalu"
-                                                    class="col-span-2 mt-1 text-[11px] text-red-600"
-                                                >
-                                                    {{ saldoForm.errors.sisa_cuti_dua_tahun_lalu }}
-                                                </p>
-                                            </div>
-                                        </div>
-                                    </form>
-                                </div>
-                                <!-- ================= END FITUR EDIT SALDO PERORANGAN ================= -->
-
-                                <!-- Sisa Ditangguhkan: HANYA tampil jika ada nilai > 0.
-                                 Ringkasan informasi + catatan_saldo (kalau ada) untuk
-                                 data yang sudah tersimpan. -->
-                                <div
-                                    v-if="punyaSisaDitangguhkan(selectedPegawai)"
-                                    class="rounded-xl border border-orange-200 bg-orange-50 p-3 sm:p-4"
-                                >
-                                    <p
-                                        class="text-[11px] font-bold uppercase tracking-wider text-orange-700 mb-2"
-                                    >
-                                        Sisa Ditangguhkan (informasi)
-                                    </p>
-                                    <div class="grid grid-cols-2 gap-3 text-sm">
-                                        <div>
-                                            <span
-                                                class="text-xs text-orange-600/80"
-                                                >Ditangguhkan
-                                                {{ tahunAktif - 2 }}</span
-                                            >
-                                            <p
-                                                class="font-bold text-orange-900 text-lg"
-                                            >
-                                                {{
-                                                    getSisaDitangguhkanN2(
-                                                        selectedPegawai,
-                                                    )
-                                                }}
-                                                Hari
-                                            </p>
-                                        </div>
-                                        <div>
-                                            <span
-                                                class="text-xs text-orange-600/80"
-                                                >Ditangguhkan
-                                                {{ tahunAktif - 1 }}</span
-                                            >
-                                            <p
-                                                class="font-bold text-orange-900 text-lg"
-                                            >
-                                                {{
-                                                    getSisaDitangguhkanN1(
-                                                        selectedPegawai,
-                                                    )
-                                                }}
-                                                Hari
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <p class="mt-2 text-xs text-orange-800/80">
-                                        Saldo sudah dikembalikan; Tgh hanya
-                                        informasi dan tidak menjadi carry-over.
-                                    </p>
-                                    <p
-                                        v-if="selectedPegawai.catatan_saldo"
-                                        class="mt-2 text-xs text-orange-800/80 italic break-words"
-                                    >
-                                        {{ selectedPegawai.catatan_saldo }}
-                                    </p>
-                                </div>
-                            </template>
-
-                            <!-- TAB RIWAYAT: menampilkan SEMUA riwayat (tidak dipotong) -->
-                            <template v-if="modalTab === 'riwayat'">
+                                <!-- RIWAYAT: menampilkan SEMUA riwayat (tidak dipotong) -->
                                 <div>
                                     <h5
                                         class="font-bold text-gray-900 text-base mb-3 flex items-center gap-2"
@@ -2676,46 +4175,185 @@ watch(adaModalTerbuka, (terbuka) => {
                                             ></path>
                                         </svg>
                                         Riwayat Pengajuan Cuti
+                                        <span
+                                            class="inline-block min-w-[20px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-bold text-center"
+                                            >{{
+                                                selectedPegawai.pengajuan_cuti
+                                                    ?.length || 0
+                                            }}</span
+                                        >
                                     </h5>
 
-                                    <!-- Kosong -->
+                                    <!-- Ringkasan untuk verifikasi Terpakai:
+                                         total Cuti Tahunan disetujui di tahun aktif
+                                         vs angka sistem (cuti disetujui saja; Tgh
+                                         dihitung terpisah di kolom Tgh). -->
                                     <div
-                                        v-if="
-                                            !selectedPegawai.pengajuan_cuti ||
-                                            selectedPegawai.pengajuan_cuti
-                                                .length === 0
+                                        class="mb-3 rounded-lg border px-3 py-2 text-xs leading-relaxed"
+                                        :class="
+                                            ringkasanDisetujui.total ===
+                                            ringkasanDisetujui.sistem
+                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                                : 'border-amber-200 bg-amber-50 text-amber-800'
                                         "
+                                    >
+                                        Cuti Tahunan disetujui {{ tahunAktif }}:
+                                        <span class="font-bold"
+                                            >{{
+                                                ringkasanDisetujui.total
+                                            }}
+                                            hari</span
+                                        >
+                                        dari
+                                        {{ ringkasanDisetujui.jumlahPengajuan }}
+                                        pengajuan. Sistem mencatat
+                                        <span class="font-bold"
+                                            >{{
+                                                ringkasanDisetujui.sistem
+                                            }}
+                                            hari</span
+                                        >.
+                                        <template
+                                            v-if="
+                                                ringkasanDisetujui.total !==
+                                                ringkasanDisetujui.sistem
+                                            "
+                                        >
+                                            Angkanya berbeda, periksa riwayat di
+                                            bawah.
+                                        </template>
+                                        <template
+                                            v-if="
+                                                getSisaDitangguhkanTahunIni(
+                                                    selectedPegawai,
+                                                ) > 0
+                                            "
+                                        >
+                                            Ditambah Tgh
+                                            {{
+                                                getSisaDitangguhkanTahunIni(
+                                                    selectedPegawai,
+                                                )
+                                            }}
+                                            hari, Terpakai yang tampil
+                                            {{
+                                                getTerpakaiSistemTampil(
+                                                    selectedPegawai,
+                                                )
+                                            }}
+                                            hari.
+                                        </template>
+                                        <template
+                                            v-if="adaKoreksi(selectedPegawai)"
+                                        >
+                                            Terpakai yang tampil di tabel:
+                                            <span class="font-bold"
+                                                >{{
+                                                    getTerpakaiTampil(
+                                                        selectedPegawai,
+                                                    )
+                                                }}
+                                                hari (koreksi Admin HR)</span
+                                            >.
+                                        </template>
+                                    </div>
+
+                                    <!-- Filter: chip status + hanya Cuti Tahunan -->
+                                    <div class="mb-3 space-y-2">
+                                        <div
+                                            class="flex flex-wrap gap-1.5"
+                                            role="group"
+                                            aria-label="Filter status riwayat"
+                                        >
+                                            <button
+                                                v-for="opsi in OPSI_STATUS_RIWAYAT"
+                                                :key="opsi.key"
+                                                type="button"
+                                                @click="
+                                                    filterStatusRiwayat =
+                                                        opsi.key;
+                                                    expandedRiwayatId = null;
+                                                "
+                                                :aria-pressed="
+                                                    filterStatusRiwayat ===
+                                                    opsi.key
+                                                "
+                                                class="inline-flex min-h-[32px] cursor-pointer items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold transition"
+                                                :class="
+                                                    filterStatusRiwayat ===
+                                                    opsi.key
+                                                        ? 'border-emerald-600 bg-emerald-600 text-white'
+                                                        : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                                                "
+                                            >
+                                                {{ opsi.label }}
+                                                <span
+                                                    class="rounded-full px-1.5 text-[10px] font-bold"
+                                                    :class="
+                                                        filterStatusRiwayat ===
+                                                        opsi.key
+                                                            ? 'bg-white/25'
+                                                            : 'bg-gray-100 text-gray-500'
+                                                    "
+                                                    >{{
+                                                        jumlahPerStatus[
+                                                            opsi.key
+                                                        ]
+                                                    }}</span
+                                                >
+                                            </button>
+                                        </div>
+                                        <label
+                                            class="flex cursor-pointer select-none items-center gap-2 text-xs text-gray-600"
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                v-model="hanyaCutiTahunan"
+                                                class="h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                                            />
+                                            Hanya Cuti Tahunan (jenis lain tidak
+                                            mengurangi kuota)
+                                        </label>
+                                    </div>
+
+                                    <!-- Kosong: tidak ada riwayat sama sekali, atau
+                                         tidak ada yang cocok dengan filter -->
+                                    <div
+                                        v-if="riwayatTersaring.length === 0"
                                         class="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-200 text-xs text-gray-400"
                                     >
-                                        Belum ada catatan riwayat pengajuan
-                                        cuti.
+                                        <template
+                                            v-if="
+                                                !selectedPegawai.pengajuan_cuti ||
+                                                selectedPegawai.pengajuan_cuti
+                                                    .length === 0
+                                            "
+                                        >
+                                            Belum ada catatan riwayat pengajuan
+                                            cuti.
+                                        </template>
+                                        <template v-else>
+                                            Tidak ada pengajuan yang cocok
+                                            dengan filter. Pilih status "Semua"
+                                            atau matikan "Hanya Cuti Tahunan".
+                                        </template>
                                     </div>
 
                                     <!-- List riwayat, garis warna kiri sesuai status asli -->
                                     <div v-else class="space-y-2.5">
                                         <div
-                                            v-for="riwayat in selectedPegawai.pengajuan_cuti"
+                                            v-for="riwayat in riwayatTersaring"
                                             :key="riwayat.id"
                                             @click="toggleExpand(riwayat.id)"
                                             class="bg-white p-3 sm:p-4 rounded-xl border border-gray-200/80 text-sm flex flex-col gap-2.5 transition-colors duration-150 hover:shadow-sm cursor-pointer relative overflow-hidden group"
-                                            :class="{
-                                                'border-l-4 border-l-emerald-500 hover:bg-emerald-100':
-                                                    riwayat.status ===
-                                                    'disetujui',
-                                                'border-l-4 border-l-amber-500 hover:bg-amber-100':
-                                                    riwayat.status?.includes(
-                                                        'menunggu',
-                                                    ),
-                                                'border-l-4 border-l-rose-500 hover:bg-rose-100':
-                                                    riwayat.status ===
-                                                    'ditolak',
-                                                'border-l-4 border-l-gray-400 hover:bg-gray-200':
-                                                    riwayat.status ===
-                                                    'dibatalkan_ditangguhkan',
-                                                'ring-2 ring-green-500/20':
-                                                    expandedRiwayatId ===
-                                                    riwayat.id,
-                                            }"
+                                            :class="[
+                                                kelasGarisStatus(
+                                                    riwayat.status,
+                                                ),
+                                                expandedRiwayatId === riwayat.id
+                                                    ? 'ring-2 ring-green-500/20'
+                                                    : '',
+                                            ]"
                                         >
                                             <!-- Baris atas: Jenis Cuti & Badge Status -->
                                             <div
@@ -2732,21 +4370,11 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 >
                                                     <span
                                                         class="px-2.5 py-1 rounded-md font-bold text-[11px] sm:text-xs tracking-wide uppercase min-w-0 break-words"
-                                                        :class="{
-                                                            'bg-emerald-50 text-emerald-700 border border-emerald-200':
-                                                                riwayat.status ===
-                                                                'disetujui',
-                                                            'bg-amber-50 text-amber-700 border border-amber-200':
-                                                                riwayat.status?.includes(
-                                                                    'menunggu',
-                                                                ),
-                                                            'bg-rose-50 text-rose-700 border border-rose-200':
-                                                                riwayat.status ===
-                                                                'ditolak',
-                                                            'bg-gray-100 text-gray-700 border border-gray-200':
-                                                                riwayat.status ===
-                                                                'dibatalkan_ditangguhkan',
-                                                        }"
+                                                        :class="
+                                                            kelasBadgeStatus(
+                                                                riwayat.status,
+                                                            )
+                                                        "
                                                     >
                                                         {{
                                                             getStatusLabel(
@@ -2780,9 +4408,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 class="text-gray-600 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium"
                                             >
                                                 <span
-                                                    >{{
-                                                        riwayat.tanggal_mulai
-                                                    }}
+                                                    >{{ riwayat.tanggal_mulai }}
                                                     s/d
                                                     {{
                                                         riwayat.tanggal_selesai
@@ -2791,8 +4417,25 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 <span>&middot;</span>
                                                 <span
                                                     class="font-bold text-gray-900"
-                                                    >{{ getDurasi(riwayat) }}
+                                                    >{{
+                                                        getDurasi(riwayat)
+                                                    }}
                                                     Hari</span
+                                                >
+                                                <span
+                                                    v-if="
+                                                        hariDihitungBeda(
+                                                            riwayat,
+                                                        )
+                                                    "
+                                                    class="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700"
+                                                    :title="`Cuti lintas tahun: hanya ${riwayat.hari_di_tahun_ini} hari yang jatuh di ${tahunAktif}`"
+                                                    >dihitung di
+                                                    {{ tahunAktif }}:
+                                                    {{
+                                                        riwayat.hari_di_tahun_ini
+                                                    }}
+                                                    hari</span
                                                 >
                                             </div>
 
@@ -2839,7 +4482,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 </div>
 
                                                 <!-- Alamat & kontak selama cuti (tampil '-'
-                                                 kalau field belum dikirim controller) -->
+                                             kalau field belum dikirim controller) -->
                                                 <div
                                                     class="grid grid-cols-1 md:grid-cols-2 gap-3 bg-white p-3 rounded-lg border border-green-100"
                                                 >
@@ -2927,9 +4570,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 </div>
 
                                                 <!-- Jejak Approval LENGKAP: seluruh jenjang
-                                                 L1-L4 sesuai rantai role pemohon, dengan
-                                                 status masing-masing (Setuju / Tolak /
-                                                 Menunggu / Belum Giliran / Ditangguhkan). -->
+                                             L1-L4 sesuai rantai role pemohon, dengan
+                                             status masing-masing (Setuju / Tolak /
+                                             Menunggu / Belum Giliran / Ditangguhkan). -->
                                                 <div
                                                     v-if="
                                                         getVisibleApprovalChain(
@@ -2987,9 +4630,13 @@ watch(adaModalTerbuka, (terbuka) => {
                                                             class="flex-1 min-w-0 break-words"
                                                         >
                                                             <template
-                                                                v-if="step.level"
+                                                                v-if="
+                                                                    step.level
+                                                                "
                                                             >
-                                                                L{{ step.level }}
+                                                                L{{
+                                                                    step.level
+                                                                }}
                                                                 &middot;
                                                             </template>
                                                             <strong
@@ -3026,301 +4673,308 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </div>
                                 </div>
-                            </template>
+                            </div>
                         </div>
-                        <!-- ================= END ISI TAB ================= -->
-                    </div>
 
-                    <!-- ============ 3) FOOTER (tetap) ============
-                         Tab Saldo : [Batalkan] [Simpan Saldo] ........ [Tutup Rincian]
-                         Tab Riwayat: hanya [Tutup Rincian].
-                         HP: Batalkan & Simpan berdampingan penuh; Tutup
-                         disembunyikan di tab Saldo karena sudah ada tombol X.
-                         Tombol Simpan terhubung ke form lewat atribut form. -->
-                    <div
-                        class="shrink-0 border-t bg-gray-50 px-3 sm:px-6 pt-2.5 sm:pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-3"
-                    >
-                        <!-- Pesan sukses setelah Simpan Saldo. Modal tetap
-                             terbuka supaya admin bisa langsung melihat
-                             perubahan pada kartu KPI. -->
-                        <p
-                            v-if="pesanSukses && modalTab === 'saldo'"
-                            role="status"
-                            class="mb-2 text-xs font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded-lg px-3 py-1.5"
+                        <!-- ============ 3) FOOTER (tetap) ============ -->
+                        <div
+                            class="shrink-0 border-t bg-gray-50 px-3 sm:px-6 pt-2.5 sm:pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-3"
                         >
-                            {{ pesanSukses }}
-                        </p>
-
-                        <div class="flex items-center gap-2 sm:justify-between">
-                            <div
-                                v-if="modalTab === 'saldo'"
-                                class="flex flex-1 sm:flex-none items-center gap-2"
-                            >
+                            <div class="flex items-center sm:justify-end">
                                 <button
+                                    @click="closeModal"
                                     type="button"
-                                    @click="resetSaldoForm"
-                                    :disabled="
-                                        isSavingSaldo || !saldoForm.isDirty
-                                    "
-                                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 px-4 sm:px-5 py-2.5 sm:py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-semibold rounded-full transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 justify-center items-center inline-flex px-6 py-2.5 sm:py-2 bg-gray-800 hover:bg-gray-700 text-white text-sm font-semibold rounded-xl transition shadow-sm cursor-pointer whitespace-nowrap"
                                 >
-                                    Batalkan
-                                </button>
-                                <button
-                                    type="submit"
-                                    form="form-saldo"
-                                    :disabled="
-                                        isSavingSaldo || !saldoForm.isDirty
-                                    "
-                                    class="flex-1 sm:flex-none min-h-[44px] sm:min-h-0 justify-center inline-flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-full shadow-sm transition disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
-                                >
-                                    <svg
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        class="w-4 h-4"
-                                        fill="none"
-                                        viewBox="0 0 24 24"
-                                        stroke="currentColor"
-                                    >
-                                        <path
-                                            stroke-linecap="round"
-                                            stroke-linejoin="round"
-                                            stroke-width="2"
-                                            d="M5 13l4 4L19 7"
-                                        />
-                                    </svg>
-                                    {{
-                                        isSavingSaldo
-                                            ? "Menyimpan..."
-                                            : "Simpan Saldo"
-                                    }}
+                                    Tutup Rincian
                                 </button>
                             </div>
-
-                            <button
-                                @click="closeModal"
-                                type="button"
-                                class="min-h-[44px] sm:min-h-0 justify-center items-center px-6 py-2.5 sm:py-2 bg-gray-800 hover:bg-gray-700 text-white text-sm font-semibold rounded-xl transition shadow-sm cursor-pointer whitespace-nowrap sm:ml-auto"
-                                :class="
-                                    modalTab === 'saldo'
-                                        ? 'hidden sm:inline-flex'
-                                        : 'inline-flex flex-1 sm:flex-none'
-                                "
-                            >
-                                Tutup Rincian
-                            </button>
                         </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- ========================================== -->
-            <!-- MODAL IMPOR KUOTA CUTI                     -->
-            <!-- ========================================== -->
-            <div
-                v-if="isImportModalOpen"
-                class="fixed inset-0 z-[9999] flex items-end justify-center bg-black/60 p-0 backdrop-blur-xs overflow-y-auto sm:items-center sm:p-4"
-            >
-                <!-- Background klik-untuk-tutup -->
-                <div class="absolute inset-0" @click="closeImportModal"></div>
-
+                <!-- ========================================== -->
+                <!-- MODAL IMPOR KUOTA CUTI                     -->
+                <!-- ========================================== -->
                 <div
-                    class="relative bg-white p-4 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[90dvh] overflow-y-auto overscroll-contain sm:my-auto"
+                    v-if="isImportModalOpen"
+                    class="fixed inset-0 z-[9999] flex items-end justify-center bg-black/60 p-0 backdrop-blur-xs overflow-y-auto sm:items-center sm:p-4"
                 >
+                    <!-- Background klik-untuk-tutup -->
                     <div
-                        class="flex justify-between items-center mb-4 sm:mb-5 border-b pb-3"
+                        class="absolute inset-0"
+                        @click="closeImportModal"
+                    ></div>
+
+                    <div
+                        class="relative bg-white p-4 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[90dvh] overflow-y-auto overscroll-contain sm:my-auto"
                     >
-                        <h3 class="text-base sm:text-lg font-bold text-gray-800">
-                            Impor Kuota Cuti
-                        </h3>
-                        <button
-                            type="button"
-                            @click="closeImportModal"
-                            aria-label="Tutup"
-                            class="px-2 text-gray-400 hover:text-red-500 font-bold text-2xl leading-none cursor-pointer outline-none"
-                        >
-                            &times;
-                        </button>
-                    </div>
-
-                    <form @submit.prevent="submitImportForm">
-                        <p class="text-sm text-gray-500 mb-4">
-                            Unggah file Excel (.xlsx) atau CSV berisi data kuota
-                            cuti pegawai untuk diperbarui secara massal.
-                        </p>
-
-                        <div class="mb-2">
-                            <label
-                                class="block text-sm font-medium text-gray-700 mb-1"
-                                >File Excel / CSV</label
-                            >
-                            <input
-                                ref="importFileInput"
-                                type="file"
-                                accept=".xlsx,.xls,.csv"
-                                @change="handleImportFileChange"
-                                class="block min-h-[44px] w-full text-base sm:text-sm text-gray-600 border border-gray-300 rounded-md cursor-pointer focus:outline-none file:mr-3 file:py-2 file:px-4 file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100"
-                            />
-                        </div>
-
-                        <p
-                            v-if="importForm.errors.file"
-                            class="text-sm text-red-600 mb-2"
-                        >
-                            {{ importForm.errors.file }}
-                        </p>
-
-                        <p class="text-xs text-gray-400 mb-5">
-                            Impor untuk tahun <b>{{ tahunAktif }}</b> (sesuai Filter
-                            Tahun). Gunakan template Rekap Cuti, sheet "Saldo Tahunan".
-                            Yang diperbarui hanya angka Sisa {{ tahunAktif - 2 }},
-                            Sisa {{ tahunAktif - 1 }}, dan Hak {{ tahunAktif }}. Kolom
-                            hasil hitungan diabaikan dan dihitung ulang oleh sistem.
-                            Sel kosong tidak mengubah data.
-                        </p>
-
-                        <!-- TOMBOL AKSI -->
                         <div
-                            class="flex flex-col-reverse gap-2 pt-4 border-t border-gray-100 sm:flex-row sm:justify-end"
+                            class="flex justify-between items-center mb-4 sm:mb-5 border-b pb-3"
                         >
+                            <h3
+                                class="text-base sm:text-lg font-bold text-gray-800"
+                            >
+                                Impor Kuota Cuti
+                            </h3>
                             <button
                                 type="button"
                                 @click="closeImportModal"
-                                class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 cursor-pointer transition"
+                                aria-label="Tutup"
+                                class="px-2 text-gray-400 hover:text-red-500 font-bold text-2xl leading-none cursor-pointer outline-none"
                             >
-                                Batal
-                            </button>
-                            <button
-                                type="submit"
-                                class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
-                                :disabled="
-                                    importForm.processing || !importForm.file
-                                "
-                            >
-                                {{
-                                    importForm.processing
-                                        ? "Mengunggah..."
-                                        : "Impor Sekarang"
-                                }}
+                                &times;
                             </button>
                         </div>
-                    </form>
-                </div>
-            </div>
 
-            <!-- ========================================== -->
-            <!-- MODAL GENERATE SALDO TAHUN BARU (MANUAL)   -->
-            <!-- Memanggil route 'admin.saldo.generate'     -->
-            <!-- (AdminController::generateSaldoManual) —   -->
-            <!-- Artisan Command                            -->
-            <!-- 'saldo-cuti:generate-tahun-baru', sama     -->
-            <!-- persis dengan scheduler tiap 1 Januari.    -->
-            <!-- ========================================== -->
-            <div
-                v-if="isGenerateSaldoModalOpen"
-                class="fixed inset-0 z-[9999] flex items-end justify-center bg-black/60 p-0 backdrop-blur-xs overflow-y-auto sm:items-center sm:p-4"
-            >
-                <!-- Background klik-untuk-tutup -->
-                <div
-                    class="absolute inset-0"
-                    @click="closeGenerateSaldoModal"
-                ></div>
+                        <form @submit.prevent="submitImportForm">
+                            <p class="text-sm text-gray-500 mb-4">
+                                Unggah file Excel (.xlsx) atau CSV berisi data
+                                kuota cuti pegawai untuk diperbarui secara
+                                massal.
+                            </p>
 
-                <div
-                    class="relative bg-white p-4 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[90dvh] overflow-y-auto overscroll-contain sm:my-auto"
-                >
-                    <div
-                        class="flex justify-between items-center mb-4 border-b pb-3"
-                    >
-                        <h3 class="text-base sm:text-lg font-bold text-gray-800">
-                            Generate Saldo Tahun Baru
-                        </h3>
-                        <button
-                            type="button"
-                            @click="closeGenerateSaldoModal"
-                            aria-label="Tutup"
-                            class="px-2 text-gray-400 hover:text-red-500 font-bold text-2xl leading-none cursor-pointer outline-none"
-                        >
-                            &times;
-                        </button>
-                    </div>
+                            <div class="mb-2">
+                                <label
+                                    class="block text-sm font-medium text-gray-700 mb-1"
+                                    >File Excel / CSV</label
+                                >
+                                <input
+                                    ref="importFileInput"
+                                    type="file"
+                                    accept=".xlsx,.xls,.csv"
+                                    @change="handleImportFileChange"
+                                    class="block min-h-[44px] w-full text-base sm:text-sm text-gray-600 border border-gray-300 rounded-md cursor-pointer focus:outline-none file:mr-3 file:py-2 file:px-4 file:border-0 file:bg-blue-50 file:text-blue-700 file:font-semibold hover:file:bg-blue-100"
+                                />
+                            </div>
 
-                    <form @submit.prevent="submitGenerateSaldo">
-                        <p class="text-sm text-gray-600 mb-4">
-                            Ini akan menghitung ulang carry-over saldo cuti
-                            untuk
-                            <strong>semua pegawai</strong>
-                            pada tahun di bawah, memakai logika yang sama
-                            persis dengan generate otomatis tiap 1 Januari
-                            (carry-over dari sisa saldo biasa maks. 6 hari, atau
-                            12 hari jika sisa N-2 dan N-1 sama-sama 12; total
-                            hak + bawaan maks. 24 hari). Catatan penangguhan
-                            hanya untuk pelaporan, bukan carry-over.
-                            Aman
-                            diulang: hasilnya sama untuk data yang sama, dan
-                            Hak yang sudah diisi tidak berubah. Sisa tahun lalu
-                            dan carry-over dihitung ulang.
-                        </p>
-
-                        <label
-                            class="block text-sm font-medium text-gray-700 mb-1"
-                        >
-                            Tahun yang digenerate
-                        </label>
-                        <!-- Opsi dirender dinamis dari 'pilihanTahunGenerate',
-                             sehingga catatan di <script> berlaku: cukup tambahkan
-                             currentYear ke array itu untuk membuka tahun berjalan. -->
-                        <select
-                            v-model="generateSaldoForm.tahun"
-                            class="w-full min-h-[44px] border border-gray-300 rounded-md px-3 py-2 text-base sm:text-sm mb-2 focus:ring-emerald-500 focus:border-emerald-500"
-                        >
-                            <option
-                                v-for="tahun in pilihanTahunGenerate"
-                                :key="tahun"
-                                :value="tahun"
+                            <p
+                                v-if="importForm.errors.file"
+                                class="text-sm text-red-600 mb-2"
                             >
-                                {{ tahun }}
-                            </option>
-                        </select>
-                        <p
-                            v-if="generateSaldoForm.tahun === currentYear"
-                            class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2"
-                        >
-                            Generate tahun berjalan akan menghitung ulang Sisa
-                            tahun lalu dan menimpa angka yang diisi manual atau
-                            diimpor. Hak yang sudah diisi tidak berubah.
-                        </p>
-                        <p
-                            v-if="generateSaldoForm.errors.tahun"
-                            class="text-sm text-red-600 mb-2"
-                        >
-                            {{ generateSaldoForm.errors.tahun }}
-                        </p>
+                                {{ importForm.errors.file }}
+                            </p>
 
+                            <p class="text-xs text-gray-400 mb-5">
+                                Impor untuk tahun
+                                <b>{{ tahunAktif }}</b> (sesuai Filter Tahun).
+                                Gunakan template Rekap Cuti, sheet "Saldo
+                                Tahunan". Yang diperbarui hanya angka Sisa
+                                {{ tahunAktif - 2 }}, Sisa {{ tahunAktif - 1 }},
+                                dan Hak {{ tahunAktif }}. Kolom hasil hitungan
+                                diabaikan dan dihitung ulang oleh sistem. Sel
+                                kosong tidak mengubah data.
+                            </p>
+
+                            <!-- TOMBOL AKSI -->
+                            <div
+                                class="flex flex-col-reverse gap-2 pt-4 border-t border-gray-100 sm:flex-row sm:justify-end"
+                            >
+                                <button
+                                    type="button"
+                                    @click="closeImportModal"
+                                    class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 cursor-pointer transition"
+                                >
+                                    Batal
+                                </button>
+                                <button
+                                    type="submit"
+                                    class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    :disabled="
+                                        importForm.processing ||
+                                        !importForm.file
+                                    "
+                                >
+                                    {{
+                                        importForm.processing
+                                            ? "Mengunggah..."
+                                            : "Impor Sekarang"
+                                    }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- ========================================== -->
+                <!-- MODAL GENERATE SALDO TAHUN BARU (MANUAL)   -->
+                <!-- Memanggil route 'admin.saldo.generate'     -->
+                <!-- (AdminController::generateSaldoManual) —   -->
+                <!-- Artisan Command                            -->
+                <!-- 'saldo-cuti:generate-tahun-baru'.          -->
+                <!-- Tidak dijadwalkan otomatis.                -->
+                <!-- Dua langkah: (1) pilih tahun, (2) konfirmasi. -->
+                <!-- Tahun tujuan DINAMIS (tahun dilihat + 1).  -->
+                <!-- ========================================== -->
+                <div
+                    v-if="isGenerateSaldoModalOpen"
+                    class="fixed inset-0 z-[9999] flex items-end justify-center bg-black/60 p-0 backdrop-blur-xs overflow-y-auto sm:items-center sm:p-4"
+                >
+                    <!-- Background klik-untuk-tutup -->
+                    <div
+                        class="absolute inset-0"
+                        @click="closeGenerateSaldoModal"
+                    ></div>
+
+                    <div
+                        class="relative bg-white p-4 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[90dvh] overflow-y-auto overscroll-contain sm:my-auto"
+                    >
                         <div
-                            class="flex flex-col-reverse gap-2 pt-4 border-t border-gray-100 mt-3 sm:flex-row sm:justify-end"
+                            class="flex justify-between items-center mb-4 border-b pb-3"
                         >
+                            <h3
+                                class="text-base sm:text-lg font-bold text-gray-800"
+                            >
+                                Generate Saldo Tahun Baru
+                            </h3>
                             <button
                                 type="button"
                                 @click="closeGenerateSaldoModal"
-                                class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 cursor-pointer transition"
+                                aria-label="Tutup"
+                                class="px-2 text-gray-400 hover:text-red-500 font-bold text-2xl leading-none cursor-pointer outline-none"
                             >
-                                Batal
-                            </button>
-                            <button
-                                type="submit"
-                                :disabled="generateSaldoForm.processing"
-                                class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {{
-                                    generateSaldoForm.processing
-                                        ? "Memproses..."
-                                        : "Generate Sekarang"
-                                }}
+                                &times;
                             </button>
                         </div>
-                    </form>
+
+                        <form
+                            @submit.prevent="
+                                langkahKonfirmasiGenerate
+                                    ? submitGenerateSaldo()
+                                    : lanjutKonfirmasiGenerate()
+                            "
+                        >
+                            <!-- LANGKAH 1: pilih tahun -->
+                            <template v-if="!langkahKonfirmasiGenerate">
+                                <p class="text-sm text-gray-600 mb-4">
+                                    Ini akan
+                                    <strong
+                                        >membuat saldo yang belum ada</strong
+                                    >
+                                    untuk pegawai aktif pada tahun di bawah.
+                                    Saldo yang sudah ada tidak diubah, karena
+                                    bawaannya otomatis diperbarui setiap kali
+                                    cuti disetujui, dibatalkan, atau
+                                    ditangguhkan. Bawaan dari sisa saldo biasa
+                                    maks. 6 hari (12 hari jika sisa N-2 dan N-1
+                                    sama-sama 12). Catatan penangguhan hanya
+                                    untuk pelaporan, bukan carry-over.
+                                </p>
+
+                                <label
+                                    class="block text-sm font-medium text-gray-700 mb-1"
+                                >
+                                    Tahun yang digenerate
+                                </label>
+                                <!-- Opsi dirender dinamis dari 'pilihanTahunGenerate'
+                                 (computed: tahun yang dilihat + 1), sehingga selalu
+                                 sama dengan label tombol. -->
+                                <select
+                                    v-model="generateSaldoForm.tahun"
+                                    class="w-full min-h-[44px] border border-gray-300 rounded-md px-3 py-2 text-base sm:text-sm mb-2 focus:ring-emerald-500 focus:border-emerald-500"
+                                >
+                                    <option
+                                        v-for="tahun in pilihanTahunGenerate"
+                                        :key="tahun"
+                                        :value="tahun"
+                                    >
+                                        {{ tahun }}
+                                    </option>
+                                </select>
+                                <p
+                                    v-if="
+                                        generateSaldoForm.tahun === currentYear
+                                    "
+                                    class="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2"
+                                >
+                                    Generate tahun berjalan akan menghitung
+                                    ulang Sisa tahun lalu dan menimpa angka yang
+                                    diisi manual atau diimpor. Hak yang sudah
+                                    diisi tidak berubah.
+                                </p>
+                                <p
+                                    v-if="generateSaldoForm.errors.tahun"
+                                    class="text-sm text-red-600 mb-2"
+                                >
+                                    {{ generateSaldoForm.errors.tahun }}
+                                </p>
+
+                                <div
+                                    class="flex flex-col-reverse gap-2 pt-4 border-t border-gray-100 mt-3 sm:flex-row sm:justify-end"
+                                >
+                                    <button
+                                        type="button"
+                                        @click="closeGenerateSaldoModal"
+                                        class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 cursor-pointer transition"
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 cursor-pointer transition"
+                                    >
+                                        Lanjutkan
+                                    </button>
+                                </div>
+                            </template>
+
+                            <!-- LANGKAH 2: konfirmasi akhir. Request baru dikirim
+                             setelah tombol "Ya, Generate Saldo" ditekan. -->
+                            <template v-else>
+                                <div
+                                    class="rounded-lg border border-amber-200 bg-amber-50 p-3 sm:p-4 text-amber-900"
+                                >
+                                    <p class="text-sm font-bold">
+                                        Generate saldo tahun
+                                        {{ generateSaldoForm.tahun }}?
+                                    </p>
+                                    <ul
+                                        class="mt-2 list-disc space-y-1 pl-5 text-xs leading-relaxed"
+                                    >
+                                        <li>
+                                            Berlaku untuk
+                                            <b>semua pegawai</b>, bukan satu
+                                            orang.
+                                        </li>
+                                        <li>
+                                            Hanya pegawai aktif yang belum punya
+                                            saldo yang dibuatkan.
+                                        </li>
+                                        <li>
+                                            Saldo yang sudah ada tidak diubah.
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                <div
+                                    class="flex flex-col-reverse gap-2 pt-4 border-t border-gray-100 mt-4 sm:flex-row sm:justify-end"
+                                >
+                                    <button
+                                        type="button"
+                                        @click="
+                                            langkahKonfirmasiGenerate = false
+                                        "
+                                        :disabled="generateSaldoForm.processing"
+                                        class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        Kembali
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        :disabled="generateSaldoForm.processing"
+                                        class="min-h-[44px] sm:min-h-0 px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 cursor-pointer transition disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {{
+                                            generateSaldoForm.processing
+                                                ? "Memproses..."
+                                                : `Ya, Generate Saldo ${generateSaldoForm.tahun}`
+                                        }}
+                                    </button>
+                                </div>
+                            </template>
+                        </form>
+                    </div>
                 </div>
-            </div>
             </Teleport>
             <!-- end div pembungkus tunggal -->
         </div>

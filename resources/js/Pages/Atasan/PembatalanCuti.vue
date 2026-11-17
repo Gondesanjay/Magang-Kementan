@@ -3,7 +3,6 @@ import MainLayout from "@/Layouts/MainLayout.vue";
 import { Head, router } from "@inertiajs/vue3";
 import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
 
-
 // Debounce lokal (tidak butuh lodash)
 function debounce(fn, delay) {
     let timeoutId;
@@ -13,15 +12,26 @@ function debounce(fn, delay) {
     };
 }
 
-
 const props = defineProps({
+    // Paginator dari server: { data, total, current_page, last_page, from, to, ... }
     daftarCuti: {
+        type: Object,
+        default: () => ({
+            data: [],
+            total: 0,
+            current_page: 1,
+            last_page: 1,
+            from: null,
+            to: null,
+        }),
+    },
+    // Daftar nama kelompok substansi dari controller (sama seperti Monitoring Cuti).
+    daftarKelompokSubstansi: {
         type: Array,
         default: () => [],
     },
-    // Daftar nama kelompok substansi (array string) dari controller,
-    // sama seperti halaman Monitoring Cuti.
-    daftarKelompokSubstansi: {
+    // Daftar tahun yang boleh dipilih (2 tahun mundur, 1 tahun maju) dari controller.
+    daftarTahun: {
         type: Array,
         default: () => [],
     },
@@ -31,10 +41,8 @@ const props = defineProps({
     },
 });
 
-
 // ================= FORMAT TANGGAL =================
-// "YYYY-MM-DD" di-parse sebagai tanggal LOKAL (bukan UTC) supaya tanggal
-// tidak bergeser sehari di zona waktu tertentu.
+// "YYYY-MM-DD" di-parse sebagai tanggal LOKAL (bukan UTC) agar tidak bergeser sehari.
 const parseTanggal = (dateString) => {
     if (!dateString) return null;
     const [y, m, d] = String(dateString).slice(0, 10).split("-").map(Number);
@@ -42,7 +50,6 @@ const parseTanggal = (dateString) => {
     const fallback = new Date(dateString);
     return Number.isNaN(fallback.getTime()) ? null : fallback;
 };
-
 
 const formatDate = (dateString) => {
     const date = parseTanggal(dateString);
@@ -54,7 +61,6 @@ const formatDate = (dateString) => {
     }).format(date);
 };
 // ================= END FORMAT TANGGAL =================
-
 
 // Kamus label status lengkap, dipakai untuk teks deskriptif.
 const statusLabels = {
@@ -68,13 +74,11 @@ const statusLabels = {
     dibatalkan_ditangguhkan: "Ditangguhkan",
 };
 
-
 const formatStatus = (status) => {
     if (!status) return "-";
     if (statusLabels[status]) return statusLabels[status];
     return status.replace(/_/g, " ").toUpperCase();
 };
-
 
 // Label singkat untuk badge.
 const STATUS_BADGE_SINGKAT = {
@@ -88,7 +92,6 @@ const STATUS_BADGE_SINGKAT = {
     dibatalkan_ditangguhkan: "DITANGGUHKAN",
 };
 
-
 const formatStatusBadge = (status) => {
     if (!status) return "-";
     return (
@@ -96,11 +99,9 @@ const formatStatusBadge = (status) => {
     );
 };
 
-
 const bisaDitangguhkan = (item) => item?.bisa_ditangguhkan === true;
 const alasanTidakBisaDitangguhkan = (item) => item?.alasan_tidak_bisa || null;
 const PESAN_TIDAK_BISA = "Cuti ini tidak dapat ditangguhkan.";
-
 
 // Kelas warna badge status (emerald/amber/rose/gray).
 const statusBadgeClass = (status) => {
@@ -117,7 +118,6 @@ const statusBadgeClass = (status) => {
     return "bg-amber-100 text-amber-800 border-amber-300";
 };
 
-
 const getDurasi = (item) => {
     if (item?.jumlah_hari && item.jumlah_hari > 0) return item.jumlah_hari;
     const mulai = parseTanggal(item?.tanggal_mulai);
@@ -126,7 +126,6 @@ const getDurasi = (item) => {
     const selisih = Math.round((selesai - mulai) / (1000 * 60 * 60 * 24)) + 1;
     return selisih > 0 ? selisih : 1;
 };
-
 
 const getNomorTelepon = (item) => {
     if (!item) return "-";
@@ -143,34 +142,165 @@ const getNomorTelepon = (item) => {
     );
 };
 
+// ================= HELPER MODAL DETAIL (SAMA DENGAN MonitoringCuti.vue) =================
+const LABEL_TANPA_KELOMPOK = "Tanpa Kelompok";
+
+const kosongKelompok = (nilai) =>
+    ["", "-", "–", "—"].includes(String(nilai ?? "").trim());
+
+const kelompokPegawai = (pegawai) => {
+    const ks = pegawai?.kelompok_substansi;
+    const dep = pegawai?.departemen;
+    if (!kosongKelompok(ks)) return String(ks).trim();
+    if (!kosongKelompok(dep)) return String(dep).trim();
+    return LABEL_TANPA_KELOMPOK;
+};
+
+const getLampiranUrl = (path) => {
+    if (!path) return "";
+    if (/^(https?:)?\/\//.test(path) || path.startsWith("/")) return path;
+    return `/storage/${path}`;
+};
+
+const getAlasanBersih = (text) => {
+    if (!text || text === "-") return "-";
+    if (text.includes("|") || text.includes("[DITANGGUHKAN")) {
+        let bagian = text.split("|").map((item) => item.trim());
+        let alasanAwal =
+            bagian[0] && bagian[0] !== "-" ? bagian[0] : "Ada keperluan";
+        return alasanAwal;
+    }
+    if (
+        text.includes("(") &&
+        /oleh|ditolak|ditangguhkan|dibatalkan/i.test(text)
+    ) {
+        let alasanAwal = text.split("(")[0].trim();
+        return alasanAwal !== "" ? alasanAwal : text;
+    }
+    return text;
+};
+
+const isKeteranganDitangguhkan = (keterangan) =>
+    /ditangguhkan/i.test(keterangan || "");
+
+const getIsiCatatanMentah = (text) => {
+    if (!text) return "";
+    const bracketRegex = /\[DITANGGUHKAN\/DIBATALKAN ATASAN:\s*(.*?)\]/i;
+    const bracketMatch = text.match(bracketRegex);
+    if (bracketMatch && bracketMatch[1]) return bracketMatch[1].trim();
+    const parenRegex = /([)]+)/;
+    const parenMatch = text.match(parenRegex);
+    if (parenMatch && parenMatch[1]) return parenMatch[1].trim();
+    return "";
+};
+
+const getCatatanAtasan = (text) => {
+    const isi = getIsiCatatanMentah(text);
+    if (!isi) return "";
+    let hasil = isi;
+    if (/oleh/i.test(isi) && isi.includes(":")) {
+        const parts = isi.split(":");
+        hasil = parts.slice(1).join(":").trim();
+    }
+    return hasil.replace(/\s*[—–-]\s*Pengajuan Cuti Ulang\s*$/i, "").trim();
+};
+
+// Nama L1/L2 dinamis + rute approval
+const levelsDefinition = [
+    {
+        key: 1,
+        jabatan: "L1 - Ketua Tim Kerja",
+        nama: "Ketua Tim Kerja Pegawai",
+    },
+    {
+        key: 2,
+        jabatan: "L2 - Ketua Kelompok Substansi",
+        nama: "Ketua Kelompok Substansi",
+    },
+    { key: 3, jabatan: "L3 - Kasubag TU", nama: "Kasubag TU" },
+    {
+        key: 4,
+        jabatan: "L4 - Kepala Biro Perencanaan",
+        nama: "Kepala Biro Perencanaan",
+    },
+];
+
+const getLevelDisplayName = (levelKey, data) =>
+    data?.[`atasan_l${levelKey}_nama`] ||
+    levelsDefinition.find((l) => l.key === levelKey)?.nama ||
+    "-";
+
+const getApprovalRoute = (pegawai) => {
+    const roleId = pegawai?.role_id ?? 1;
+    switch (roleId) {
+        case 6:
+            return [];
+        case 4:
+            return [levelsDefinition[3]];
+        case 3:
+            return [levelsDefinition[2], levelsDefinition[3]];
+        case 2:
+            return [
+                levelsDefinition[1],
+                levelsDefinition[2],
+                levelsDefinition[3],
+            ];
+        default: {
+            const kelompokPeg = (
+                pegawai?.kelompok_substansi ??
+                pegawai?.departemen ??
+                ""
+            )
+                .toString()
+                .trim()
+                .toLowerCase();
+            const isSubbagianTataUsaha =
+                kelompokPeg.includes("subbagian tata usaha") ||
+                kelompokPeg.includes("tata usaha") ||
+                kelompokPeg === "tata_usaha";
+            if (isSubbagianTataUsaha) {
+                return [levelsDefinition[2], levelsDefinition[3]];
+            }
+            const timKerjaPeg = (pegawai?.tim_kerja ?? "").toString().trim();
+            const tanpaTimKerja = timKerjaPeg === "" || timKerjaPeg === "-";
+            if (tanpaTimKerja) {
+                return [
+                    levelsDefinition[1],
+                    levelsDefinition[2],
+                    levelsDefinition[3],
+                ];
+            }
+            return [
+                levelsDefinition[0],
+                levelsDefinition[2],
+                levelsDefinition[3],
+            ];
+        }
+    }
+};
+// ================= END HELPER MODAL DETAIL =================
 
 // ===================== PAGINATION =====================
-const currentPage = ref(1);
-const itemsPerPage = 10;
-const totalData = computed(() => props.daftarCuti.length);
-const totalPages = computed(
-    () => Math.ceil(totalData.value / itemsPerPage) || 1,
-);
-const paginatedData = computed(() => {
-    const start = (currentPage.value - 1) * itemsPerPage;
-    const end = start + itemsPerPage;
-    return props.daftarCuti.slice(start, end);
-});
-const displayedFrom = computed(() =>
-    totalData.value === 0 ? 0 : (currentPage.value - 1) * itemsPerPage + 1,
-);
-const displayedTo = computed(() =>
-    Math.min(currentPage.value * itemsPerPage, totalData.value),
-);
-const prevPage = () => {
-    if (currentPage.value > 1) currentPage.value--;
+const paginatedData = computed(() => props.daftarCuti?.data ?? []);
+const totalData = computed(() => props.daftarCuti?.total ?? 0);
+const currentPage = computed(() => props.daftarCuti?.current_page ?? 1);
+const totalPages = computed(() => props.daftarCuti?.last_page ?? 1);
+const displayedFrom = computed(() => props.daftarCuti?.from ?? 0);
+const displayedTo = computed(() => props.daftarCuti?.to ?? 0);
+
+// Pindah halaman = minta halaman itu ke server, filter tetap terbawa.
+const bukaHalaman = (page) => {
+    if (page === "..." || page === currentPage.value) return;
+    if (page < 1 || page > totalPages.value) return;
+    router.get(
+        route("atasan.penangguhan"),
+        { ...buildParams(), page },
+        { preserveState: true, preserveScroll: true, replace: true },
+    );
 };
-const nextPage = () => {
-    if (currentPage.value < totalPages.value) currentPage.value++;
-};
-const setPage = (page) => {
-    currentPage.value = page;
-};
+const prevPage = () => bukaHalaman(currentPage.value - 1);
+const nextPage = () => bukaHalaman(currentPage.value + 1);
+const setPage = (page) => bukaHalaman(page);
 const pageNumbers = computed(() => {
     const total = totalPages.value;
     const current = currentPage.value;
@@ -182,39 +312,47 @@ const pageNumbers = computed(() => {
         if (current <= 4) {
             pages.push(1, 2, 3, 4, 5, "...", total);
         } else if (current >= total - 3) {
-            pages.push(1, "...", total - 4, total - 3, total - 2, total - 1, total);
+            pages.push(
+                1,
+                "...",
+                total - 4,
+                total - 3,
+                total - 2,
+                total - 1,
+                total,
+            );
         } else {
-            pages.push(1, "...", current - 1, current, current + 1, "...", total);
+            pages.push(
+                1,
+                "...",
+                current - 1,
+                current,
+                current + 1,
+                "...",
+                total,
+            );
         }
     }
     return pages;
 });
 
-
-// Jepit nomor halaman bila jumlah data berkurang (mis. setelah penangguhan
-// atau saat filter mempersempit hasil), supaya daftar tidak tampak kosong.
-watch(totalPages, (jumlah) => {
-    if (currentPage.value > jumlah) currentPage.value = jumlah;
-});
 // ===================== END PAGINATION =====================
-
 
 // ===================== SEARCH & FILTER =====================
 const search = ref(props.filters?.search || "");
 const kelompok = ref(props.filters?.kelompok_substansi || "");
-
+// Tahun yang ditampilkan. Bawaan dari controller (tahun berjalan).
+const tahun = ref(Number(props.filters?.tahun) || new Date().getFullYear());
 
 const buildParams = () => {
-    const params = { search: search.value };
+    const params = { search: search.value, tahun: tahun.value };
     if (kelompok.value) params.kelompok_substansi = kelompok.value;
     return params;
 };
 
-
 watch(
-    [search, kelompok],
+    [search, kelompok, tahun],
     debounce(() => {
-        currentPage.value = 1;
         router.get(route("atasan.penangguhan"), buildParams(), {
             preserveState: true,
             preserveScroll: true,
@@ -223,39 +361,18 @@ watch(
     }, 300),
 );
 
-
+// Tahun TIDAK dihitung sebagai "filter aktif" karena selalu terisi.
 const adaFilterAktif = computed(() => !!search.value || !!kelompok.value);
 const resetFilter = () => {
     search.value = "";
     kelompok.value = "";
 };
 
-
-// ----- Dropdown filter kelompok KUSTOM -----
-// Menggantikan <select> bawaan browser: daftar selalu terbuka ke bawah,
-// selebar tombolnya, tinggi dibatasi (bisa di-scroll), teks panjang membungkus.
-// Menutup saat klik di luar toolbar atau menekan Esc.
-const toolbarRef = ref(null);
-const dropdownKelompokTerbuka = ref(false);
-
-
-const toggleDropdownKelompok = () => {
-    dropdownKelompokTerbuka.value = !dropdownKelompokTerbuka.value;
-};
-
-
-const pilihKelompok = (nilai) => {
-    kelompok.value = nilai;
-    dropdownKelompokTerbuka.value = false;
-};
-
-
-// Pegawai tanpa kelompok di database bernilai "-". Nilainya TETAP "-" saat
-// dikirim ke backend, tetapi yang ditampilkan adalah "Tanpa Kelompok".
+// ----- Pegawai tanpa kelompok bernilai "-" di database. Nilai tetap "-" ke
+// backend, tetapi ditampilkan sebagai "Tanpa Kelompok". -----
 const NILAI_KOSONG = "-";
 const tampilKelompok = (k) =>
     String(k ?? "").trim() === NILAI_KOSONG ? "Tanpa Kelompok" : k;
-
 
 // Opsi "-" diletakkan paling bawah agar kelompok nyata tampil dulu.
 const opsiKelompok = computed(() => {
@@ -267,18 +384,64 @@ const opsiKelompok = computed(() => {
     return [...biasa, ...kosong];
 });
 
+// ================================================================
+// DROPDOWN FILTER KUSTOM (SAMA DENGAN HALAMAN APPROVAL / MonitoringCuti.vue)
+// Mobile  : Search full → Kelompok full → Tahun full
+// Desktop : satu baris horizontal
+// Menutup saat klik di luar dropdown (atribut data-dropdown) atau tekan Esc.
+// ================================================================
+const dropdownTerbuka = ref(null);
 
-const labelKelompok = computed(() =>
-    kelompok.value ? tampilKelompok(kelompok.value) : "Semua Kelompok",
-);
-
-
-const tutupDropdownSaatKlikLuar = (event) => {
-    if (toolbarRef.value && !toolbarRef.value.contains(event.target)) {
-        dropdownKelompokTerbuka.value = false;
-    }
+const toggleDropdown = (nama) => {
+    dropdownTerbuka.value = dropdownTerbuka.value === nama ? null : nama;
 };
 
+/** Kelompok + Tahun */
+const daftarFilter = computed(() => [
+    {
+        key: "kelompok",
+        id: "filter-kelompok-pembatalan",
+        ariaLabel: "Filter kelompok substansi",
+        selected: kelompok.value,
+        lebar: "lg:w-52",
+        options: [
+            { value: "", label: "Semua Kelompok" },
+            ...opsiKelompok.value.map((k) => ({
+                value: k,
+                label: tampilKelompok(k),
+            })),
+        ],
+    },
+    {
+        key: "tahun",
+        id: "filter-tahun-penangguhan",
+        ariaLabel: "Filter tahun cuti",
+        selected: tahun.value,
+        lebar: "lg:w-44",
+        options: props.daftarTahun.map((t) => ({
+            value: t,
+            label: `Tahun ${t}`,
+        })),
+    },
+]);
+
+const labelSelected = (f) => {
+    const cocok = f.options.find((o) => o.value === f.selected);
+    return cocok ? cocok.label : f.selected || f.options[0]?.label || "";
+};
+
+const pilihFilter = (key, nilai) => {
+    if (key === "kelompok") kelompok.value = nilai;
+    else if (key === "tahun") tahun.value = nilai;
+    dropdownTerbuka.value = null;
+};
+
+const tutupDropdownSaatKlikLuar = (event) => {
+    if (!event.target.closest?.("[data-dropdown]")) {
+        dropdownTerbuka.value = null;
+    }
+};
+// ================= END DROPDOWN FILTER KUSTOM =================
 
 // Chip "Filter aktif" untuk pencarian & kelompok
 const activeFilterChips = computed(() => {
@@ -305,7 +468,6 @@ const activeFilterChips = computed(() => {
 });
 // ===================== END SEARCH & FILTER =====================
 
-
 // ===================== TOAST =====================
 const toast = ref({
     show: false,
@@ -322,7 +484,6 @@ const showToast = (message) => {
 };
 // ===================== END TOAST =====================
 
-
 // ===================== MODAL PENANGGUHAN =====================
 const suspendData = ref({
     show: false,
@@ -331,9 +492,8 @@ const suspendData = ref({
     alasan: "",
 });
 const suspendError = ref("");
-// true selama request berjalan: mencegah klik ganda / pengiriman ganda.
+// true selama request berjalan: mencegah klik ganda.
 const sedangMemproses = ref(false);
-
 
 const openSuspendModal = (id, nama) => {
     suspendData.value.id = id;
@@ -344,28 +504,23 @@ const openSuspendModal = (id, nama) => {
     suspendData.value.show = true;
 };
 
-
 const closeSuspendModal = () => {
     if (sedangMemproses.value) return;
     suspendData.value.show = false;
     suspendError.value = "";
 };
 
-
 const submitSuspend = () => {
     if (sedangMemproses.value) return;
-
 
     if (!suspendData.value.alasan.trim()) {
         suspendError.value = "Mohon isi alasan penangguhan terlebih dahulu.";
         return;
     }
 
-
     suspendError.value = "";
     sedangMemproses.value = true;
     const namaPegawaiDisuspend = suspendData.value.namaPegawai;
-
 
     router.post(
         route("atasan.penangguhan.process", suspendData.value.id),
@@ -383,6 +538,7 @@ const submitSuspend = () => {
                 );
             },
             onError: (errors) => {
+                // Termasuk pesan "Hanya Cuti Tahunan yang dapat ditangguhkan." dari server.
                 const message =
                     errors?.status?.[0] ||
                     errors?.alasan?.[0] ||
@@ -397,22 +553,18 @@ const submitSuspend = () => {
 };
 // ===================== END MODAL PENANGGUHAN =====================
 
-
 // ===================== MODAL DETAIL =====================
 const detailModal = ref({ show: false, data: null });
-
 
 const bukaDetailModal = (item) => {
     detailModal.value.data = item;
     detailModal.value.show = true;
 };
 
-
 const closeDetailModal = () => {
     detailModal.value.show = false;
     detailModal.value.data = null;
 };
-
 
 const detailModalTangguhkan = () => {
     if (!detailModal.value.data) return;
@@ -420,19 +572,85 @@ const detailModalTangguhkan = () => {
     openSuspendModal(id, pegawai?.nama);
 };
 
-
 const bisaDitangguhkanDetail = computed(() =>
     bisaDitangguhkan(detailModal.value.data),
 );
 const alasanTidakBisaDetail = computed(() =>
     alasanTidakBisaDitangguhkan(detailModal.value.data),
 );
+
+// Timeline "Catatan / Respon Atasan" (sama dengan MonitoringCuti.vue)
+const approvalTimeline = computed(() => {
+    const data = detailModal.value.data;
+    if (!data) return [];
+    const st = data.status;
+    const steps = getApprovalRoute(data.pegawai);
+    const pendingMatch = st?.match(/^menunggu_l(\d)$/);
+    const pendingLevel = pendingMatch ? parseInt(pendingMatch[1], 10) : null;
+    const isStoppedStatus =
+        st === "ditolak" ||
+        st === "ditangguhkan" ||
+        st === "dibatalkan_ditangguhkan";
+    let stoppedLevel = null;
+    if (isStoppedStatus && steps.length > 0) {
+        if (data.level_saat_ini) {
+            stoppedLevel = parseInt(data.level_saat_ini, 10);
+        } else {
+            const ket = data.keterangan || "";
+            const matchLevel = ket.match(/l([1-4])/i);
+            stoppedLevel = matchLevel
+                ? parseInt(matchLevel[1], 10)
+                : steps[steps.length - 1].key;
+        }
+    }
+    const catatanAtasan =
+        stoppedLevel !== null ? getCatatanAtasan(data.keterangan) : "";
+    const catatanMenyebutDitangguhkan = isKeteranganDitangguhkan(
+        data.keterangan,
+    );
+    return steps.map((level) => {
+        let label = "-";
+        let color = "text-gray-400";
+        let catatan = "";
+        let nama = getLevelDisplayName(level.key, data);
+        if (st === "disetujui") {
+            label = "Disetujui";
+            color = "text-emerald-700";
+        } else if (pendingLevel !== null) {
+            if (level.key < pendingLevel) {
+                label = "Disetujui";
+                color = "text-emerald-700";
+            } else {
+                label = "Menunggu Persetujuan";
+                color = "text-orange-500";
+            }
+        } else if (stoppedLevel !== null) {
+            if (level.key < stoppedLevel) {
+                label = "Disetujui";
+                color = "text-emerald-700";
+            } else if (level.key === stoppedLevel) {
+                label =
+                    st === "ditolak" && !catatanMenyebutDitangguhkan
+                        ? "Ditolak"
+                        : "Ditangguhkan";
+                color = "text-rose-600";
+                if (catatanAtasan) catatan = catatanAtasan;
+            } else if (level.key > stoppedLevel) {
+                label = "Menunggu Persetujuan";
+                color = "text-orange-500";
+            }
+        }
+        return { ...level, nama, status: label, color, catatan };
+    });
+});
+
+const isPemohonKabiro = computed(
+    () => Number(detailModal.value.data?.pegawai?.role_id) === 6,
+);
 // ===================== END MODAL DETAIL =====================
 
-
 // ===================== ESC & KUNCI SCROLL =====================
-// Esc menutup lapisan paling atas lebih dulu:
-// modal penangguhan -> modal detail -> dropdown filter.
+// Esc menutup lapisan paling atas dulu: modal penangguhan -> modal detail -> dropdown.
 const tanganiTombolEsc = (event) => {
     if (event.key !== "Escape") return;
     if (suspendData.value.show) {
@@ -440,10 +658,9 @@ const tanganiTombolEsc = (event) => {
     } else if (detailModal.value.show) {
         closeDetailModal();
     } else {
-        dropdownKelompokTerbuka.value = false;
+        dropdownTerbuka.value = null;
     }
 };
-
 
 // Kunci scroll halaman di belakang saat ada modal terbuka.
 watch(
@@ -452,7 +669,6 @@ watch(
         document.body.style.overflow = adaModal ? "hidden" : "";
     },
 );
-
 
 onMounted(() => {
     document.addEventListener("click", tutupDropdownSaatKlikLuar);
@@ -467,32 +683,37 @@ onBeforeUnmount(() => {
 // ===================== END ESC & KUNCI SCROLL =====================
 </script>
 
-
 <template>
     <Head title="Penangguhan Cuti" />
     <MainLayout>
-        <div class="bg-white shadow-sm sm:rounded-lg p-4 sm:p-6 w-full max-w-full">
+        <div
+            class="bg-white shadow-sm sm:rounded-lg p-4 sm:p-6 w-full max-w-full"
+        >
             <!-- Header -->
             <div class="mb-5">
                 <h2 class="text-xl sm:text-2xl font-bold text-gray-800">
                     Manajemen Penangguhan Cuti
                 </h2>
                 <p class="text-sm text-gray-500 mt-1 leading-relaxed">
-                    Cuti berstatus Menunggu L1-L4 atau Disetujui yang belum
-                    dimulai dapat ditangguhkan. Saldo cuti yang sebelumnya
-                    disetujui dikembalikan otomatis, dan pegawai dapat merevisi
-                    tanggalnya.
+                    Hanya Cuti Tahunan berstatus Menunggu L1-L4 atau Disetujui
+                    yang dapat ditangguhkan. Hari cuti yang ditangguhkan akan
+                    ditambahkan ke saldo cuti pegawai pada tahun berikutnya.
                 </p>
             </div>
 
-
-            <!-- Toolbar Search + Filter -->
+            <!-- ============================================================
+                 TOOLBAR FILTER (gaya SAMA dengan halaman Approval)
+                 Mobile  : Search full → Kelompok full → Tahun full
+                 Desktop : satu baris horizontal
+                 ============================================================ -->
             <div
-                ref="toolbarRef"
-                class="flex flex-col gap-2 mb-4 lg:flex-row lg:items-center"
+                @keydown.esc="dropdownTerbuka = null"
+                class="mb-3 flex flex-col gap-2 lg:flex-row lg:flex-wrap lg:items-center lg:gap-2.5"
             >
-                <!-- Search -->
-                <div class="relative w-full min-w-0 lg:flex-1">
+                <!-- 1. Search -->
+                <div
+                    class="relative w-full min-w-0 lg:flex-1 lg:min-w-[12rem] lg:max-w-xs"
+                >
                     <div
                         class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
                     >
@@ -501,6 +722,7 @@ onBeforeUnmount(() => {
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke="currentColor"
+                            aria-hidden="true"
                         >
                             <path
                                 stroke-linecap="round"
@@ -517,21 +739,26 @@ onBeforeUnmount(() => {
                         type="text"
                         aria-label="Cari nama atau NIP pegawai"
                         placeholder="Cari nama, NIP..."
-                        class="w-full min-h-[44px] pl-9 pr-3 py-2 text-base sm:text-sm border border-gray-300 focus:border-emerald-500 focus:ring-emerald-500 rounded-lg shadow-sm bg-white"
+                        class="min-h-[40px] pl-10 border border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-lg text-sm w-full bg-white"
                     />
                 </div>
 
-
-                <!-- Filter Kelompok (dropdown kustom) -->
-                <div class="relative w-full min-w-0 lg:w-64">
+                <!-- 2. Kelompok + Tahun (dropdown kustom) -->
+                <div
+                    v-for="f in daftarFilter"
+                    :key="f.key"
+                    data-dropdown
+                    :class="['relative w-full min-w-0 lg:shrink-0', f.lebar]"
+                >
                     <div
-                        class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                        class="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none"
                     >
                         <svg
-                            class="h-4 w-4 text-gray-400"
+                            class="w-3.5 h-3.5 text-gray-400"
                             fill="none"
-                            viewBox="0 0 24 24"
                             stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
                         >
                             <path
                                 stroke-linecap="round"
@@ -541,36 +768,32 @@ onBeforeUnmount(() => {
                             />
                         </svg>
                     </div>
-
-
                     <button
-                        id="filter-kelompok-pembatalan"
+                        :id="f.id"
                         type="button"
-                        aria-label="Filter kelompok substansi"
+                        :aria-label="f.ariaLabel"
                         aria-haspopup="listbox"
-                        :aria-expanded="dropdownKelompokTerbuka"
-                        :title="labelKelompok"
-                        @click="toggleDropdownKelompok"
-                        class="w-full min-h-[44px] text-left text-base sm:text-sm border rounded-lg shadow-sm py-2 pl-9 pr-8 bg-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
-                        :class="
-                            kelompok
-                                ? 'border-emerald-500 text-gray-800'
-                                : 'border-gray-300 text-gray-600'
-                        "
+                        :aria-expanded="dropdownTerbuka === f.key"
+                        :title="labelSelected(f)"
+                        @click="toggleDropdown(f.key)"
+                        class="w-full min-h-[40px] text-left text-sm border border-gray-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none rounded-lg shadow-sm text-gray-700 py-1.5 pl-8 pr-7 bg-white cursor-pointer"
                     >
-                        <span class="block truncate">{{ labelKelompok }}</span>
+                        <span class="block truncate">{{
+                            labelSelected(f)
+                        }}</span>
                     </button>
-
-
                     <span
                         class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
                     >
                         <svg
                             class="w-3.5 h-3.5 text-gray-500 transition-transform"
-                            :class="{ 'rotate-180': dropdownKelompokTerbuka }"
+                            :class="{
+                                'rotate-180': dropdownTerbuka === f.key,
+                            }"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
+                            aria-hidden="true"
                         >
                             <path
                                 stroke-linecap="round"
@@ -580,49 +803,37 @@ onBeforeUnmount(() => {
                             />
                         </svg>
                     </span>
-
-
                     <ul
-                        v-if="dropdownKelompokTerbuka"
+                        v-if="dropdownTerbuka === f.key"
                         role="listbox"
-                        class="absolute left-0 right-0 top-full z-30 mt-1 max-h-[min(18rem,50dvh)] overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                        class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg min-w-[12rem]"
                     >
-                        <li>
+                        <li v-for="opt in f.options" :key="opt.value">
                             <button
                                 type="button"
                                 role="option"
-                                :aria-selected="!kelompok"
-                                @click="pilihKelompok('')"
+                                :title="opt.label"
+                                :aria-selected="f.selected === opt.value"
+                                @click="pilihFilter(f.key, opt.value)"
                                 :class="
-                                    !kelompok
+                                    f.selected === opt.value
                                         ? 'bg-emerald-50 text-emerald-700 font-semibold'
                                         : 'text-gray-700 hover:bg-gray-50'
                                 "
-                                class="block w-full px-3 py-2 text-left text-sm break-words"
+                                class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm cursor-pointer"
                             >
-                                Semua Kelompok
-                            </button>
-                        </li>
-                        <li v-for="k in opsiKelompok" :key="k">
-                            <button
-                                type="button"
-                                role="option"
-                                :aria-selected="kelompok === k"
-                                @click="pilihKelompok(k)"
-                                :class="
-                                    kelompok === k
-                                        ? 'bg-emerald-50 text-emerald-700 font-semibold'
-                                        : 'text-gray-700 hover:bg-gray-50'
-                                "
-                                class="block w-full px-3 py-2 text-left text-sm break-words"
-                            >
-                                {{ tampilKelompok(k) }}
+                                {{ opt.label }}
                             </button>
                         </li>
                     </ul>
                 </div>
             </div>
 
+            <!-- Catatan filter tahun -->
+            <p class="mb-4 text-xs text-gray-500">
+                Filter tahun menampilkan cuti yang tanggalnya beririsan dengan
+                tahun terpilih. Cuti lintas tahun muncul di kedua tahunnya.
+            </p>
 
             <!-- Chip Filter Aktif -->
             <div
@@ -652,9 +863,8 @@ onBeforeUnmount(() => {
                 >
                     Hapus semua
                 </button>
-                <span class="text-gray-500">{{ daftarCuti.length }} pengajuan</span>
+                <span class="text-gray-500">{{ totalData }} pengajuan</span>
             </div>
-
 
             <!-- ===================== TABEL DESKTOP ===================== -->
             <div class="hidden md:block overflow-x-auto">
@@ -720,7 +930,6 @@ onBeforeUnmount(() => {
                                 </div>
                             </td>
 
-
                             <!-- Jenis Cuti -->
                             <td class="px-4 py-3">
                                 <span
@@ -729,7 +938,6 @@ onBeforeUnmount(() => {
                                     {{ item.jenis_cuti || "-" }}
                                 </span>
                             </td>
-
 
                             <!-- Tanggal Cuti -->
                             <td
@@ -740,14 +948,12 @@ onBeforeUnmount(() => {
                                 {{ formatDate(item.tanggal_selesai) }}
                             </td>
 
-
                             <!-- Durasi -->
                             <td
                                 class="px-4 py-3 text-sm text-gray-900 whitespace-nowrap"
                             >
                                 {{ getDurasi(item) }} Hari
                             </td>
-
 
                             <!-- Status -->
                             <td class="px-4 py-3">
@@ -758,7 +964,6 @@ onBeforeUnmount(() => {
                                     {{ formatStatusBadge(item.status) }}
                                 </span>
                             </td>
-
 
                             <!-- Aksi -->
                             <td class="px-4 py-3">
@@ -794,7 +999,6 @@ onBeforeUnmount(() => {
                                         </svg>
                                     </button>
 
-
                                     <!-- Tombol Tangguhkan -->
                                     <button
                                         v-if="bisaDitangguhkan(item)"
@@ -823,7 +1027,6 @@ onBeforeUnmount(() => {
                                         Tangguhkan
                                     </button>
 
-
                                     <span
                                         v-else
                                         class="inline-flex items-center px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-400 font-semibold rounded-lg text-xs cursor-not-allowed"
@@ -838,15 +1041,14 @@ onBeforeUnmount(() => {
                             </td>
                         </tr>
 
-
                         <!-- Empty State -->
                         <tr v-if="paginatedData.length === 0">
                             <td
                                 colspan="6"
                                 class="px-6 py-10 text-center text-gray-500 text-sm"
                             >
-                                Tidak ada pengajuan cuti yang bisa ditangguhkan
-                                saat ini.
+                                Tidak ada pengajuan Cuti Tahunan yang bisa
+                                ditangguhkan pada tahun {{ tahun }}.
                                 <button
                                     v-if="adaFilterAktif"
                                     type="button"
@@ -860,7 +1062,6 @@ onBeforeUnmount(() => {
                     </tbody>
                 </table>
             </div>
-
 
             <!-- ===================== CARD MOBILE ===================== -->
             <div class="space-y-3 md:hidden">
@@ -891,7 +1092,6 @@ onBeforeUnmount(() => {
                         </span>
                     </div>
 
-
                     <dl class="mt-3 space-y-1.5 text-sm">
                         <div class="flex justify-between gap-3">
                             <dt class="text-gray-500">Jenis cuti</dt>
@@ -913,7 +1113,6 @@ onBeforeUnmount(() => {
                             </dd>
                         </div>
                     </dl>
-
 
                     <div class="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                         <button
@@ -945,9 +1144,7 @@ onBeforeUnmount(() => {
                         </span>
                     </div>
 
-
-                    <!-- Alasan ditampilkan langsung (di layar sentuh tooltip
-                         tidak terlihat) -->
+                    <!-- Alasan ditampilkan langsung (tooltip tidak terlihat di layar sentuh) -->
                     <p
                         v-if="
                             !bisaDitangguhkan(item) &&
@@ -959,12 +1156,12 @@ onBeforeUnmount(() => {
                     </p>
                 </article>
 
-
                 <div
                     v-if="paginatedData.length === 0"
                     class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
                 >
-                    Tidak ada pengajuan cuti yang bisa ditangguhkan saat ini.
+                    Tidak ada pengajuan Cuti Tahunan yang bisa ditangguhkan pada
+                    tahun {{ tahun }}.
                     <button
                         v-if="adaFilterAktif"
                         type="button"
@@ -975,7 +1172,6 @@ onBeforeUnmount(() => {
                     </button>
                 </div>
             </div>
-
 
             <!-- Pagination -->
             <div
@@ -996,7 +1192,6 @@ onBeforeUnmount(() => {
                     }}</span>
                     data
                 </div>
-
 
                 <nav
                     class="isolate inline-flex -space-x-px rounded-md shadow-sm"
@@ -1040,10 +1235,8 @@ onBeforeUnmount(() => {
         </div>
     </MainLayout>
 
-
     <!-- ===================== MODAL DETAIL =====================
-         z-[9998]: di atas header/menu bawah aplikasi, tetapi tetap DI BAWAH
-         modal penangguhan (z-[9999]) yang dibuka dari sini. -->
+         z-[9998]: di atas header/menu bawah, tetapi DI BAWAH modal penangguhan (z-[9999]). -->
     <Teleport to="body">
         <div
             v-if="detailModal.show"
@@ -1098,7 +1291,6 @@ onBeforeUnmount(() => {
                     </span>
                 </div>
 
-
                 <div
                     class="flex-1 overflow-y-auto px-5 sm:px-6 py-4 space-y-3 text-sm"
                     v-if="detailModal.data"
@@ -1136,11 +1328,7 @@ onBeforeUnmount(() => {
                             Kelompok Substansi
                         </div>
                         <div class="col-span-8 text-slate-800 font-semibold">
-                            {{
-                                detailModal.data.pegawai?.kelompok_substansi ||
-                                detailModal.data.pegawai?.departemen ||
-                                "-"
-                            }}
+                            {{ kelompokPegawai(detailModal.data.pegawai) }}
                         </div>
                     </div>
                     <div class="grid grid-cols-12 gap-2">
@@ -1152,13 +1340,13 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
-
                     <!-- Anak ke berapa: hanya Cuti Melahirkan -->
                     <div
                         v-if="
                             detailModal.data.jenis_cuti
                                 ?.toLowerCase()
-                                .includes('melahirkan') && detailModal.data.anak_ke
+                                .includes('melahirkan') &&
+                            detailModal.data.anak_ke
                         "
                         class="grid grid-cols-12 gap-2"
                     >
@@ -1170,6 +1358,50 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
+                    <!-- Rincian Sisa Cuti (hanya Cuti Tahunan) -->
+                    <div
+                        v-if="
+                            detailModal.data.jenis_cuti
+                                ?.toLowerCase()
+                                .includes('tahunan')
+                        "
+                        class="grid grid-cols-12 gap-2 items-start bg-amber-50 border border-amber-200 border-l-4 border-l-amber-400 rounded-lg px-3 py-2.5 -mx-1"
+                    >
+                        <div class="col-span-4 text-amber-700 font-semibold">
+                            Rincian Sisa Cuti
+                        </div>
+                        <div class="col-span-8">
+                            <span class="font-extrabold text-amber-800 block">
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.total_cuti_tersedia ??
+                                    detailModal.data.pegawai
+                                        ?.sisa_cuti_tersedia ??
+                                    0
+                                }}
+                                Hari Total
+                            </span>
+                            <span
+                                class="font-normal text-amber-600/80 text-xs block mt-0.5"
+                            >
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.sisa_hak_tahun_berjalan ?? 0
+                                }}
+                                sisa tahun ini +
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.saldo_bawaan_eligible ?? 0
+                                }}
+                                bawaan +
+                                {{
+                                    detailModal.data.pegawai
+                                        ?.cuti_dikembalikan ?? 0
+                                }}
+                                dikembalikan
+                            </span>
+                        </div>
+                    </div>
 
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
@@ -1183,20 +1415,12 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="grid grid-cols-12 gap-2">
                         <div class="col-span-4 text-gray-500 font-medium">
-                            Status
-                        </div>
-                        <div class="col-span-8 text-slate-800 font-semibold">
-                            {{ formatStatus(detailModal.data.status) }}
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-12 gap-2">
-                        <div class="col-span-4 text-gray-500 font-medium">
-                            Alasan / Keterangan
+                            Alasan
                         </div>
                         <div
                             class="col-span-8 text-slate-800 font-semibold leading-relaxed"
                         >
-                            {{ detailModal.data.keterangan || "-" }}
+                            {{ getAlasanBersih(detailModal.data.keterangan) }}
                         </div>
                     </div>
                     <div class="grid grid-cols-12 gap-2">
@@ -1228,7 +1452,9 @@ onBeforeUnmount(() => {
                         <div class="col-span-8">
                             <a
                                 v-if="detailModal.data.lampiran"
-                                :href="detailModal.data.lampiran"
+                                :href="
+                                    getLampiranUrl(detailModal.data.lampiran)
+                                "
                                 target="_blank"
                                 rel="noopener"
                                 class="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 text-emerald-600 hover:bg-emerald-100 rounded-xl text-xs font-medium transition-colors"
@@ -1270,55 +1496,72 @@ onBeforeUnmount(() => {
                         </div>
                     </div>
 
-
-                    <!-- Catatan penangguhan: hanya bila cuti BISA ditangguhkan -->
-                    <div
-                        v-if="bisaDitangguhkanDetail"
-                        class="rounded-xl p-4 border bg-orange-50 border-orange-200"
-                    >
-                        <h4
-                            class="text-xs font-bold uppercase tracking-wider mb-1.5 flex items-center gap-1.5 text-orange-700"
+                    <!-- Catatan / Respon Atasan (sama dengan halaman Approval) -->
+                    <div class="pt-1">
+                        <div
+                            :class="[
+                                'rounded-xl p-4 border',
+                                detailModal.data.status === 'disetujui'
+                                    ? 'bg-emerald-50 border-emerald-200'
+                                    : 'bg-amber-50 border-amber-200',
+                            ]"
                         >
-                            <svg
-                                class="w-4 h-4"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
+                            <h4
+                                :class="[
+                                    'text-xs font-bold uppercase tracking-wider mb-3',
+                                    detailModal.data.status === 'disetujui'
+                                        ? 'text-emerald-700'
+                                        : 'text-orange-600',
+                                ]"
                             >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                                />
-                            </svg>
-                            Catatan Penangguhan
-                        </h4>
-                        <p class="text-sm text-orange-800/90 leading-relaxed">
-                            Untuk cuti yang sudah disetujui, saldo dikembalikan
-                            otomatis. Hari yang ditangguhkan hanya dicatat
-                            sebagai informasi dan tidak menjadi saldo bawaan.
-                            Pegawai dapat merevisi tanggalnya.
-                        </p>
-                    </div>
-
-
-                    <!-- Alasan cuti TIDAK bisa ditangguhkan -->
-                    <div
-                        v-else
-                        class="rounded-xl p-4 border bg-slate-50 border-slate-200"
-                    >
-                        <h4
-                            class="text-xs font-bold uppercase tracking-wider mb-1.5 text-slate-600"
-                        >
-                            Tidak Dapat Ditangguhkan
-                        </h4>
-                        <p class="text-sm text-slate-600 leading-relaxed">
-                            {{ alasanTidakBisaDetail || PESAN_TIDAK_BISA }}
-                        </p>
+                                Catatan / Respon Atasan
+                            </h4>
+                            <div
+                                v-if="isPemohonKabiro"
+                                class="bg-white rounded-lg border border-slate-100 px-3 py-2.5 flex flex-col shadow-sm"
+                            >
+                                <span class="text-xs text-gray-500 mb-1">
+                                    L4 - Kepala Biro Perencanaan:
+                                    <span class="font-semibold text-gray-800">{{
+                                        detailModal.data.pegawai?.nama
+                                    }}</span>
+                                </span>
+                                <span
+                                    class="text-xs font-bold text-emerald-700"
+                                >
+                                    Disetujui otomatis (pemohon adalah Kepala
+                                    Biro)
+                                </span>
+                            </div>
+                            <div v-else class="space-y-2">
+                                <div
+                                    v-for="level in approvalTimeline"
+                                    :key="level.key"
+                                    class="bg-white rounded-lg border border-slate-100 px-3 py-2.5 flex flex-col shadow-sm"
+                                >
+                                    <span class="text-xs text-gray-500 mb-1">
+                                        {{ level.jabatan }}:
+                                        <span
+                                            class="font-semibold text-gray-800"
+                                            >{{ level.nama }}</span
+                                        >
+                                    </span>
+                                    <span
+                                        class="text-xs"
+                                        :class="[
+                                            level.color,
+                                            level.catatan
+                                                ? 'font-medium'
+                                                : 'font-bold',
+                                        ]"
+                                    >
+                                        {{ level.catatan || level.status }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-
 
                 <div
                     class="shrink-0 border-t border-gray-100 px-5 sm:px-6 py-4 flex items-center justify-end gap-3"
@@ -1342,7 +1585,6 @@ onBeforeUnmount(() => {
             </div>
         </div>
     </Teleport>
-
 
     <!-- ===================== MODAL PENANGGUHAN ===================== -->
     <Teleport to="body">
@@ -1391,7 +1633,6 @@ onBeforeUnmount(() => {
                     </div>
                 </div>
 
-
                 <div class="p-5 sm:p-6">
                     <label
                         for="alasan-penangguhan"
@@ -1437,7 +1678,6 @@ onBeforeUnmount(() => {
                     </p>
                 </div>
 
-
                 <div
                     class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2"
                 >
@@ -1465,7 +1705,6 @@ onBeforeUnmount(() => {
             </div>
         </div>
     </Teleport>
-
 
     <!-- ===================== TOAST ===================== -->
     <Teleport to="body">
@@ -1504,7 +1743,9 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="ml-3 w-0 flex-1">
                     <p class="text-sm font-bold text-gray-900">Aksi Berhasil</p>
-                    <p class="mt-1 text-sm text-gray-600">{{ toast.message }}</p>
+                    <p class="mt-1 text-sm text-gray-600">
+                        {{ toast.message }}
+                    </p>
                 </div>
                 <div class="ml-4 flex shrink-0">
                     <button

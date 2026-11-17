@@ -4,12 +4,34 @@ import { Head, usePage, Link, router } from "@inertiajs/vue3";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useTahunFilter } from "@/composables/useTahunFilter";
 
+const isMenungguTahunan = (item) =>
+    String(item?.status ?? "").startsWith("menunggu") &&
+    String(item?.jenis_cuti ?? "")
+        .toLowerCase()
+        .includes("tahunan");
+
+const sisaSetelahDisetujui = (item) =>
+    Number(item?.pegawai?.total_cuti_tersedia ?? 0) -
+    Number(item?.jumlah_hari ?? 0);
+
 const props = defineProps({
     stats: Object,
     recentCuti: Array,
     cutiDisetujuiData: {
         type: Array,
         default: () => [],
+    },
+    // Cuti disetujui yang beririsan dengan BULAN BERJALAN (dari controller).
+    // Sumber popup "Daftar Cuti Disetujui (Bulan Ini)".
+    cutiDisetujuiBulanIni: {
+        type: Array,
+        default: null,
+    },
+    // Cuti disetujui yang sedang berlangsung HARI INI (dari controller),
+    // hanya untuk pegawai yang ada di daftar anggota tim.
+    timCutiHariIni: {
+        type: Array,
+        default: null,
     },
     cutiDisetujuiPribadi: {
         type: Array,
@@ -39,6 +61,10 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
+    atasanPejabat: {
+        type: Array,
+        default: () => [],
+    },
     recentCutiPribadi: {
         type: Array,
         default: () => [],
@@ -51,7 +77,6 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
-    // Tahun yang sudah punya baris saldo (untuk validasi modal Revisi).
     tahun_saldo_tersedia: {
         type: Array,
         default: null,
@@ -63,7 +88,22 @@ const user = computed(() => page.props.auth.user);
 
 const isAdminHR = computed(() => user.value.role_id === 5);
 
+// Menandai baris milik akun yang sedang login (label "(Anda)").
+const isSelf = (pegawaiId) =>
+    pegawaiId !== undefined &&
+    pegawaiId !== null &&
+    String(pegawaiId) === String(user.value?.id);
+
 const activeTab = ref("tim");
+
+const isPribadiMode = computed(
+    () =>
+        !isAdminHR.value &&
+        (user.value.role_id === 1 || activeTab.value === "pribadi"),
+);
+const tampilKpiTim = computed(
+    () => [2, 3, 4, 5, 6].includes(user.value.role_id) && !isPribadiMode.value,
+);
 
 const getLihatSemuaHref = () => {
     if (user.value.role_id === 1) {
@@ -77,12 +117,7 @@ const getLihatSemuaHref = () => {
     return route("atasan.approval");
 };
 
-// ================================================================
-// TAB GRAFIK (KHUSUS MOBILE): "Tren Bulanan" | "Distribusi"
-// Di HP hanya satu grafik yang tampil sesuai tab aktif. Di layar md
-// ke atas KEDUANYA tetap tampil berdampingan (tab: md:hidden).
-// ================================================================
-const chartTab = ref("tren"); // 'tren' | 'distribusi'
+const chartTab = ref("tren");
 
 const selectedKelompokSubstansi = ref(props.filter?.kelompok_substansi ?? null);
 
@@ -105,6 +140,7 @@ const applyKelompokSubstansiFilter = () => {
                 "stats",
                 "recentCuti",
                 "cutiDisetujuiData",
+                "cutiDisetujuiBulanIni",
                 "cutiDisetujuiPribadi",
                 "cutiDisetujuiChart",
                 "cutiDisetujuiPribadiChart",
@@ -118,13 +154,8 @@ const applyKelompokSubstansiFilter = () => {
     );
 };
 
-// ================================================================
-// DROPDOWN FILTER KUSTOM (Kelompok Substansi & Tahun)
-// Hanya satu dropdown terbuka sekaligus; menutup saat klik di luar
-// atau menekan Esc.
-// ================================================================
 const filterRef = ref(null);
-const dropdownTerbuka = ref(null); // 'kelompok' | 'tahun' | null
+const dropdownTerbuka = ref(null);
 
 const toggleDropdown = (nama) => {
     dropdownTerbuka.value = dropdownTerbuka.value === nama ? null : nama;
@@ -142,13 +173,10 @@ const pilihTahun = (nilai) => {
     applyKelompokSubstansiFilter();
 };
 
-// Nilai "-" dari backend (pegawai belum punya kelompok) hanya diganti NAMA
-// TAMPILANNYA; nilai yang dikirim ke filter tetap "-".
 const KELOMPOK_TANPA_NILAI = "-";
 const namaKelompok = (nilai) =>
     nilai === KELOMPOK_TANPA_NILAI ? "Tanpa Kelompok" : nilai;
 
-// Kelompok asli dulu, opsi "Tanpa Kelompok" dipindah ke paling bawah.
 const daftarKelompokUrut = computed(() => {
     const semua = props.listKelompokSubstansi || [];
     const asli = semua.filter((k) => k !== KELOMPOK_TANPA_NILAI);
@@ -163,14 +191,12 @@ const labelKelompok = computed(() =>
         : "Semua Kelompok Substansi",
 );
 
-// Label di tombol dipersingkat supaya filter muat sejajar di HP.
 const labelKelompokSingkat = computed(() =>
     selectedKelompokSubstansi.value
         ? namaKelompok(selectedKelompokSubstansi.value)
         : "Semua Substansi",
 );
 
-// Filter Kelompok Substansi tampil hanya untuk role tertentu.
 const tampilFilterKelompok = computed(
     () =>
         [4, 5, 6].includes(user.value.role_id) &&
@@ -186,14 +212,9 @@ onMounted(() => document.addEventListener("click", tutupDropdownSaatKlikLuar));
 onBeforeUnmount(() =>
     document.removeEventListener("click", tutupDropdownSaatKlikLuar),
 );
-// ================= END DROPDOWN FILTER KUSTOM =================
 
 const displayedRecentCuti = computed(() => {
-    const isPribadi =
-        !isAdminHR.value &&
-        (user.value.role_id === 1 || activeTab.value === "pribadi");
-
-    if (isPribadi) {
+    if (isPribadiMode.value) {
         return props.recentCutiPribadi && props.recentCutiPribadi.length
             ? props.recentCutiPribadi
             : user.value.role_id === 1
@@ -204,14 +225,11 @@ const displayedRecentCuti = computed(() => {
     return props.recentCuti;
 });
 
-// Urutan aktivitas: menunggu aksi saya → baru diproses saya → sisanya.
-// levelForRole: role 2→L1, 3→L2, 4→L3, 6→L4; null = tanpa wewenang approval.
 const levelForRole = computed(() => {
     const map = { 2: 1, 3: 2, 4: 3, 6: 4 };
     return map[user.value.role_id] ?? null;
 });
 
-// Jendela "baru diproses": 24 jam
 const WINDOW_BARU_DIPROSES_MS = 24 * 60 * 60 * 1000;
 
 const isMenungguAksiSaya = (item) => {
@@ -242,7 +260,6 @@ const isBaruDiprosesSaya = (item) => {
     return Date.now() - updatedAt <= WINDOW_BARU_DIPROSES_MS;
 };
 
-// Urut ulang aktivitas (sumber data tetap displayedRecentCuti)
 const sortedDisplayedRecentCuti = computed(() => {
     const list = displayedRecentCuti.value || [];
     if (!levelForRole.value) return list;
@@ -263,8 +280,6 @@ const sortedDisplayedRecentCuti = computed(() => {
     });
 });
 
-// Mobile: daftar kartu aktivitas dibatasi maksimal 3 item teratas.
-// Tabel desktop tetap memakai sortedDisplayedRecentCuti (daftar penuh).
 const MAKS_AKTIVITAS_MOBILE = 3;
 const recentCutiMobile = computed(() =>
     (sortedDisplayedRecentCuti.value || []).slice(0, MAKS_AKTIVITAS_MOBILE),
@@ -285,7 +300,6 @@ const formatDate = (dateString) => {
     }).format(date);
 };
 
-// Rentang tanggal untuk tabel: bila mulai = selesai cukup tampil satu tanggal.
 const formatRentang = (item) => {
     const mulai = formatDate(item?.tanggal_mulai);
     const selesai = formatDate(item?.tanggal_selesai);
@@ -294,7 +308,6 @@ const formatRentang = (item) => {
         : `${mulai} - ${selesai}`;
 };
 
-// Ringkasan keterangan (bagian sebelum "|"); kosong bila tidak ada.
 const ringkasKeterangan = (item) => {
     const teks = item?.keterangan
         ? String(item.keterangan).split("|")[0].trim()
@@ -302,7 +315,6 @@ const ringkasKeterangan = (item) => {
     return teks && teks !== "-" ? teks : "";
 };
 
-// Badge status — warna diselaraskan dengan RiwayatPengajuan.vue
 const formatStatus = (status) => {
     switch (status) {
         case "menunggu_l1":
@@ -350,11 +362,7 @@ const formatStatus = (status) => {
                 text: "Ditangguhkan",
                 class: "bg-slate-200 text-slate-700 border border-slate-300",
             };
-        case "kedaluwarsa":
-            return {
-                text: "Kedaluwarsa",
-                class: "bg-zinc-200 text-zinc-700 border border-zinc-300",
-            };
+
         default:
             return {
                 text: status ? status.replace(/_/g, " ").toUpperCase() : "-",
@@ -365,49 +373,86 @@ const formatStatus = (status) => {
 
 const currentYear = new Date().getFullYear();
 
-const cutiTahunanTerpakai = computed(() => {
-    return props.stats?.cuti_terpakai || 0;
+const tahunKpi = ref(currentYear);
+
+const statsAktif = computed(() => props.stats);
+
+const cutiDikembalikan = computed(
+    () => Number(statsAktif.value?.cuti_dikembalikan ?? 0) || 0,
+);
+
+const cutiDigunakan = computed(
+    () =>
+        Number(
+            statsAktif.value?.cuti_digunakan ??
+                statsAktif.value?.cuti_terpakai ??
+                0,
+        ) || 0,
+);
+
+const cutiDitangguhkan = computed(
+    () => Number(statsAktif.value?.cuti_ditangguhkan ?? 0) || 0,
+);
+
+const cutiTerpakaiTotal = computed(() => {
+    if (statsAktif.value?.cuti_terpakai_total != null) {
+        return Number(statsAktif.value.cuti_terpakai_total) || 0;
+    }
+    return cutiDigunakan.value + cutiDitangguhkan.value;
 });
 
 const kuotaTahunanUtuh = computed(
-    () => Number(props.stats?.kuota_tahunan ?? 12) || 0,
+    () => Number(statsAktif.value?.kuota_tahunan ?? 12) || 0,
 );
 
 const sisaHakBerjalan = computed(
-    () => props.stats?.sisa_kuota_tahun_ini ?? props.stats?.kuota_tahunan ?? 12,
+    () =>
+        statsAktif.value?.sisa_kuota_tahun_ini ??
+        statsAktif.value?.kuota_tahunan ??
+        12,
 );
 
 const sisaDuaTahunLalu = computed(
-    () => props.stats?.sisa_cuti_dua_tahun_lalu ?? 0,
+    () => statsAktif.value?.sisa_cuti_dua_tahun_lalu ?? 0,
 );
 const sisaSatuTahunLalu = computed(
-    () => props.stats?.carry_forward_normal ?? 0,
+    () => statsAktif.value?.carry_forward_normal ?? 0,
 );
 const jatahTahunIniUntukSaldo = computed(
-    () => props.stats?.sisa_kuota_tahun_ini ?? props.stats?.kuota_tahunan ?? 12,
+    () =>
+        statsAktif.value?.sisa_kuota_tahun_ini ??
+        statsAktif.value?.kuota_tahunan ??
+        12,
+);
+const syaratDuaTahunLaluTerpenuhi = computed(
+    () => sisaDuaTahunLalu.value === 12,
+);
+const syaratSatuTahunLaluTerpenuhi = computed(
+    () => sisaSatuTahunLalu.value === 12,
 );
 const akumulasiPenuh = computed(
-    () => sisaDuaTahunLalu.value === 12 && sisaSatuTahunLalu.value === 12,
+    () =>
+        syaratDuaTahunLaluTerpenuhi.value && syaratSatuTahunLaluTerpenuhi.value,
 );
 
 const saldoBawaanEligible = computed(() => {
-    if (props.stats?.saldo_bawaan_eligible != null) {
-        return Number(props.stats.saldo_bawaan_eligible) || 0;
+    if (statsAktif.value?.saldo_bawaan_eligible != null) {
+        return Number(statsAktif.value.saldo_bawaan_eligible) || 0;
     }
-    const normal = akumulasiPenuh.value
-        ? 12
-        : Math.min(6, sisaSatuTahunLalu.value);
-    return Math.max(0, Math.min(normal, 24 - kuotaTahunanUtuh.value));
+    return akumulasiPenuh.value ? 12 : Math.min(6, sisaSatuTahunLalu.value);
 });
 
 const sisaCutiTersedia = computed(() => {
-    if (props.stats?.total_cuti_tersedia != null) {
-        return Number(props.stats.total_cuti_tersedia) || 0;
+    if (statsAktif.value?.total_cuti_tersedia != null) {
+        return Number(statsAktif.value.total_cuti_tersedia) || 0;
     }
-    return sisaHakBerjalan.value + saldoBawaanEligible.value;
+    return (
+        sisaHakBerjalan.value +
+        saldoBawaanEligible.value +
+        cutiDikembalikan.value
+    );
 });
 
-// Alias (nilai sama dengan computed di atas)
 const jatahCutiBerjalan = sisaHakBerjalan;
 const totalCutiTersedia = sisaCutiTersedia;
 
@@ -417,7 +462,7 @@ const pctOf12 = (nilai) => {
 };
 
 const barisSaldoTahunan = computed(() => {
-    const saldoTahunan = props.stats?.saldo_tahunan;
+    const saldoTahunan = statsAktif.value?.saldo_tahunan;
     if (Array.isArray(saldoTahunan) && saldoTahunan.length > 0) {
         return saldoTahunan.map((baris, index) => ({
             tahun: baris.tahun,
@@ -431,17 +476,17 @@ const barisSaldoTahunan = computed(() => {
 
     return [
         {
-            tahun: currentYear - 2,
+            tahun: tahunKpi.value - 2,
             nilai: sisaDuaTahunLalu.value,
             barClass: "bg-orange-400",
         },
         {
-            tahun: currentYear - 1,
+            tahun: tahunKpi.value - 1,
             nilai: sisaSatuTahunLalu.value,
             barClass: "bg-orange-400",
         },
         {
-            tahun: currentYear,
+            tahun: tahunKpi.value,
             nilai: jatahTahunIniUntukSaldo.value,
             barClass: "bg-emerald-400",
         },
@@ -459,13 +504,11 @@ const headerSubtitle = computed(() =>
         : "Pantau sisa cuti dan kelola permohonan Anda dengan mudah hari ini.",
 );
 
-// Tanggal lokal "YYYY-MM-DD" (hindari geser 1 hari karena toISOString UTC).
-// [DIPERBAIKI] template literal sebelumnya rusak (kehilangan "${").
 const toDateStr = (date) => {
     const yyyy = date.getFullYear();
     const mm = String(date.getMonth() + 1).padStart(2, "0");
     const dd = String(date.getDate()).padStart(2, "0");
-    return `yyyy-{mm}-${dd}`;
+    return `${yyyy}-${mm}-${dd}`;
 };
 
 const toDateOnlyString = (dateValue) => toDateStr(new Date(dateValue));
@@ -474,13 +517,42 @@ const totalAnggota = computed(() => {
     return Array.isArray(props.anggotaTim) ? props.anggotaTim.length : 0;
 });
 
+// ID anggota tim yang tampil di daftar (dipakai hanya untuk cadangan
+// perhitungan bila prop timCutiHariIni dari controller belum tersedia).
+const idAnggotaTim = computed(
+    () =>
+        new Set(
+            (Array.isArray(props.anggotaTim) ? props.anggotaTim : []).map((a) =>
+                String(a.id),
+            ),
+        ),
+);
+
+// Sumber data "cuti hari ini": utamakan timCutiHariIni dari controller supaya
+// angka kartu SELALU sama dengan isi popup. Cadangan: cutiDisetujuiData yang
+// dibatasi hanya untuk pegawai di daftar anggota tim.
+const sumberCutiHariIni = computed(() => {
+    if (Array.isArray(props.timCutiHariIni)) return props.timCutiHariIni;
+    if (!Array.isArray(props.cutiDisetujuiData)) return [];
+
+    return props.cutiDisetujuiData.filter((cuti) => {
+        const pegawaiId = cuti.pegawai_id ?? cuti.pegawai?.id;
+        return (
+            pegawaiId !== undefined &&
+            pegawaiId !== null &&
+            idAnggotaTim.value.has(String(pegawaiId))
+        );
+    });
+});
+
 const cutiHariIniCount = computed(() => {
-    if (!Array.isArray(props.cutiDisetujuiData)) return 0;
+    const sumber = sumberCutiHariIni.value;
+    if (!Array.isArray(sumber) || sumber.length === 0) return 0;
 
     const today = toDateOnlyString(new Date());
     const pegawaiOnLeave = new Set();
 
-    props.cutiDisetujuiData.forEach((cuti) => {
+    sumber.forEach((cuti) => {
         if (cuti.status !== "disetujui") return;
 
         const tanggalMulai = toDateOnlyString(cuti.tanggal_mulai);
@@ -491,7 +563,7 @@ const cutiHariIniCount = computed(() => {
         if (today >= tanggalMulai && today <= tanggalSelesai) {
             const pegawaiId = cuti.pegawai_id ?? cuti.pegawai?.id ?? cuti.id;
             if (pegawaiId !== undefined && pegawaiId !== null) {
-                pegawaiOnLeave.add(pegawaiId);
+                pegawaiOnLeave.add(String(pegawaiId));
             }
         }
     });
@@ -518,8 +590,9 @@ const filteredAnggotaTim = computed(() => {
 });
 
 const isPegawaiCutiHariIni = (pegawaiId) => {
+    const sumber = sumberCutiHariIni.value;
     if (
-        !Array.isArray(props.cutiDisetujuiData) ||
+        !Array.isArray(sumber) ||
         pegawaiId === undefined ||
         pegawaiId === null
     ) {
@@ -528,7 +601,7 @@ const isPegawaiCutiHariIni = (pegawaiId) => {
 
     const today = toDateOnlyString(new Date());
 
-    return props.cutiDisetujuiData.some((cuti) => {
+    return sumber.some((cuti) => {
         if (cuti.status !== "disetujui") return false;
 
         const cutiPegawaiId = cuti.pegawai_id ?? cuti.pegawai?.id;
@@ -542,6 +615,49 @@ const isPegawaiCutiHariIni = (pegawaiId) => {
         return today >= tanggalMulai && today <= tanggalSelesai;
     });
 };
+
+// Apakah akun yang login sudah ada di dalam daftar anggotaTim dari controller.
+// Jika sudah, baris "Anda" terpisah tidak ditampilkan agar tidak dobel.
+const selfSudahDiDaftar = computed(() =>
+    (Array.isArray(props.anggotaTim) ? props.anggotaTim : []).some((a) =>
+        isSelf(a.id),
+    ),
+);
+
+// Baris "Anda" di pop up: hanya untuk atasan yang bisa mengajukan cuti
+// sendiri (role 2, 3, 4, 6) dan belum ada di daftar anggotaTim.
+// Admin HR tidak punya cuti pribadi.
+const tampilBarisAnda = computed(() => {
+    if (![2, 3, 4, 6].includes(user.value.role_id)) return false;
+    if (selfSudahDiDaftar.value) return false;
+
+    const keyword = searchAnggota.value.trim().toLowerCase();
+    if (!keyword) return true;
+
+    return String(user.value?.nama || "")
+        .toLowerCase()
+        .includes(keyword);
+});
+
+// Status cuti diri sendiri: dicek dari sumber "cuti hari ini" tim, lalu
+// cadangan dari data cuti pribadi (cuti berstatus "disetujui" yang mencakup
+// hari ini).
+const isSayaCutiHariIni = computed(() => {
+    if (isPegawaiCutiHariIni(user.value?.id)) return true;
+
+    const today = toDateOnlyString(new Date());
+
+    return (props.cutiDisetujuiPribadi || []).some((cuti) => {
+        if (cuti.status !== "disetujui") return false;
+
+        const tanggalMulai = toDateOnlyString(cuti.tanggal_mulai);
+        const tanggalSelesai = toDateOnlyString(
+            cuti.tanggal_selesai || cuti.tanggal_mulai,
+        );
+
+        return today >= tanggalMulai && today <= tanggalSelesai;
+    });
+});
 
 const chartData = computed(() => {
     const months = [
@@ -565,14 +681,10 @@ const chartData = computed(() => {
         breakdown: { tahunan: 0, melahirkan: 0, alasan_penting: 0, besar: 0 },
     }));
 
-    const isPribadiMode =
-        !isAdminHR.value &&
-        (user.value.role_id === 1 || activeTab.value === "pribadi");
-
     let sourceCuti = [];
     let sourceChart = [];
 
-    if (isPribadiMode) {
+    if (isPribadiMode.value) {
         sourceCuti = props.cutiDisetujuiPribadiChart || [];
         sourceChart = props.chartDataPribadi || [];
     } else {
@@ -713,7 +825,6 @@ const donutGradient = computed(() => {
     return `conic-gradient(${parts.join(", ")})`;
 });
 
-// Donut interaktif: hover/tap segmen → tampilkan jumlah hari
 const hoveredDonutSegment = ref(null);
 
 const donutSegments = computed(() => {
@@ -767,20 +878,59 @@ const clearHoveredDonutSegment = () => {
     hoveredDonutSegment.value = null;
 };
 
-// Toggle tooltip donut (untuk touch / klik)
 const toggleDonutSegment = (segment) => {
     hoveredDonutSegment.value =
         hoveredDonutSegment.value?.key === segment.key ? null : segment;
 };
 
-// Posisi tooltip di tengah busur segmen donut
+const legendaDonut = computed(() => [
+    {
+        key: "tahunan",
+        label: "Tahunan",
+        dot: "bg-emerald-400",
+        aktif: "bg-emerald-50",
+        persen: distribusiCuti.value.percentTahunan,
+    },
+    {
+        key: "melahirkan",
+        label: "Melahirkan",
+        dot: "bg-pink-400",
+        aktif: "bg-pink-50",
+        persen: distribusiCuti.value.percentMelahirkan,
+    },
+    {
+        key: "penting",
+        label: "Penting",
+        dot: "bg-orange-400",
+        aktif: "bg-orange-50",
+        persen: distribusiCuti.value.percentPenting,
+    },
+    {
+        key: "besar",
+        label: "Besar",
+        dot: "bg-blue-400",
+        aktif: "bg-blue-50",
+        persen: distribusiCuti.value.percentBesar,
+    },
+]);
+
+const segmenByKey = (key) => donutSegments.value.find((s) => s.key === key);
+const hoverLegenda = (key) => {
+    const seg = segmenByKey(key);
+    if (seg) setHoveredDonutSegment(seg);
+};
+const klikLegenda = (key) => {
+    const seg = segmenByKey(key);
+    if (seg) toggleDonutSegment(seg);
+};
+
 const donutTooltipStyle = computed(() => {
     const segment = hoveredDonutSegment.value;
     if (!segment) return {};
 
     const midPercent = segment.start + segment.percent / 2;
     const angleRad = (midPercent / 100) * 2 * Math.PI;
-    const radius = 50; // px, jarak titik tooltip dari titik tengah donut
+    const radius = 50;
     const x = Math.sin(angleRad) * radius;
     const y = -Math.cos(angleRad) * radius;
 
@@ -790,16 +940,9 @@ const donutTooltipStyle = computed(() => {
     };
 });
 
-// ================================================================
-// HARI LIBUR TERDEKAT
-// Tiap item dinormalisasi: jenis (Libur Nasional / Cuti Bersama),
-// isProyeksi (badge kecil), judul tanpa "(PROYEKSI - ...)", dan bahan
-// untuk blok tanggal (hari/bulan/namaHari/tahun).
-// ================================================================
 const normalisasiLibur = (libur) => {
     const ket = String(libur.keterangan || "");
 
-    // Field yang benar dari database adalah is_cuti_bersama (boolean)
     const isCutiBersama = Boolean(libur.is_cuti_bersama);
 
     const isProyeksi = /proyeksi/i.test(ket);
@@ -841,13 +984,33 @@ const upcomingHolidays = computed(() => {
         .map(normalisasiLibur);
 });
 
+// Daftar cuti disetujui BULAN INI untuk popup. Sumber utama: prop
+// cutiDisetujuiBulanIni dari controller (sudah beririsan dengan bulan
+// berjalan & hanya pegawai di daftar anggota tim). Cadangan bila prop belum
+// ada: filter cutiDisetujuiData yang BERIRISAN dengan bulan berjalan
+// (bukan lagi berdasarkan bulan tanggal_mulai saja).
 const cutiDisetujuiBulanIniList = computed(() => {
+    if (Array.isArray(props.cutiDisetujuiBulanIni)) {
+        return props.cutiDisetujuiBulanIni;
+    }
+
     if (!props.cutiDisetujuiData) return [];
-    const currentMonth = new Date().getMonth();
-    const currentYr = new Date().getFullYear();
+
+    const sekarang = new Date();
+    const awalBulan = toDateStr(
+        new Date(sekarang.getFullYear(), sekarang.getMonth(), 1),
+    );
+    const akhirBulan = toDateStr(
+        new Date(sekarang.getFullYear(), sekarang.getMonth() + 1, 0),
+    );
+
     return props.cutiDisetujuiData.filter((cuti) => {
-        const d = new Date(cuti.tanggal_mulai);
-        return d.getMonth() === currentMonth && d.getFullYear() === currentYr;
+        if (cuti.status !== "disetujui") return false;
+        const mulai = toDateOnlyString(cuti.tanggal_mulai);
+        const selesai = toDateOnlyString(
+            cuti.tanggal_selesai || cuti.tanggal_mulai,
+        );
+        return mulai <= akhirBulan && selesai >= awalBulan;
     });
 });
 
@@ -875,7 +1038,6 @@ const weekDays = computed(() => {
 
     for (let i = 0; i < 7; i++) {
         const dateObj = new Date(current);
-        // [DIPERBAIKI] sebelumnya template literal rusak.
         const dateStr = toDateStr(dateObj);
 
         const onLeave = props.cutiDisetujuiData
@@ -899,7 +1061,6 @@ const weekDays = computed(() => {
     return result;
 });
 
-// Jumlah pegawai unik yang cuti pada hari kerja di minggu yang ditampilkan.
 const cutiMingguIniCount = computed(() => {
     const ids = new Set();
     weekDays.value.forEach((day) => {
@@ -954,10 +1115,6 @@ const formRevisi = ref({
     tanggal_selesai: "",
 });
 
-// ================= SALDO TAHUN BELUM ADA (MODAL REVISI) =================
-// Tahun PERTAMA dalam rentang tanggal revisi yang saldonya belum dibuat
-// Admin HR (khusus Cuti Tahunan). Peringatan dini saja; backend
-// (CutiController::revisi) tetap penjaga akhir.
 const revisiError = ref("");
 
 const tahunTanpaSaldoRevisi = computed(() => {
@@ -982,7 +1139,6 @@ const tahunTanpaSaldoRevisi = computed(() => {
     return null;
 });
 
-// Hapus pesan error server tiap kali modal/tanggal berubah.
 watch(
     () => [
         detailModal.value.show,
@@ -994,7 +1150,6 @@ watch(
         revisiError.value = "";
     },
 );
-// ================= END SALDO TAHUN BELUM ADA (MODAL REVISI) =================
 
 const isStatusBisaDirevisi = (item) => {
     return item?.bisa_direvisi === true;
@@ -1044,18 +1199,13 @@ const cancelRevisiMode = () => {
     formRevisi.value.tanggal_selesai = "";
 };
 
-// Tanggal minimum = hari ini (lokal, bukan UTC).
 const minDate = computed(() => toDateStr(new Date()));
 
-// ================= BATAS RENTANG (selaras AjukanCuti + CutiController) =================
 const MAKS_RENTANG_HARI = 92;
-const MAKS_MULAI_TAHUN_KE_DEPAN = 2;
 
-const maxTanggalMulaiRevisi = computed(() => {
-    const d = new Date();
-    d.setFullYear(d.getFullYear() + MAKS_MULAI_TAHUN_KE_DEPAN);
-    return toDateStr(d);
-});
+const maxTanggalMulaiRevisi = computed(
+    () => `${new Date().getFullYear() + 1}-12-31`,
+);
 
 const maxTanggalSelesaiRevisi = computed(() => {
     const batasGlobal = maxTanggalMulaiRevisi.value;
@@ -1079,7 +1229,6 @@ watch(
         }
     },
 );
-// ================= END BATAS RENTANG =================
 
 const hariLiburSet = computed(
     () => new Set((props.hariLiburs || []).map((hari) => hari.tanggal)),
@@ -1168,8 +1317,6 @@ const submitRevisi = () => {
             onSuccess: () => {
                 closeDetailModal();
             },
-            // Error validasi dari server (mis. saldo tahun belum ada)
-            // ditampilkan di dalam modal, modal TIDAK ditutup.
             onError: (errors) => {
                 revisiError.value =
                     errors.tanggal_mulai ||
@@ -1212,7 +1359,6 @@ const onLeaveTeamMembers = computed(() => {
     return selectedDateForModal.value.onLeave;
 });
 
-// Modal konfirmasi setuju / tolak (pengganti window.confirm & prompt)
 const approveModal = ref({ show: false, item: null, processing: false });
 const openApproveModal = (item) => {
     approveModal.value = { show: true, item, processing: false };
@@ -1221,7 +1367,7 @@ const closeApproveModal = () => {
     approveModal.value = { show: false, item: null, processing: false };
 };
 const confirmApproveCuti = () => {
-    if (approveModal.value.processing) return; // guard double-submit
+    if (approveModal.value.processing) return;
     const item = approveModal.value.item;
     if (!item?.id) return;
 
@@ -1233,19 +1379,16 @@ const confirmApproveCuti = () => {
         {
             preserveScroll: true,
             onSuccess: () => {
-                // Auto-close: tutup modal konfirmasi + Detail Modal di belakangnya
                 closeApproveModal();
                 closeDetailModal();
             },
             onFinish: () => {
-                // Selalu dijalankan supaya modal tidak "terkunci" jika request gagal.
                 approveModal.value.processing = false;
             },
         },
     );
 };
 
-// "processing" mencegah klik ganda pada tombol "Kirim Penolakan".
 const rejectModal = ref({
     show: false,
     item: null,
@@ -1267,11 +1410,10 @@ const closeRejectModal = () => {
     rejectError.value = false;
 };
 const confirmRejectCuti = () => {
-    if (rejectModal.value.processing) return; // guard double-submit
+    if (rejectModal.value.processing) return;
     const item = rejectModal.value.item;
     if (!item?.id) return;
 
-    // Alasan penolakan WAJIB diisi — tampilkan error inline, jangan kirim request
     if (!rejectModal.value.alasan || !String(rejectModal.value.alasan).trim()) {
         rejectError.value = true;
         return;
@@ -1295,7 +1437,6 @@ const confirmRejectCuti = () => {
     );
 };
 
-// Cari item di recentCuti lalu buka modal setuju/tolak
 const approveCuti = (id) => {
     const item =
         detailModal.value.data && detailModal.value.data.id === id
@@ -1374,7 +1515,6 @@ const getCatatanAtasan = (item) => {
     return responses[item?.status] || "Diproses tanpa catatan tambahan.";
 };
 
-// Pembatalan mandiri (dibatalkan_reguler): tampilkan catatan pemohon
 const getNamaPembatal = (item) => {
     return (
         item?.dibatalkan_oleh?.nama ||
@@ -1384,7 +1524,6 @@ const getNamaPembatal = (item) => {
     );
 };
 
-// Ambil catatan pembatalan mandiri dari keterangan / field khusus
 const getCatatanPembatalanReguler = (item) => {
     if (item?.keterangan && item.keterangan.includes("|")) {
         return item.keterangan
@@ -1410,7 +1549,6 @@ const isStatusDitangguhkan = (item) =>
     item?.status === "ditangguhkan" ||
     item?.status === "dibatalkan_ditangguhkan";
 
-// dibatalkan_reguler = dibatalkan sendiri oleh pemohon
 const isStatusDibatalkanReguler = (item) =>
     item?.status === "dibatalkan_reguler" || item?.status === "dibatalkan";
 
@@ -1457,7 +1595,6 @@ const getApprovalLevelLabel = (level) =>
         4: "L4 - Kepala Biro Perencanaan",
     })[level] || `Level ${level}`;
 
-// Label level singkat untuk badge modal detail (mis. MENUNGGU L3)
 const getStatusBadgeLabelSingkat = (status) => {
     if (!status) return "STATUS";
 
@@ -1471,13 +1608,12 @@ const getStatusBadgeLabelSingkat = (status) => {
         ditangguhkan: "DITANGGUHKAN",
         dibatalkan_ditangguhkan: "DITANGGUHKAN",
         dibatalkan_reguler: "DIBATALKAN",
-        kedaluwarsa: "KEDALUWARSA",
+        dibatalkan: "DIBATALKAN",
     };
 
     return levelMap[status] || status.replace(/_/g, " ").toUpperCase();
 };
 
-// Catatan / respon atasan per level (L1–L4), dinamis sesuai rantai approval
 const LEVEL_JABATAN_MAP = {
     1: "Ketua Tim Kerja",
     2: "Ketua Kelompok Substansi",
@@ -1485,8 +1621,6 @@ const LEVEL_JABATAN_MAP = {
     4: "Kepala Biro Perencanaan",
 };
 
-// Nama pejabat yang DITUGASKAN di level tertentu (untuk baris yang masih
-// "Menunggu Persetujuan"). Mencoba beberapa pola nama field yang umum.
 const getNamaPejabatLevel = (item, level) => {
     return (
         item?.[`atasan_l${level}`]?.nama ||
@@ -1505,8 +1639,6 @@ const getNamaPejabatLevel = (item, level) => {
     );
 };
 
-// Level PERTAMA yang dilalui pengajuan ini: 1, 2, 3, 4, atau null kalau
-// tidak terdeteksi (fallback aman ke [3,4] di getLevelsToShowUntukItem).
 const getLevelAwalUntukItem = (item) => {
     if (!item) return null;
 
@@ -1519,17 +1651,15 @@ const getLevelAwalUntukItem = (item) => {
         return Math.min(...levelLogValid);
     }
 
-    // Belum ada log sama sekali -> level awal = level yang sedang ditunggu.
     const pendingMatch = item?.status?.match(/^menunggu_l(\d)$/);
     if (pendingMatch) return parseInt(pendingMatch[1], 10);
 
     return null;
 };
 
-// Level untuk blok Catatan / Respon Atasan
 const getLevelsToShowUntukItem = (item) => {
     const levelAwal = getLevelAwalUntukItem(item);
-    if (levelAwal === null) return [3, 4]; // fallback aman
+    if (levelAwal === null) return [3, 4];
     if (levelAwal <= 2) return [levelAwal, 3, 4];
     if (levelAwal === 3) return [3, 4];
     return [4];
@@ -1540,7 +1670,6 @@ const getCatatanAtasanList = (item) => {
 
     const levelsToShow = getLevelsToShowUntukItem(item);
 
-    // 1) Jika backend sudah mengirim struktur approvals siap pakai.
     if (Array.isArray(item.approvals) && item.approvals.length) {
         return item.approvals
             .filter((a) => levelsToShow.includes(Number(a.level)))
@@ -1571,7 +1700,6 @@ const getCatatanAtasanList = (item) => {
             });
     }
 
-    // 2) Fallback: rakit dari approval_logs (levelsToShow yang dinamis).
     const logs = getApprovalLogs(item);
 
     const hasil = [];
@@ -1600,7 +1728,6 @@ const getCatatanAtasanList = (item) => {
                 catatan: log.catatan || null,
             });
         } else {
-            // Belum ada log di level ini
             hasil.push({
                 key: level,
                 level,
@@ -1654,31 +1781,20 @@ const getCatatanAtasanList = (item) => {
                     >
                         {{ headerSubtitle }}
                     </p>
-                    <p
-                        class="mt-1 max-w-xl text-xs font-medium leading-relaxed text-emerald-50/75 md:text-sm"
-                    >
-                        Pantau ketersediaan, pengajuan, dan aktivitas tim dari
-                        satu dashboard.
-                    </p>
                 </div>
                 <div
                     v-if="[1, 2, 3, 4, 6].includes(user.role_id)"
                     class="relative px-5 pb-8 md:absolute md:right-16 md:top-1/2 md:-translate-y-1/2 md:p-0"
                 >
-                    <!-- TOMBOL "AJUKAN CUTI" — desain TIMBUL (3D): pill gradasi
-                         putih -> hijau muda, kilau glossy, shadow bawah tebal,
-                         ikon plus timbul. Hover: naik + glow; active: menekan. -->
                     <Link
                         :href="route('karyawan.ajukan')"
                         class="group relative inline-flex items-center gap-3 overflow-hidden rounded-full border-2 border-white bg-gradient-to-b from-white via-emerald-50 to-emerald-200 py-2.5 pl-2.5 pr-5 text-xs md:py-3 md:pl-3 md:pr-7 md:text-[13px] font-black uppercase tracking-wider text-emerald-950 shadow-[inset_0_2px_2px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(16,185,129,0.35),0_0_0_4px_rgba(255,255,255,0.22),0_7px_0_#10b981,0_16px_28px_rgba(2,44,34,0.55),0_0_36px_rgba(110,231,183,0.55)] transition-all duration-150 hover:-translate-y-0.5 hover:shadow-[inset_0_2px_2px_rgba(255,255,255,1),inset_0_-4px_8px_rgba(16,185,129,0.35),0_0_0_5px_rgba(255,255,255,0.3),0_9px_0_#10b981,0_20px_34px_rgba(2,44,34,0.55),0_0_48px_rgba(110,231,183,0.8)] active:translate-y-[5px] active:shadow-[inset_0_2px_3px_rgba(6,78,59,0.25),0_0_0_4px_rgba(255,255,255,0.22),0_2px_0_#10b981,0_6px_12px_rgba(2,44,34,0.4),0_0_28px_rgba(110,231,183,0.5)] focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
                     >
-                        <!-- kilau glossy di sisi atas tombol -->
                         <span
                             aria-hidden="true"
                             class="pointer-events-none absolute inset-x-5 top-1 h-1/2 rounded-full bg-gradient-to-b from-white to-transparent"
                         ></span>
 
-                        <!-- lingkaran ikon plus yang ikut timbul -->
                         <span
                             class="relative flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-b from-emerald-400 to-emerald-600 text-white shadow-[inset_0_1px_1px_rgba(255,255,255,0.6),0_3px_6px_rgba(5,150,105,0.6)] transition-transform duration-150 group-hover:rotate-90"
                         >
@@ -1758,48 +1874,31 @@ const getCatatanAtasanList = (item) => {
                 </div>
             </div>
 
-            <!-- KPI PRIBADI — HP: 2 kolom, padding & angka lebih kecil. md+: seperti semula. -->
-            <div
-                v-show="
-                    !isAdminHR &&
-                    (user.role_id === 1 || activeTab === 'pribadi')
-                "
-                class="w-full"
-            >
+            <div v-if="isPribadiMode" class="w-full">
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-5">
                     <div
                         class="bg-white rounded-2xl border border-slate-200 shadow-sm p-3.5 md:p-5 flex flex-col md:min-h-[180px] hover:shadow-md transition-all"
                     >
-                        <!-- [DIPERBAIKI] "Jatah Cuti" diganti menjadi "Hak Cuti" -->
                         <h3
                             class="text-[10px] md:text-[11px] font-bold text-slate-800 tracking-wider uppercase leading-tight"
                         >
-                            Hak Cuti {{ currentYear }}
+                            Hak Cuti {{ tahunKpi }}
                         </h3>
                         <div
                             class="flex-1 flex flex-row items-center justify-between gap-2 md:gap-3 mt-1"
                         >
-                            <div class="text-left">
-                                <div class="flex items-baseline gap-1">
-                                    <span
-                                        class="text-3xl md:text-5xl font-extrabold text-slate-800 tracking-tight"
-                                    >
-                                        {{ kuotaTahunanUtuh }}
-                                    </span>
-                                    <span
-                                        class="text-xs md:text-sm font-semibold text-slate-400"
-                                        >hari</span
-                                    >
-                                </div>
-                                <p
-                                    class="text-[10px] md:text-[11px] text-slate-400 mt-1 md:mt-2 font-medium leading-tight"
+                            <div class="flex items-baseline gap-1">
+                                <span
+                                    class="text-3xl md:text-5xl font-extrabold text-slate-800 tracking-tight"
                                 >
-                                    Maksimum
-                                    {{ kuotaTahunanUtuh }} hari/tahun
-                                </p>
+                                    {{ kuotaTahunanUtuh }}
+                                </span>
+                                <span
+                                    class="text-xs md:text-sm font-semibold text-slate-400"
+                                    >hari</span
+                                >
                             </div>
                             <div class="shrink-0">
-                                <!-- [DIPERBAIKI] alt "Jatah Cuti" diganti "Hak Cuti" -->
                                 <img
                                     src="/images/kalender-3d.png"
                                     alt="Hak Cuti"
@@ -1807,6 +1906,11 @@ const getCatatanAtasanList = (item) => {
                                 />
                             </div>
                         </div>
+                        <p
+                            class="mt-2 pt-2 border-t border-slate-100 text-[10px] md:text-[11px] font-medium leading-snug text-slate-500"
+                        >
+                            Maksimum {{ kuotaTahunanUtuh }} hari/tahun
+                        </p>
                     </div>
 
                     <div
@@ -1824,7 +1928,7 @@ const getCatatanAtasanList = (item) => {
                                 <div class="flex items-baseline gap-1">
                                     <span
                                         class="text-3xl md:text-5xl font-extrabold text-slate-800 tracking-tight"
-                                        >{{ cutiTahunanTerpakai }}</span
+                                        >{{ cutiTerpakaiTotal }}</span
                                     >
                                     <span
                                         class="text-xs md:text-sm font-semibold text-slate-400"
@@ -1832,14 +1936,9 @@ const getCatatanAtasanList = (item) => {
                                     >
                                 </div>
                                 <p
-                                    class="text-[10px] md:text-[11px] text-slate-400 mt-1 md:mt-2 font-medium leading-tight"
-                                >
-                                    Khusus cuti tahunan
-                                </p>
-                                <p
-                                    v-if="stats.ada_koreksi"
-                                    class="mt-1.5 inline-flex items-center gap-1 rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5 text-[10px] font-bold text-amber-700"
-                                    title="Angka ini telah disesuaikan oleh Admin SDM"
+                                    v-if="statsAktif?.ada_koreksi"
+                                    class="mt-1 text-[10px] md:text-[11px] font-medium leading-tight text-slate-500"
+                                    :title="`Menurut riwayat sistem: ${statsAktif.cuti_terpakai_sistem} hari digunakan. Penyesuaian ${statsAktif.selisih_koreksi > 0 ? '+' : ''}${statsAktif.selisih_koreksi} hari dari Admin SDM.`"
                                 >
                                     ✎ Disesuaikan Admin SDM
                                 </p>
@@ -1852,19 +1951,13 @@ const getCatatanAtasanList = (item) => {
                                 />
                             </div>
                         </div>
-                        <div
-                            v-if="stats.ada_koreksi"
-                            class="mt-2 pt-2 border-t border-slate-100"
+                        <p
+                            class="mt-2 pt-2 border-t border-slate-100 text-[10px] md:text-[11px] font-medium leading-snug text-slate-500"
+                            :title="`${cutiDigunakan} hari digunakan, ${cutiDitangguhkan} hari ditangguhkan (dikembalikan di ${tahunKpi + 1}).`"
                         >
-                            <p class="text-[10px] text-slate-400 font-medium">
-                                Menurut riwayat sistem:
-                                {{ stats.cuti_terpakai_sistem }} hari. Ada
-                                penyesuaian
-                                {{ stats.selisih_koreksi > 0 ? "+" : ""
-                                }}{{ stats.selisih_koreksi }} hari dari Admin
-                                SDM.
-                            </p>
-                        </div>
+                            {{ cutiDigunakan }} digunakan,
+                            {{ cutiDitangguhkan }} ditangguhkan
+                        </p>
                     </div>
 
                     <div
@@ -1940,7 +2033,6 @@ const getCatatanAtasanList = (item) => {
                         <div
                             class="bg-emerald-50/70 border-t border-emerald-100 px-3.5 md:px-4 py-2 md:py-2.5 flex justify-between items-center shrink-0"
                         >
-                            <!-- [DIPERBAIKI] "Saldo bawaan eligible" diganti menjadi "Hak bawaan eligible" -->
                             <span
                                 class="text-[10px] font-bold text-emerald-700 uppercase tracking-wide leading-tight"
                                 >Hak<br class="hidden sm:block" />
@@ -1969,22 +2061,15 @@ const getCatatanAtasanList = (item) => {
                         <div
                             class="flex-1 flex flex-row items-center justify-between gap-2 md:gap-3 mt-1"
                         >
-                            <div class="text-left">
-                                <div class="flex items-baseline gap-1">
-                                    <span
-                                        class="text-3xl md:text-5xl font-extrabold text-slate-800 tracking-tight"
-                                        >{{ totalCutiTersedia }}</span
-                                    >
-                                    <span
-                                        class="text-xs md:text-sm font-semibold text-slate-400"
-                                        >hari</span
-                                    >
-                                </div>
-                                <p
-                                    class="text-[10px] md:text-[11px] text-slate-400 mt-1 md:mt-2 font-medium leading-tight"
+                            <div class="flex items-baseline gap-1">
+                                <span
+                                    class="text-3xl md:text-5xl font-extrabold text-slate-800 tracking-tight"
+                                    >{{ totalCutiTersedia }}</span
                                 >
-                                    Siap dipakai kapan saja
-                                </p>
+                                <span
+                                    class="text-xs md:text-sm font-semibold text-slate-400"
+                                    >hari</span
+                                >
                             </div>
                             <div class="shrink-0">
                                 <img
@@ -1994,33 +2079,26 @@ const getCatatanAtasanList = (item) => {
                                 />
                             </div>
                         </div>
-                        <div class="mt-2 pt-2 border-t border-slate-100">
-                            <p class="text-[10px] text-slate-400 font-medium">
-                                Sisa Hak ({{ jatahCutiBerjalan }}) + Saldo
-                                Bawaan ({{ saldoBawaanEligible }})
-                            </p>
-                        </div>
+                        <p
+                            class="mt-2 pt-2 border-t border-slate-100 text-[10px] md:text-[11px] font-medium leading-snug text-slate-500"
+                            :title="`Total (${totalCutiTersedia}) = Sisa ${tahunKpi} (${jatahCutiBerjalan}) + Bawaan ${tahunKpi} (${saldoBawaanEligible}) + Ditangguhkan ${tahunKpi - 1} (${cutiDikembalikan})`"
+                        >
+                            {{ jatahCutiBerjalan }} sisa +
+                            {{ saldoBawaanEligible }} bawaan +
+                            {{ cutiDikembalikan }} dikembalikan
+                        </p>
                     </div>
                 </div>
 
                 <div class="mt-3 md:mt-4 ml-1">
                     <p class="text-[11px] text-slate-400">
-                        Klik kartu "Saldo Cuti" untuk melihat cara perhitungan
-                        bawaan dari {{ currentYear - 2 }} dan
-                        {{ currentYear - 1 }}.
+                        Klik kartu "Sisa Cuti" untuk melihat cara perhitungan
+                        bawaan dari {{ tahunKpi - 2 }} dan {{ tahunKpi - 1 }}.
                     </p>
                 </div>
             </div>
 
-            <!-- KPI TIM — HP: 3 kartu sejajar (grid-cols-3), ikon kecil di samping angka.
-                 md+: kartu lebih lega + ikon besar di pojok. -->
-            <div
-                v-show="
-                    activeTab === 'tim' &&
-                    [2, 3, 4, 5, 6].includes(user.role_id)
-                "
-                class="grid grid-cols-3 gap-2 md:gap-4"
-            >
+            <div v-if="tampilKpiTim" class="grid grid-cols-3 gap-2 md:gap-4">
                 <Link
                     :href="route('atasan.approval')"
                     class="relative overflow-hidden bg-white border border-slate-200/80 rounded-xl md:rounded-2xl pl-3.5 pr-2.5 py-2.5 md:px-5 md:py-5 shadow-[0_2px_12px_rgba(15,23,42,0.04)] ring-1 ring-slate-100 flex flex-col hover:shadow-[0_8px_24px_rgba(15,23,42,0.08)] hover:-translate-y-0.5 transition-all duration-200 cursor-pointer group md:min-h-[110px]"
@@ -2168,8 +2246,7 @@ const getCatatanAtasanList = (item) => {
                 >
                     <h3 class="text-sm font-extrabold text-slate-800">
                         {{
-                            !isAdminHR &&
-                            (user.role_id === 1 || activeTab === "pribadi")
+                            isPribadiMode
                                 ? "Riwayat Pengajuan Terbaru"
                                 : "Aktivitas Cuti Tim Terbaru"
                         }}
@@ -2182,8 +2259,6 @@ const getCatatanAtasanList = (item) => {
                     </Link>
                 </div>
 
-                <!-- DAFTAR KARTU (khusus HP): maks. 3 item, seluruh kartu bisa
-                     diklik, chevron di kanan, mendukung keyboard. -->
                 <div class="md:hidden divide-y divide-slate-100">
                     <div
                         v-for="item in recentCutiMobile"
@@ -2329,7 +2404,6 @@ const getCatatanAtasanList = (item) => {
                                     >
                                         {{ formatStatus(item.status).text }}
                                     </span>
-                                    <!-- Di layar < 2xl keterangan tampil kecil di bawah status. -->
                                     <p
                                         v-if="ringkasKeterangan(item)"
                                         class="2xl:hidden mt-1 max-w-[220px] truncate text-[11px] font-medium text-slate-400"
@@ -2342,13 +2416,7 @@ const getCatatanAtasanList = (item) => {
                                     class="hidden 2xl:table-cell px-3 2xl:px-5 py-3.5 text-xs font-medium text-slate-500 max-w-[140px] truncate"
                                     :title="item.keterangan"
                                 >
-                                    {{
-                                        item.keterangan
-                                            ? item.keterangan
-                                                  .split("|")[0]
-                                                  .trim()
-                                            : "-"
-                                    }}
+                                    {{ ringkasKeterangan(item) || "-" }}
                                 </td>
                                 <td
                                     class="px-3 2xl:px-5 py-3.5 whitespace-nowrap text-center"
@@ -2394,9 +2462,7 @@ const getCatatanAtasanList = (item) => {
                         <div class="min-w-0 flex-1">
                             <h3 class="text-sm font-extrabold text-slate-800">
                                 {{
-                                    !isAdminHR &&
-                                    (user.role_id === 1 ||
-                                        activeTab === "pribadi")
+                                    isPribadiMode
                                         ? "Total Ketidakhadiran"
                                         : "Total Absensi Tim"
                                 }}
@@ -2406,7 +2472,6 @@ const getCatatanAtasanList = (item) => {
                             </p>
                         </div>
 
-                        <!-- DROPDOWN FILTER KUSTOM -->
                         <div
                             ref="filterRef"
                             @keydown.esc="dropdownTerbuka = null"
@@ -2417,7 +2482,6 @@ const getCatatanAtasanList = (item) => {
                                     : 'w-auto shrink-0'
                             "
                         >
-                            <!-- Filter Kelompok Substansi -->
                             <div
                                 v-if="tampilFilterKelompok"
                                 class="relative flex-1 min-w-0 sm:flex-none sm:w-64"
@@ -2526,7 +2590,6 @@ const getCatatanAtasanList = (item) => {
                                 </ul>
                             </div>
 
-                            <!-- Filter Tahun -->
                             <div class="relative w-[6.5rem] shrink-0 sm:w-36">
                                 <div
                                     class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
@@ -2615,7 +2678,6 @@ const getCatatanAtasanList = (item) => {
                         </div>
                     </div>
 
-                    <!-- TABS GRAFIK (khusus HP) -->
                     <div
                         class="md:hidden mb-3 flex w-full rounded-xl border border-slate-100 bg-slate-50 p-1"
                         role="tablist"
@@ -2652,7 +2714,6 @@ const getCatatanAtasanList = (item) => {
                     </div>
 
                     <div class="flex flex-col md:flex-row gap-4">
-                        <!-- KOTAK GRAFIK "ABSENSI PER BULAN" -->
                         <div
                             :class="
                                 chartTab === 'tren' ? 'flex' : 'hidden md:flex'
@@ -2667,7 +2728,6 @@ const getCatatanAtasanList = (item) => {
                             <div
                                 class="relative h-44 flex items-end justify-between gap-1 sm:gap-1.5"
                             >
-                                <!-- Garis putus-putus Background -->
                                 <div
                                     class="absolute inset-0 flex flex-col justify-between opacity-15 pointer-events-none z-0"
                                 >
@@ -2685,9 +2745,6 @@ const getCatatanAtasanList = (item) => {
                                     ></div>
                                 </div>
 
-                                <!-- Tooltip muncul saat hover (group/group-hover).
-                                     Kolom yang di-hover dinaikkan ke z-40 supaya pop-up
-                                     tampil di depan bulan sebelah. -->
                                 <div
                                     v-for="(data, index) in chartData"
                                     :key="index"
@@ -2727,7 +2784,6 @@ const getCatatanAtasanList = (item) => {
                                         ></div>
                                     </div>
 
-                                    <!-- Tooltip Hover -->
                                     <div
                                         v-if="data.totalDays > 0"
                                         class="absolute mb-2 left-1/2 -translate-x-1/2 bg-slate-800 text-white py-1.5 px-2.5 rounded-lg shadow-xl pointer-events-none flex flex-col gap-0.5 items-center min-w-[110px] transition-all duration-200 text-[10px] opacity-0 invisible group-hover:opacity-100 group-hover:visible z-50"
@@ -2781,7 +2837,6 @@ const getCatatanAtasanList = (item) => {
                                 {{ selectedTahun }}.
                             </p>
 
-                            <!-- Label bulan -->
                             <div
                                 class="flex items-start justify-between gap-1 sm:gap-1.5 mt-2"
                             >
@@ -2839,7 +2894,6 @@ const getCatatanAtasanList = (item) => {
                             </div>
                         </div>
 
-                        <!-- KOTAK "DISTRIBUSI" (Donut) -->
                         <div
                             :class="
                                 chartTab === 'distribusi'
@@ -2854,9 +2908,6 @@ const getCatatanAtasanList = (item) => {
                                 Distribusi
                             </p>
 
-                            <!-- DONUT INTERAKTIF: conic-gradient sebagai lapisan visual
-                                 dasar + <svg> dengan layer VISUAL (tanpa event) dan
-                                 HIT-AREA (stroke tebal transparan) per segmen. -->
                             <div
                                 class="relative w-28 h-28 flex items-center justify-center"
                             >
@@ -2912,7 +2963,6 @@ const getCatatanAtasanList = (item) => {
                                     />
                                 </svg>
 
-                                <!-- Tengah donut: TETAP persentase dominan -->
                                 <div
                                     class="absolute w-[68px] h-[68px] rounded-full bg-white flex flex-col items-center justify-center shadow-sm ring-1 ring-slate-100 pointer-events-none"
                                 >
@@ -2930,7 +2980,6 @@ const getCatatanAtasanList = (item) => {
                                     >
                                 </div>
 
-                                <!-- Pop-up ringkas: jumlah hari saja -->
                                 <div
                                     v-if="hoveredDonutSegment"
                                     class="absolute -translate-x-1/2 -translate-y-1/2 bg-slate-800 text-white py-1 px-2.5 rounded-lg shadow-xl pointer-events-none flex items-center gap-1.5 text-xs font-black z-50 transition-all duration-150"
@@ -2954,179 +3003,30 @@ const getCatatanAtasanList = (item) => {
                             </p>
                             <div class="mt-2 space-y-1 w-full">
                                 <div
+                                    v-for="item in legendaDonut"
+                                    :key="item.key"
                                     class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
                                     :class="
                                         hoveredDonutSegment &&
-                                        hoveredDonutSegment.key === 'tahunan'
-                                            ? 'bg-emerald-50'
+                                        hoveredDonutSegment.key === item.key
+                                            ? item.aktif
                                             : ''
                                     "
-                                    @mouseenter="
-                                        donutSegments.find(
-                                            (s) => s.key === 'tahunan',
-                                        ) &&
-                                        setHoveredDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'tahunan',
-                                            ),
-                                        )
-                                    "
+                                    @mouseenter="hoverLegenda(item.key)"
                                     @mouseleave="clearHoveredDonutSegment"
-                                    @click="
-                                        donutSegments.find(
-                                            (s) => s.key === 'tahunan',
-                                        ) &&
-                                        toggleDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'tahunan',
-                                            ),
-                                        )
-                                    "
+                                    @click="klikLegenda(item.key)"
                                 >
                                     <span
                                         class="flex items-center gap-1.5 font-semibold text-slate-500"
                                     >
                                         <span
-                                            class="w-2 h-2 rounded-full bg-emerald-400"
+                                            class="w-2 h-2 rounded-full"
+                                            :class="item.dot"
                                         ></span>
-                                        Tahunan
+                                        {{ item.label }}
                                     </span>
                                     <span class="font-bold text-slate-700"
-                                        >{{
-                                            distribusiCuti.percentTahunan
-                                        }}%</span
-                                    >
-                                </div>
-                                <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
-                                    :class="
-                                        hoveredDonutSegment &&
-                                        hoveredDonutSegment.key === 'melahirkan'
-                                            ? 'bg-pink-50'
-                                            : ''
-                                    "
-                                    @mouseenter="
-                                        donutSegments.find(
-                                            (s) => s.key === 'melahirkan',
-                                        ) &&
-                                        setHoveredDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'melahirkan',
-                                            ),
-                                        )
-                                    "
-                                    @mouseleave="clearHoveredDonutSegment"
-                                    @click="
-                                        donutSegments.find(
-                                            (s) => s.key === 'melahirkan',
-                                        ) &&
-                                        toggleDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'melahirkan',
-                                            ),
-                                        )
-                                    "
-                                >
-                                    <span
-                                        class="flex items-center gap-1.5 font-semibold text-slate-500"
-                                    >
-                                        <span
-                                            class="w-2 h-2 rounded-full bg-pink-400"
-                                        ></span>
-                                        Melahirkan
-                                    </span>
-                                    <span class="font-bold text-slate-700"
-                                        >{{
-                                            distribusiCuti.percentMelahirkan
-                                        }}%</span
-                                    >
-                                </div>
-                                <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
-                                    :class="
-                                        hoveredDonutSegment &&
-                                        hoveredDonutSegment.key === 'penting'
-                                            ? 'bg-orange-50'
-                                            : ''
-                                    "
-                                    @mouseenter="
-                                        donutSegments.find(
-                                            (s) => s.key === 'penting',
-                                        ) &&
-                                        setHoveredDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'penting',
-                                            ),
-                                        )
-                                    "
-                                    @mouseleave="clearHoveredDonutSegment"
-                                    @click="
-                                        donutSegments.find(
-                                            (s) => s.key === 'penting',
-                                        ) &&
-                                        toggleDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'penting',
-                                            ),
-                                        )
-                                    "
-                                >
-                                    <span
-                                        class="flex items-center gap-1.5 font-semibold text-slate-500"
-                                    >
-                                        <span
-                                            class="w-2 h-2 rounded-full bg-orange-400"
-                                        ></span>
-                                        Penting
-                                    </span>
-                                    <span class="font-bold text-slate-700"
-                                        >{{
-                                            distribusiCuti.percentPenting
-                                        }}%</span
-                                    >
-                                </div>
-                                <div
-                                    class="flex items-center justify-between text-[10px] px-1 py-0.5 rounded-md transition-colors cursor-pointer"
-                                    :class="
-                                        hoveredDonutSegment &&
-                                        hoveredDonutSegment.key === 'besar'
-                                            ? 'bg-blue-50'
-                                            : ''
-                                    "
-                                    @mouseenter="
-                                        donutSegments.find(
-                                            (s) => s.key === 'besar',
-                                        ) &&
-                                        setHoveredDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'besar',
-                                            ),
-                                        )
-                                    "
-                                    @mouseleave="clearHoveredDonutSegment"
-                                    @click="
-                                        donutSegments.find(
-                                            (s) => s.key === 'besar',
-                                        ) &&
-                                        toggleDonutSegment(
-                                            donutSegments.find(
-                                                (s) => s.key === 'besar',
-                                            ),
-                                        )
-                                    "
-                                >
-                                    <span
-                                        class="flex items-center gap-1.5 font-semibold text-slate-500"
-                                    >
-                                        <span
-                                            class="w-2 h-2 rounded-full bg-blue-400"
-                                        ></span>
-                                        Besar
-                                    </span>
-                                    <span class="font-bold text-slate-700"
-                                        >{{
-                                            distribusiCuti.percentBesar
-                                        }}%</span
+                                        >{{ item.persen }}%</span
                                     >
                                 </div>
                             </div>
@@ -3135,7 +3035,6 @@ const getCatatanAtasanList = (item) => {
                 </div>
 
                 <div class="flex flex-col gap-4">
-                    <!-- HARI LIBUR TERDEKAT (ringkas, judul utuh, badge jenis & proyeksi) -->
                     <div
                         class="bg-white border border-slate-100 rounded-2xl p-4 md:p-5 shadow-sm"
                     >
@@ -3159,7 +3058,6 @@ const getCatatanAtasanList = (item) => {
                                 :key="libur.id"
                                 class="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50/70 px-2.5 py-2 hover:bg-slate-50 transition"
                             >
-                                <!-- Blok tanggal -->
                                 <div
                                     class="w-11 shrink-0 rounded-lg py-1 text-center leading-none ring-1"
                                     :class="
@@ -3394,7 +3292,6 @@ const getCatatanAtasanList = (item) => {
                     class="p-5 max-h-[70vh] overflow-y-auto custom-scrollbar"
                     v-if="detailModal.data"
                 >
-                    <!-- HEADER MODAL "DETAIL CUTI" -->
                     <div class="flex justify-between items-start gap-3 mb-5">
                         <div class="flex items-start gap-2.5 min-w-0">
                             <div class="mt-0.5 shrink-0 text-slate-800">
@@ -3449,8 +3346,7 @@ const getCatatanAtasanList = (item) => {
                                         'ditangguhkan' ||
                                     detailModal.data.status ===
                                         'dibatalkan_ditangguhkan',
-                                'bg-zinc-200 text-zinc-700':
-                                    detailModal.data.status === 'kedaluwarsa',
+
                                 'bg-slate-100 text-slate-600':
                                     detailModal.data.status?.includes(
                                         'dibatalkan',
@@ -3539,7 +3435,6 @@ const getCatatanAtasanList = (item) => {
                             </div>
                         </div>
 
-                        <!-- Anak ke-berapa, hanya untuk Cuti Melahirkan. -->
                         <div
                             v-if="
                                 detailModal.data.jenis_cuti
@@ -3559,7 +3454,6 @@ const getCatatanAtasanList = (item) => {
                             </div>
                         </div>
 
-                        <!-- RINCIAN SISA CUTI (kotak amber) -->
                         <div
                             v-if="
                                 detailModal.data.jenis_cuti
@@ -3586,17 +3480,44 @@ const getCatatanAtasanList = (item) => {
                                 <span
                                     class="font-normal text-amber-600/80 text-xs block mt-0.5"
                                 >
-                                    (Tahun Ini:
                                     {{
                                         detailModal.data.pegawai
                                             ?.sisa_hak_tahun_berjalan ?? 0
                                     }}
-                                    hari | Saldo Bawaan:
+                                    sisa tahun ini +
                                     {{
                                         detailModal.data.pegawai
                                             ?.saldo_bawaan_eligible ?? 0
                                     }}
-                                    hari)
+                                    bawaan +
+                                    {{
+                                        detailModal.data.pegawai
+                                            ?.cuti_dikembalikan ?? 0
+                                    }}
+                                    dikembalikan
+                                </span>
+                                <span
+                                    v-if="isMenungguTahunan(detailModal.data)"
+                                    class="text-xs font-bold block mt-1.5"
+                                    :class="
+                                        sisaSetelahDisetujui(detailModal.data) <
+                                        0
+                                            ? 'text-red-600'
+                                            : 'text-amber-800'
+                                    "
+                                >
+                                    Sisa setelah disetujui:
+                                    {{ sisaSetelahDisetujui(detailModal.data) }}
+                                    hari
+                                    <template
+                                        v-if="
+                                            sisaSetelahDisetujui(
+                                                detailModal.data,
+                                            ) < 0
+                                        "
+                                    >
+                                        (saldo tidak cukup)
+                                    </template>
                                 </span>
                             </div>
                         </div>
@@ -3713,10 +3634,6 @@ const getCatatanAtasanList = (item) => {
                         </div>
                     </div>
 
-                    <!-- BLOK "CATATAN / RESPON ATASAN":
-                           1) dibatalkan mandiri -> "Informasi Pembatalan"
-                           2) ditangguhkan -> "Alasan Penangguhan / Pembatalan Atasan"
-                           3) lainnya -> daftar L-level / approval logs / fallback. -->
                     <div
                         v-if="
                             isStatusDibatalkanAtauDitangguhkan(
@@ -3802,7 +3719,6 @@ const getCatatanAtasanList = (item) => {
                             </p>
                         </div>
 
-                        <!-- (1) PEMBATALAN MANDIRI OLEH PEMOHON -->
                         <div v-if="isStatusDibatalkanReguler(detailModal.data)">
                             <p class="text-sm text-slate-700 mb-1">
                                 Dibatalkan oleh:
@@ -3856,7 +3772,6 @@ const getCatatanAtasanList = (item) => {
                             </div>
                         </div>
 
-                        <!-- (2) DITANGGUHKAN / DIBATALKAN_DITANGGUHKAN -->
                         <div v-else-if="isStatusDitangguhkan(detailModal.data)">
                             <p class="text-sm text-slate-700 mb-1">
                                 Diproses oleh:
@@ -3906,7 +3821,6 @@ const getCatatanAtasanList = (item) => {
                             </div>
                         </div>
 
-                        <!-- (3) SEMUA STATUS LAIN, TERMASUK DITOLAK & DISETUJUI -->
                         <div
                             v-else-if="
                                 getCatatanAtasanList(detailModal.data).length
@@ -4020,8 +3934,8 @@ const getCatatanAtasanList = (item) => {
                                     class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
                                 />
                                 <p class="text-[10px] text-slate-400 mt-1">
-                                    Maks. {{ MAKS_MULAI_TAHUN_KE_DEPAN }} tahun
-                                    dari hari ini
+                                    Maks. 31 Des
+                                    {{ new Date().getFullYear() + 1 }}
                                 </p>
                             </div>
                             <div>
@@ -4274,6 +4188,9 @@ const getCatatanAtasanList = (item) => {
                         </h3>
                         <p class="text-xs font-semibold text-slate-500 mt-0.5">
                             Total terdaftar: {{ anggotaTim.length }} Orang
+                            <span v-if="atasanPejabat.length">
+                                (+ {{ atasanPejabat.length }} atasan)
+                            </span>
                         </p>
                     </div>
                     <button
@@ -4323,6 +4240,121 @@ const getCatatanAtasanList = (item) => {
                 <div
                     class="p-4 max-h-[50vh] overflow-y-auto custom-scrollbar pr-2 space-y-2.5 flex-1"
                 >
+                    <div v-if="tampilBarisAnda" class="space-y-2">
+                        <p
+                            class="text-[10px] font-extrabold uppercase tracking-wider text-emerald-600"
+                        >
+                            Anda
+                        </p>
+                        <div
+                            class="flex items-center gap-3 p-2.5 border border-emerald-200 rounded-xl bg-emerald-50/50"
+                        >
+                            <div
+                                class="w-9 h-9 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden border border-emerald-200"
+                            >
+                                <img
+                                    v-if="user.foto_profil"
+                                    :src="`/storage/${user.foto_profil}`"
+                                    class="w-full h-full object-cover"
+                                />
+                                <span v-else>{{
+                                    user.nama?.charAt(0) || "?"
+                                }}</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <p
+                                    class="text-sm font-bold text-slate-800 truncate"
+                                >
+                                    {{ user.nama }}
+                                    <span class="font-semibold text-emerald-600"
+                                        >(Anda)</span
+                                    >
+                                </p>
+                                <p
+                                    class="text-xs text-slate-500 mt-0.5 truncate"
+                                >
+                                    {{ user.jabatan || "-" }}
+                                </p>
+                            </div>
+                            <span
+                                v-if="isSayaCutiHariIni"
+                                class="shrink-0 px-2.5 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded-full text-[10px] font-bold"
+                                >Sedang Cuti</span
+                            >
+                            <span
+                                v-else
+                                class="shrink-0 px-2.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-[10px] font-bold"
+                                >Tersedia</span
+                            >
+                        </div>
+                        <!-- Pemisah ke daftar anggota bila bagian "Atasan" tidak tampil
+                             (misalnya Kepala Biro, atau saat sedang mencari nama) -->
+                        <p
+                            v-if="
+                                !(atasanPejabat.length && !searchAnggota.trim())
+                            "
+                            class="pt-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400"
+                        >
+                            Anggota Tim
+                        </p>
+                    </div>
+
+                    <div
+                        v-if="atasanPejabat.length && !searchAnggota.trim()"
+                        class="space-y-2"
+                    >
+                        <p
+                            class="text-[10px] font-extrabold uppercase tracking-wider text-amber-600"
+                        >
+                            Atasan
+                        </p>
+                        <div
+                            v-for="pejabat in atasanPejabat"
+                            :key="'pejabat-' + pejabat.id"
+                            class="flex items-center gap-3 p-2.5 border border-amber-100 rounded-xl bg-amber-50/40"
+                        >
+                            <div
+                                class="w-9 h-9 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-sm shrink-0 overflow-hidden border border-amber-200"
+                            >
+                                <img
+                                    v-if="pejabat.foto_profil"
+                                    :src="`/storage/${pejabat.foto_profil}`"
+                                    class="w-full h-full object-cover"
+                                />
+                                <span v-else>{{
+                                    pejabat.nama?.charAt(0) || "?"
+                                }}</span>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <p
+                                    class="text-sm font-bold text-slate-800 truncate"
+                                >
+                                    {{ pejabat.nama }}
+                                </p>
+                                <p
+                                    class="text-xs text-slate-500 mt-0.5 truncate"
+                                >
+                                    {{ pejabat.label_level }}
+                                </p>
+                            </div>
+                            <span
+                                v-if="pejabat.sedang_cuti"
+                                class="shrink-0 px-2.5 py-0.5 bg-red-50 text-red-600 border border-red-200 rounded-full text-[10px] font-bold"
+                                >Sedang Cuti</span
+                            >
+                            <span
+                                v-else
+                                class="shrink-0 px-2.5 py-0.5 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full text-[10px] font-bold"
+                                >Tersedia</span
+                            >
+                        </div>
+                        <p
+                            class="pt-1 text-[10px] font-extrabold uppercase tracking-wider text-slate-400"
+                        >
+                            Anggota Tim
+                        </p>
+                    </div>
+
                     <div
                         v-for="anggota in filteredAnggotaTim"
                         :key="anggota.id"
@@ -4344,7 +4376,12 @@ const getCatatanAtasanList = (item) => {
                             <p
                                 class="text-sm font-bold text-slate-800 truncate"
                             >
-                                {{ anggota.nama }}
+                                {{ anggota.nama
+                                }}<span
+                                    v-if="isSelf(anggota.id)"
+                                    class="ml-1 text-[11px] font-semibold text-blue-600"
+                                    >(Anda)</span
+                                >
                             </p>
                             <p class="text-xs text-slate-500 mt-0.5 truncate">
                                 NIP: {{ anggota.nip || "-" }}
@@ -4373,7 +4410,6 @@ const getCatatanAtasanList = (item) => {
                 <div
                     class="p-3.5 border-t border-slate-100 bg-slate-50 flex justify-between items-center shrink-0"
                 >
-                    <!-- Link kalender tim: disembunyikan untuk Admin HR. -->
                     <Link
                         v-if="!isAdminHR"
                         :href="route('karyawan.kalender')"
@@ -4444,6 +4480,10 @@ const getCatatanAtasanList = (item) => {
                                 Total pengajuan disetujui:
                                 {{ cutiDisetujuiBulanIniList.length }} Pengajuan
                             </p>
+                            <!-- TAMBAHKAN DI SINI (setelah baris Total pengajuan) -->
+                            <p class="text-[11px] text-slate-400 mt-0.5">
+                                {{ isAdminHR ? 'Semua cuti disetujui bulan ini.' : 'Hanya cuti yang Anda setujui sendiri.' }}
+                                </p>
                         </div>
                     </div>
                     <button
@@ -4474,7 +4514,17 @@ const getCatatanAtasanList = (item) => {
                         >
                             <div>
                                 <h4 class="text-sm font-bold text-slate-800">
-                                    {{ item.pegawai?.nama || "Pegawai" }}
+                                    {{ item.pegawai?.nama || "Pegawai"
+                                    }}<span
+                                        v-if="
+                                            isSelf(
+                                                item.pegawai_id ??
+                                                    item.pegawai?.id,
+                                            )
+                                        "
+                                        class="ml-1 text-[11px] font-semibold text-emerald-600"
+                                        >(Anda)</span
+                                    >
                                 </h4>
                                 <p class="text-xs text-slate-500 mt-0.5">
                                     <span class="font-bold text-slate-700">{{
@@ -4622,10 +4672,10 @@ const getCatatanAtasanList = (item) => {
                     </div>
                     <div class="flex-1">
                         <h3 class="text-base font-bold text-slate-800">
-                            Rincian Saldo Cuti Bawaan
+                            Rincian Saldo Cuti
                         </h3>
                         <p class="text-xs font-semibold text-slate-500 mt-0.5">
-                            {{ user.nama }} &bull; posisi per {{ currentYear }}
+                            {{ user.nama }} &bull; posisi per {{ tahunKpi }}
                         </p>
                     </div>
                     <button
@@ -4650,57 +4700,79 @@ const getCatatanAtasanList = (item) => {
                 </div>
 
                 <div class="p-4 overflow-y-auto flex-1 space-y-4">
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                        <div class="bg-slate-50 rounded-xl p-2.5">
-                            <p class="text-[10px] font-bold text-slate-400">
-                                Sisa {{ currentYear - 2 }}
+                    <div
+                        class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 flex items-center justify-between gap-3"
+                    >
+                        <div>
+                            <p class="text-[11px] font-bold text-emerald-700">
+                                Total cuti tersedia {{ tahunKpi }}
                             </p>
-                            <p class="text-lg font-black text-slate-800 mt-0.5">
-                                {{ sisaDuaTahunLalu
-                                }}<span
-                                    class="text-[10px] font-semibold text-slate-400 ml-0.5"
-                                    >hari</span
-                                >
+                            <p class="text-[11px] text-emerald-700/80 mt-0.5">
+                                Cuti yang bisa kamu ajukan sekarang
                             </p>
                         </div>
-                        <div class="bg-slate-50 rounded-xl p-2.5">
-                            <p class="text-[10px] font-bold text-slate-400">
-                                Sisa {{ currentYear - 1 }}
-                            </p>
-                            <p class="text-lg font-black text-slate-800 mt-0.5">
-                                {{ sisaSatuTahunLalu
-                                }}<span
-                                    class="text-[10px] font-semibold text-slate-400 ml-0.5"
-                                    >hari</span
-                                >
-                            </p>
-                        </div>
-                        <div class="bg-slate-50 rounded-xl p-2.5">
-                            <p class="text-[10px] font-bold text-slate-400">
-                                Sisa {{ currentYear }}
-                            </p>
-                            <p class="text-lg font-black text-slate-800 mt-0.5">
-                                {{ jatahTahunIniUntukSaldo
-                                }}<span
-                                    class="text-[10px] font-semibold text-slate-400 ml-0.5"
-                                    >hari</span
-                                >
-                            </p>
-                        </div>
-                        <div class="bg-emerald-50 rounded-xl p-2.5">
-                            <!-- [DIPERBAIKI] "Bawaan eligible" diseragamkan menjadi "Hak bawaan eligible" -->
-                            <p class="text-[10px] font-bold text-emerald-600">
-                                Hak bawaan eligible
-                            </p>
-                            <p
-                                class="text-lg font-black text-emerald-700 mt-0.5"
+                        <p
+                            class="text-3xl font-black text-emerald-800 leading-none"
+                        >
+                            {{ totalCutiTersedia
+                            }}<span
+                                class="text-sm font-bold text-emerald-600 ml-1"
+                                >hari</span
                             >
-                                {{ saldoBawaanEligible
-                                }}<span
-                                    class="text-[10px] font-semibold text-emerald-600 ml-0.5"
-                                    >hari</span
+                        </p>
+                    </div>
+
+                    <div>
+                        <p
+                            class="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider mb-2"
+                        >
+                            Dari mana angkanya?
+                        </p>
+                        <div
+                            class="rounded-xl border border-slate-200 divide-y divide-slate-100 text-xs"
+                        >
+                            <div
+                                class="flex items-center justify-between gap-3 px-3 py-2.5"
+                            >
+                                <span class="text-slate-600"
+                                    >Sisa jatah cuti {{ tahunKpi }}</span
                                 >
-                            </p>
+                                <span class="font-bold text-slate-800"
+                                    >{{ jatahTahunIniUntukSaldo }} hari</span
+                                >
+                            </div>
+                            <div
+                                class="flex items-center justify-between gap-3 px-3 py-2.5"
+                            >
+                                <span class="text-slate-600"
+                                    >Cuti bawaan dari tahun-tahun
+                                    sebelumnya</span
+                                >
+                                <span class="font-bold text-slate-800"
+                                    >{{ saldoBawaanEligible }} hari</span
+                                >
+                            </div>
+                            <div
+                                class="flex items-center justify-between gap-3 px-3 py-2.5"
+                            >
+                                <span class="text-slate-600"
+                                    >Cuti {{ tahunKpi - 1 }} yang ditangguhkan,
+                                    dikembalikan</span
+                                >
+                                <span class="font-bold text-slate-800"
+                                    >{{ cutiDikembalikan }} hari</span
+                                >
+                            </div>
+                            <div
+                                class="flex items-center justify-between gap-3 px-3 py-2.5 bg-slate-50"
+                            >
+                                <span class="font-bold text-slate-700"
+                                    >Total</span
+                                >
+                                <span class="font-black text-slate-900"
+                                    >{{ totalCutiTersedia }} hari</span
+                                >
+                            </div>
                         </div>
                     </div>
 
@@ -4708,91 +4780,202 @@ const getCatatanAtasanList = (item) => {
                         <p
                             class="text-[11px] font-extrabold text-slate-400 uppercase tracking-wider mb-2"
                         >
-                            Cara perhitungan
+                            Sisa cuti per tahun
                         </p>
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="bg-slate-50 rounded-xl p-2.5">
+                                <p class="text-[10px] font-bold text-slate-400">
+                                    Sisa {{ tahunKpi - 2 }}
+                                </p>
+                                <p
+                                    class="text-lg font-black text-slate-800 mt-0.5"
+                                >
+                                    {{ sisaDuaTahunLalu
+                                    }}<span
+                                        class="text-[10px] font-semibold text-slate-400 ml-0.5"
+                                        >hari</span
+                                    >
+                                </p>
+                            </div>
+                            <div class="bg-slate-50 rounded-xl p-2.5">
+                                <p class="text-[10px] font-bold text-slate-400">
+                                    Sisa {{ tahunKpi - 1 }}
+                                </p>
+                                <p
+                                    class="text-lg font-black text-slate-800 mt-0.5"
+                                >
+                                    {{ sisaSatuTahunLalu
+                                    }}<span
+                                        class="text-[10px] font-semibold text-slate-400 ml-0.5"
+                                        >hari</span
+                                    >
+                                </p>
+                            </div>
+                            <div class="bg-slate-50 rounded-xl p-2.5">
+                                <p class="text-[10px] font-bold text-slate-400">
+                                    Sisa {{ tahunKpi }}
+                                </p>
+                                <p
+                                    class="text-lg font-black text-slate-800 mt-0.5"
+                                >
+                                    {{ jatahTahunIniUntukSaldo
+                                    }}<span
+                                        class="text-[10px] font-semibold text-slate-400 ml-0.5"
+                                        >hari</span
+                                    >
+                                </p>
+                            </div>
+                        </div>
+                    </div>
 
-                        <div class="flex gap-2.5 mb-3">
+                    <details
+                        class="group rounded-xl border border-slate-200 bg-white"
+                    >
+                        <summary
+                            class="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs font-bold text-slate-700 [&::-webkit-details-marker]:hidden"
+                        >
+                            Kenapa sisa cuti {{ tahunKpi }} tinggal
+                            {{ jatahTahunIniUntukSaldo }} hari?
+                            <svg
+                                class="w-4 h-4 text-slate-400 shrink-0 transition-transform group-open:rotate-180"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M19 9l-7 7-7-7"
+                                ></path>
+                            </svg>
+                        </summary>
+                        <div
+                            class="px-3 pb-3 text-xs leading-relaxed text-slate-600 space-y-1.5"
+                        >
+                            <p>
+                                Jatah cuti {{ tahunKpi }} adalah
+                                {{ kuotaTahunanUtuh }} hari. Yang sudah terpakai
+                                {{ cutiTerpakaiTotal }} hari, terdiri dari
+                                {{ cutiDigunakan }} hari digunakan dan
+                                {{ cutiDitangguhkan }} hari ditangguhkan. Jadi
+                                sisanya {{ kuotaTahunanUtuh }} &minus;
+                                {{ cutiTerpakaiTotal }} =
+                                {{ jatahTahunIniUntukSaldo }} hari.
+                            </p>
+                            <p v-if="cutiDitangguhkan > 0">
+                                Cuti yang ditangguhkan tetap dihitung terpakai
+                                di
+                                {{ tahunKpi }}, lalu dikembalikan ke saldo
+                                {{ tahunKpi + 1 }}.
+                            </p>
+                        </div>
+                    </details>
+
+                    <details
+                        class="group rounded-xl border border-slate-200 bg-white"
+                    >
+                        <summary
+                            class="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-xs font-bold text-slate-700 [&::-webkit-details-marker]:hidden"
+                        >
+                            Cara hitung cuti bawaan
+                            <svg
+                                class="w-4 h-4 text-slate-400 shrink-0 transition-transform group-open:rotate-180"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M19 9l-7 7-7-7"
+                                ></path>
+                            </svg>
+                        </summary>
+                        <div class="px-3 pb-3 space-y-3">
+                            <p class="text-xs leading-relaxed text-slate-600">
+                                Cuti bawaan bisa sampai 12 hari kalau
+                                <span class="font-bold">kedua syarat</span> ini
+                                terpenuhi:
+                            </p>
+
+                            <div class="flex gap-2.5">
+                                <div
+                                    class="w-5 h-5 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0 mt-0.5"
+                                    :class="
+                                        syaratDuaTahunLaluTerpenuhi
+                                            ? 'bg-emerald-500'
+                                            : 'bg-red-500'
+                                    "
+                                >
+                                    {{
+                                        syaratDuaTahunLaluTerpenuhi ? "✓" : "✕"
+                                    }}
+                                </div>
+                                <div>
+                                    <p class="text-xs font-bold text-slate-700">
+                                        Sisa cuti {{ tahunKpi - 2 }} utuh 12
+                                        hari
+                                    </p>
+                                    <p class="text-xs text-slate-500 mt-0.5">
+                                        Kamu punya {{ sisaDuaTahunLalu }} hari.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="flex gap-2.5">
+                                <div
+                                    class="w-5 h-5 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0 mt-0.5"
+                                    :class="
+                                        syaratSatuTahunLaluTerpenuhi
+                                            ? 'bg-emerald-500'
+                                            : 'bg-red-500'
+                                    "
+                                >
+                                    {{
+                                        syaratSatuTahunLaluTerpenuhi ? "✓" : "✕"
+                                    }}
+                                </div>
+                                <div>
+                                    <p class="text-xs font-bold text-slate-700">
+                                        Sisa cuti {{ tahunKpi - 1 }} utuh 12
+                                        hari
+                                    </p>
+                                    <p class="text-xs text-slate-500 mt-0.5">
+                                        Kamu punya {{ sisaSatuTahunLalu }} hari.
+                                    </p>
+                                </div>
+                            </div>
+
                             <div
-                                class="w-5 h-5 rounded-full flex items-center justify-center text-white text-[11px] font-bold shrink-0 mt-0.5"
+                                class="rounded-xl p-3 text-xs leading-relaxed"
                                 :class="
                                     akumulasiPenuh
-                                        ? 'bg-emerald-500'
-                                        : 'bg-red-500'
+                                        ? 'bg-emerald-50 text-emerald-700'
+                                        : 'bg-slate-50 text-slate-600'
                                 "
                             >
-                                {{ akumulasiPenuh ? "✓" : "✕" }}
-                            </div>
-                            <div>
-                                <p class="text-xs font-bold text-slate-700">
-                                    {{
-                                        akumulasiPenuh
-                                            ? "Syarat akumulasi penuh terpenuhi"
-                                            : "Syarat akumulasi penuh tidak terpenuhi"
-                                    }}
-                                </p>
-                                <p
-                                    class="text-xs text-slate-500 mt-0.5 leading-relaxed"
-                                >
-                                    Akumulasi 12 hari hanya diberikan bila sisa
-                                    {{ currentYear - 2 }} dan sisa
-                                    {{ currentYear - 1 }} sama-sama utuh 12
-                                    hari.
-                                    <template v-if="!akumulasiPenuh">
-                                        Sisa {{ currentYear - 2 }} tercatat
-                                        {{ sisaDuaTahunLalu }} hari, sehingga
-                                        syarat ini tidak terpenuhi.
-                                    </template>
-                                </p>
+                                <template v-if="akumulasiPenuh">
+                                    Kedua syarat terpenuhi, jadi cuti bawaan
+                                    kamu
+                                    <span class="font-bold"
+                                        >{{ saldoBawaanEligible }} hari</span
+                                    >.
+                                </template>
+                                <template v-else>
+                                    Karena ada syarat yang belum terpenuhi, cuti
+                                    bawaan dibatasi maksimal 6 hari. Sisa cuti
+                                    {{ tahunKpi - 1 }} kamu
+                                    {{ sisaSatuTahunLalu }} hari, jadi yang bisa
+                                    dibawa
+                                    <span class="font-bold"
+                                        >{{ saldoBawaanEligible }} hari</span
+                                    >.
+                                </template>
                             </div>
                         </div>
-
-                        <div v-if="!akumulasiPenuh" class="flex gap-2.5">
-                            <div
-                                class="w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center text-white text-[11px] font-bold shrink-0 mt-0.5"
-                            >
-                                ✓
-                            </div>
-                            <div>
-                                <p class="text-xs font-bold text-slate-700">
-                                    Berlaku aturan alternatif
-                                </p>
-                                <p
-                                    class="text-xs text-slate-500 mt-0.5 leading-relaxed"
-                                >
-                                    Sistem mengambil nilai terkecil antara batas
-                                    bawaan 6 hari dan sisa
-                                    {{ currentYear - 1 }} ({{
-                                        sisaSatuTahunLalu
-                                    }}
-                                    hari). Hasilnya {{ saldoBawaanEligible }}
-                                    hari.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="flex gap-2.5 p-3 bg-emerald-50 rounded-xl">
-                        <svg
-                            class="w-4 h-4 text-emerald-600 shrink-0 mt-0.5"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="2"
-                                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                            ></path>
-                        </svg>
-                        <p class="text-xs text-emerald-700 leading-relaxed">
-                            Saldo {{ currentYear - 2 }} tidak hangus, tetapi
-                            hanya sebagian yang bisa dibawa karena akumulasi
-                            penuh membutuhkan dua tahun berturut-turut tanpa
-                            pemakaian. Sisa {{ currentYear }} dihitung terpisah
-                            dari aturan ini.
-                        </p>
-                    </div>
+                    </details>
                 </div>
 
                 <div
@@ -4890,7 +5073,17 @@ const getCatatanAtasanList = (item) => {
                                 <p
                                     class="text-sm font-bold text-slate-800 truncate"
                                 >
-                                    {{ cuti.pegawai?.nama || "Pegawai" }}
+                                    {{ cuti.pegawai?.nama || "Pegawai"
+                                    }}<span
+                                        v-if="
+                                            isSelf(
+                                                cuti.pegawai_id ??
+                                                    cuti.pegawai?.id,
+                                            )
+                                        "
+                                        class="ml-1 text-[11px] font-semibold text-sky-600"
+                                        >(Anda)</span
+                                    >
                                 </p>
                                 <p
                                     class="text-xs text-slate-500 mt-0.5 truncate font-medium"
@@ -4925,7 +5118,6 @@ const getCatatanAtasanList = (item) => {
         </div>
     </Teleport>
 
-    <!-- Modal Setujui Pengajuan Cuti -->
     <Teleport to="body">
         <div
             v-if="approveModal.show"
@@ -5083,7 +5275,6 @@ const getCatatanAtasanList = (item) => {
         </div>
     </Teleport>
 
-    <!-- Modal Alasan Penolakan Cuti -->
     <Teleport to="body">
         <div
             v-if="rejectModal.show"
@@ -5273,4 +5464,3 @@ const getCatatanAtasanList = (item) => {
         </div>
     </Teleport>
 </template>
-

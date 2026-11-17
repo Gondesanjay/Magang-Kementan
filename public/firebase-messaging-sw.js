@@ -26,7 +26,7 @@ self.addEventListener('activate', (event) => event.waitUntil(clients.claim()));
 messaging.onBackgroundMessage(function (payload) {
     const d = payload.data || {};
 
-    self.registration.showNotification(d.title || 'AgriLeave', {
+    self.registration.showNotification(d.title || 'SICA', {
         body: d.body || '',
         icon: '/favicon.ico',
         data: { url: d.url || '/dashboard' },

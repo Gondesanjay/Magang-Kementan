@@ -5,7 +5,7 @@ use App\Http\Controllers\MonitoringCutiController;
 use App\Http\Controllers\RekapKuotaDetailController;
 use App\Http\Controllers\CutiController;
 use App\Http\Controllers\DashboardController;
-use App\Http\Controllers\FcmTokenController; 
+use App\Http\Controllers\FcmTokenController;
 use App\Http\Controllers\LampiranController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PembatalanController;
@@ -16,9 +16,11 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
+
 Route::get('/', function () {
     return redirect()->route('login');
 });
+
 
 // 1. Rute Ganti Password Pertama Kali ('auth' + PreventBackHistory)
 Route::middleware(['auth', PreventBackHistory::class])->group(function () {
@@ -63,9 +65,9 @@ Route::middleware(['auth', 'force.password', PreventBackHistory::class])->group(
         ->whereNumber('id')
         ->name('notifikasi.destroy');
 
-    // Simpan token perangkat untuk Web Push (FCM) // BARU
+    // Simpan token perangkat untuk Web Push (FCM)
     Route::post('/fcm-token', [FcmTokenController::class, 'store'])
-        ->middleware('throttle:20,1')
+        ->middleware('throttle:60,1')
         ->name('fcm.store');
     Route::delete('/fcm-token', [FcmTokenController::class, 'destroy'])
         ->middleware('throttle:20,1')
@@ -124,23 +126,12 @@ Route::middleware(['auth', 'force.password', PreventBackHistory::class])->group(
 
     // ==========================================
     // Penangguhan cuti oleh Kepala Biro — HANYA role 6
-    //
-    // JALUR UTAMA: atasan.penangguhan.process -> PembatalanController::process()
-    //   (dipakai halaman "Penangguhan Cuti", PembatalanCuti.vue).
-    //
-    // JALUR ADMIN: admin.cuti.tangguhkan -> AdminController::suspendCuti()
-    //   [PERBAIKAN TGH] Sekarang method itu hanya MENERUSKAN ke
-    //   PembatalanController::process(), jadi kedua route berperilaku identik
-    //   (mencatat ApprovalLog + baris CutiDitangguhkan yang memunculkan angka
-    //   TGH di Rekap Kuota Detail). Route tetap dipertahankan supaya tidak
-    //   mematahkan pemanggil lama. Kalau pencarian "admin.cuti.tangguhkan" di
-    //   resources/js tidak menemukan apa pun, route di bawah ini AMAN dihapus
-    //   (hapus juga method suspendCuti() di AdminController).
+    // Termasuk AdminController::suspendCuti() yang mensyaratkan role 6 (L4),
+    // bukan Admin HR, sehingga ditaruh di grup ini dan bukan di grup Admin.
     // ==========================================
     Route::middleware('role:6')->where(['id' => '[0-9]+'])->group(function () {
         Route::get('/atasan/penangguhan-cuti', [PembatalanController::class, 'index'])->name('atasan.penangguhan');
         Route::post('/atasan/penangguhan-cuti/{id}', [PembatalanController::class, 'process'])->name('atasan.penangguhan.process');
-
         Route::post('/admin/pengajuan-cuti/{id}/tangguhkan', [AdminController::class, 'suspendCuti'])->name('admin.cuti.tangguhkan');
     });
 
@@ -177,6 +168,7 @@ Route::middleware(['auth', 'force.password', PreventBackHistory::class])->group(
 
         Route::get('/admin/rekap-laporan', [AdminController::class, 'rekapLaporan'])->name('admin.rekap');
         Route::get('/admin/rekap-laporan/export', [AdminController::class, 'exportExcel'])->name('admin.rekap.export');
+        Route::post('/admin/rekap-laporan/{id}/koreksi', [AdminController::class, 'updateKoreksiLaporan'])->name('admin.rekap.koreksi');
 
         Route::get('/admin/hari-libur', [AdminController::class, 'kelolaLibur'])->name('admin.libur');
         Route::post('/admin/hari-libur', [AdminController::class, 'storeLibur'])->name('admin.libur.store');

@@ -1,11 +1,27 @@
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { Link, usePage, router } from "@inertiajs/vue3";
-import axios from "axios"; // BARU: untuk kirim token FCM ke Laravel
+import axios from "axios"; // kirim token FCM ke Laravel
 // Firebase Cloud Messaging (push notification browser)
 // Pastikan resources/js/firebase.js mengekspor `messaging`.
 import { getToken, onMessage } from "firebase/messaging";
 import { messaging } from "@/firebase";
+
+// ================= BRANDING =================
+const BRANDS = {
+    sica: {
+        namaDepan: "SI",
+        namaBelakang: "CA",
+        subjudul: "Sistem Informasi Cuti ASN",
+        logoMobile: "/images/logo-sica.png", // tampil di header HP
+        background: "from-emerald-50 via-slate-50 to-sky-50",
+        garisEmas: true, // garis emas tipis di bawah header sidebar
+        notifTitle: "SICA",
+    },
+};
+const ACTIVE_BRAND = "sica";
+const brand = BRANDS[ACTIVE_BRAND];
+// ================= END BRANDING =================
 
 const page = usePage();
 const user = computed(() => page.props.auth.user);
@@ -36,14 +52,14 @@ watch(isMobileOpen, (open) => {
 });
 
 // ================= BOTTOM NAVIGATION (KHUSUS MOBILE) =================
-// Menu bawah menyesuaikan kebutuhan inti tiap role:
+// Menu bawah per role:
 //   - Role 1 (Karyawan)        : Beranda, Ajukan, Riwayat, Profil
 //   - Role 2/3/4 (Atasan L1-3) : Beranda, Approval, Kalender Tim, Profil
 //   - Role 6 (Kepala Biro)     : Beranda, Approval, Tangguhkan, Kalender Tim, Profil
 //   - Role 5 (Admin SDM)       : Beranda, Pegawai, Rekap, Profil
-// Menu yang tidak tampil di bottom bar tetap bisa dibuka lewat sidebar (hamburger).
+// Menu lain tetap bisa dibuka lewat sidebar (hamburger).
 
-// Kumpulan ikon (Heroicons outline) agar definisi menu di bawah tetap ringkas
+// Ikon (Heroicons outline)
 const ICONS = {
     beranda:
         "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6",
@@ -155,7 +171,7 @@ const bottomNavItems = computed(() => {
                 key: "rekap",
                 label: "Rekap",
                 href: route("admin.rekap"),
-                // Menu Rekap tetap menyala di kedua halaman rekap
+                // Menyala di kedua halaman rekap
                 active: isActive("admin.rekap") || isActive("admin.monitoring"),
                 icon: ICONS.rekap,
             },
@@ -163,7 +179,7 @@ const bottomNavItems = computed(() => {
         ];
     }
 
-    // Fallback (role tidak dikenal): menu minimal yang aman
+    // Fallback (role tidak dikenal)
     return [beranda, profil];
 });
 
@@ -175,9 +191,8 @@ const bottomNavGridClass = computed(() => {
     return "grid-cols-2";
 });
 
-// Tab di dalam menu "Rekap" (khusus Admin HR / role 5, tampil di HP):
-// memisahkan "Rekap Kuota Detail" dan "Rekap Laporan" yang sebelumnya
-// hanya bisa dibuka lewat sidebar.
+// Tab "Rekap" khusus Admin HR (role 5) di HP:
+// memisahkan "Rekap Kuota" dan "Rekap Laporan".
 const rekapTabs = computed(() => {
     if (user.value?.role_id !== 5) return [];
     return [
@@ -202,7 +217,6 @@ const showRekapTabs = computed(
 
 // ================= TIMEOUT SESI IDLE =================
 // Harus LEBIH KECIL dari SESSION_LIFETIME di .env (menit).
-// Test: SESSION_LIFETIME=30 -> 30 menit. Produksi: 30 menit.
 const IDLE_LIMIT_MS = 29 * 60 * 1000;
 let idleTimer = null;
 let lastActivity = Date.now();
@@ -211,15 +225,22 @@ let sedangLogout = false;
 const logoutKarenaIdle = () => {
     if (sedangLogout) return;
     sedangLogout = true;
+    hapusPenandaSinkron(); // agar login berikutnya kirim token lagi
     router.post(
         route("logout"),
-        { fcm_token: fcmTokenSaatIni.value }, // BARU
+        { fcm_token: fcmTokenSaatIni.value },
         {
             onFinish: () => {
                 window.location.href = route("login");
             },
         },
     );
+};
+
+// Logout manual (sidebar & dropdown profil)
+const logout = () => {
+    hapusPenandaSinkron();
+    router.post(route("logout"), { fcm_token: fcmTokenSaatIni.value });
 };
 
 const resetIdleTimer = () => {
@@ -246,14 +267,14 @@ const eventAktivitas = [
 
 // ================= FCM / PUSH NOTIFICATION =================
 // Minta izin + ambil FCM token + simpan ke Laravel.
-// Dipicu tombol (bukan otomatis), karena Chrome memblokir prompt tanpa gesture user.
+// Dipicu tombol (Chrome memblokir prompt tanpa gesture user).
 // VAPID key dari .env: VITE_FIREBASE_VAPID_KEY=...
 const fcmStatus = ref(""); // pesan singkat untuk UI
 const fcmLoading = ref(false);
 const fcmTokenSiap = ref(false);
 
-// BARU: token FCM milik browser ini. Dikirim saat logout supaya server
-// hanya menghapus token perangkat INI (perangkat lain milik user tetap aktif).
+// Token FCM browser ini. Dikirim saat logout agar server hanya
+// menghapus token perangkat INI (perangkat lain tetap aktif).
 const bacaTokenTersimpan = () => {
     try {
         return localStorage.getItem("fcm_token") || "";
@@ -263,8 +284,31 @@ const bacaTokenTersimpan = () => {
 };
 const fcmTokenSaatIni = ref(bacaTokenTersimpan());
 
+// Cegah pengiriman token berulang (perbaikan error 429)
+const FCM_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000; // sinkron ulang paling cepat tiap 6 jam
+const KEY_TOKEN = "fcm_token";
+const KEY_SYNCED_AT = "fcm_token_synced_at";
+let sedangSinkron = false;
+
+// Dipanggil saat logout agar login berikutnya mengirim token lagi
+const hapusPenandaSinkron = () => {
+    try {
+        localStorage.removeItem(KEY_SYNCED_AT);
+    } catch (e) {
+        // abaikan
+    }
+};
+
 // Daftarkan service worker, ambil token, simpan ke database.
-const ambilDanSimpanToken = async () => {
+// paksa = true -> selalu kirim ke server (tombol "Aktifkan Notifikasi")
+const ambilDanSimpanToken = async ({ paksa = false } = {}) => {
+    // `messaging` bisa null kalau firebase.js gagal inisialisasi
+    if (!messaging) {
+        throw new Error(
+            "Firebase messaging belum siap (cek resources/js/firebase.js dan .env)",
+        );
+    }
+
     const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
     if (!vapidKey) {
         throw new Error("VITE_FIREBASE_VAPID_KEY belum diisi di .env");
@@ -273,8 +317,7 @@ const ambilDanSimpanToken = async () => {
     const registration = await navigator.serviceWorker.register(
         "/firebase-messaging-sw.js",
     );
-    // Tunggu service worker benar-benar aktif, kalau tidak getToken bisa gagal
-    // dengan "no active Service Worker" (terutama saat pertama kali).
+    // Tunggu service worker aktif, kalau tidak getToken bisa gagal
     await navigator.serviceWorker.ready;
 
     const currentToken = await getToken(messaging, {
@@ -284,13 +327,31 @@ const ambilDanSimpanToken = async () => {
 
     if (!currentToken) return false;
 
-    fcmTokenSaatIni.value = currentToken; // BARU
+    fcmTokenSaatIni.value = currentToken;
+
+    // Kirim ke server hanya jika token berubah, lewat interval, atau dipaksa
+    let perluKirim = paksa;
     try {
-        localStorage.setItem("fcm_token", currentToken);
+        const tokenLama = localStorage.getItem(KEY_TOKEN);
+        const terakhir = Number(localStorage.getItem(KEY_SYNCED_AT) || 0);
+        const masihSegar =
+            tokenLama === currentToken &&
+            Date.now() - terakhir < FCM_SYNC_INTERVAL_MS;
+
+        if (!masihSegar) perluKirim = true;
+        localStorage.setItem(KEY_TOKEN, currentToken);
     } catch (e) {
-        // penyimpanan lokal tidak tersedia, abaikan
+        perluKirim = true; // localStorage tidak tersedia
     }
-    await axios.post("/fcm-token", { token: currentToken });
+
+    if (perluKirim) {
+        await axios.post("/fcm-token", { token: currentToken });
+        try {
+            localStorage.setItem(KEY_SYNCED_AT, String(Date.now()));
+        } catch (e) {
+            // abaikan
+        }
+    }
     return true;
 };
 
@@ -305,6 +366,12 @@ const requestNotificationPermission = async () => {
             return;
         }
 
+        // Jangan minta izin kalau Firebase belum siap
+        if (!messaging) {
+            fcmStatus.value = "Layanan notifikasi belum siap.";
+            return;
+        }
+
         const permission = await Notification.requestPermission();
 
         if (permission !== "granted") {
@@ -312,7 +379,8 @@ const requestNotificationPermission = async () => {
             return;
         }
 
-        const berhasil = await ambilDanSimpanToken();
+        // paksa: true agar tombol manual selalu mencoba kirim ulang
+        const berhasil = await ambilDanSimpanToken({ paksa: true });
         fcmTokenSiap.value = berhasil;
         fcmStatus.value = berhasil
             ? "Notifikasi berhasil diaktifkan."
@@ -325,21 +393,25 @@ const requestNotificationPermission = async () => {
     }
 };
 
-// Kalau izin sudah pernah diberikan, sinkronkan token diam-diam tiap halaman dibuka
-// (token bisa berganti), tanpa pop-up. Tombol otomatis tampil "Notifikasi aktif".
+// Jika izin sudah diberikan, sinkronkan token diam-diam tiap halaman dibuka
+// (token bisa berganti), tanpa pop-up.
 const sinkronkanTokenJikaSudahIzin = async () => {
+    if (!messaging || sedangSinkron) return; // cegah panggilan paralel
     if (!("Notification" in window) || Notification.permission !== "granted") {
         return;
     }
+    sedangSinkron = true;
     try {
         fcmTokenSiap.value = await ambilDanSimpanToken();
     } catch (error) {
         console.error("Gagal sinkron token FCM:", error);
+    } finally {
+        sedangSinkron = false;
     }
 };
-// BARU: pesan yang masuk saat halaman ini masih terlihat (foreground).
-// Lonceng selalu disegarkan. Pop-up sistem hanya ditampilkan kalau halaman
-// sedang tidak difokuskan (mis. jendela terlihat tapi pengguna ada di jendela lain).
+
+// Pesan masuk saat halaman terlihat (foreground).
+// Lonceng selalu disegarkan; pop-up sistem hanya jika halaman tidak difokuskan.
 let hentikanFcmForeground = null;
 
 const tampilkanNotifForeground = async (payload) => {
@@ -354,7 +426,7 @@ const tampilkanNotifForeground = async (payload) => {
 
     try {
         const reg = await navigator.serviceWorker.ready;
-        await reg.showNotification(d.title || "AgriLeave", {
+        await reg.showNotification(d.title || brand.notifTitle, {
             body: d.body || "",
             icon: "/favicon.ico",
             data: { url: d.url || "/dashboard" },
@@ -371,8 +443,19 @@ onMounted(() => {
     );
     document.addEventListener("visibilitychange", cekSetelahTabAktif);
     resetIdleTimer();
-    sinkronkanTokenJikaSudahIzin(); // BARU
-    hentikanFcmForeground = onMessage(messaging, tampilkanNotifForeground); // BARU
+
+    // FCM hanya jalan jika `messaging` tersedia (hindari TypeError di mounted)
+    if (messaging) {
+        sinkronkanTokenJikaSudahIzin();
+        try {
+            hentikanFcmForeground = onMessage(
+                messaging,
+                tampilkanNotifForeground,
+            );
+        } catch (error) {
+            console.error("Gagal memasang listener FCM foreground:", error);
+        }
+    }
 });
 
 onBeforeUnmount(() => {
@@ -382,7 +465,7 @@ onBeforeUnmount(() => {
     );
     document.removeEventListener("visibilitychange", cekSetelahTabAktif);
     document.body.style.overflow = "";
-    if (hentikanFcmForeground) hentikanFcmForeground(); // BARU
+    if (hentikanFcmForeground) hentikanFcmForeground();
 });
 // ================= END TIMEOUT SESI IDLE =================
 
@@ -401,12 +484,12 @@ watch(
     { deep: true },
 );
 
-// Menghitung jumlah notifikasi yang belum dibaca
+// Jumlah notifikasi yang belum dibaca
 const unreadCount = computed(
     () => notifications.value.filter((n) => !n.is_read).length,
 );
 
-// Tandai semua dibaca (hanya menghilangkan titik hijau, notifikasi tetap tampil)
+// Tandai semua dibaca (hanya menghilangkan titik hijau)
 const markAllAsRead = () => {
     router.post(
         route("notifications.readAll"),
@@ -423,7 +506,7 @@ const markAllAsRead = () => {
     );
 };
 
-// Hapus SEMUA notifikasi sekaligus
+// Hapus SEMUA notifikasi
 const hapusSemuaNotifikasi = () => {
     router.delete(route("notifications.destroyAll"), {
         preserveScroll: true,
@@ -445,7 +528,7 @@ const hapusNotifikasi = (id) => {
     });
 };
 
-// Klik item notifikasi: hapus dulu, lalu buka halaman tujuan (jika ada tautan)
+// Klik item: hapus dulu, lalu buka halaman tujuan (jika ada tautan)
 const klikNotifikasi = (notif) => {
     router.delete(route("notifikasi.destroy", notif.id), {
         preserveScroll: true,
@@ -455,7 +538,7 @@ const klikNotifikasi = (notif) => {
             );
 
             if (notif.tautan) {
-                // Ambil path saja (aman meski tautan berisi host/port berbeda)
+                // Ambil path saja (aman meski host/port berbeda)
                 let path = notif.tautan;
                 try {
                     const url = new URL(path, window.location.origin);
@@ -470,10 +553,10 @@ const klikNotifikasi = (notif) => {
     });
 };
 
-// Jenis notifikasi dikenali dari JUDULNYA (lebih andal daripada isi pesan):
+// Jenis notifikasi dikenali dari JUDUL:
 //   'kedaluwarsa' -> pengajuan kedaluwarsa otomatis
 //   'pengingat'   -> pengingat ke atasan / Admin HR (pengajuan menggantung)
-//   'biasa'       -> semua notifikasi lain
+//   'biasa'       -> lainnya
 const jenisNotif = (notif) => {
     const judul = (notif.judul || "").toLowerCase();
     if (judul.includes("kedaluwarsa")) return "kedaluwarsa";
@@ -487,8 +570,8 @@ const jenisNotif = (notif) => {
 const badgeStyle = (notif) => {
     const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
 
-    // Dicek lebih dulu: kata "persetujuan" pada pesan pengingat mengandung
-    // "setuju" dan akan salah diberi warna hijau oleh aturan di bawah.
+    // Dicek lebih dulu: "persetujuan" pada pesan pengingat mengandung
+    // "setuju" dan akan salah diberi warna hijau.
     if (jenisNotif(notif) === "kedaluwarsa") {
         return "text-zinc-700 bg-zinc-100 border-zinc-300";
     }
@@ -533,7 +616,7 @@ const formatJam = (tanggal) => {
         .replace(".", ":");
 };
 
-// Label menu untuk route 'atasan.approval' dibuat dinamis sesuai role:
+// Label menu route 'atasan.approval' dinamis sesuai role:
 // - Atasan (role 2,3,4,6) -> "Approval Cuti"
 // - Admin HR (role 5)     -> "Monitoring Cuti"
 const approvalMenuLabel = computed(() =>
@@ -542,9 +625,12 @@ const approvalMenuLabel = computed(() =>
 </script>
 
 <template>
-    <!-- BACKGROUND UTAMA GRADASI SOFT -->
+    <!-- BACKGROUND UTAMA GRADASI SOFT (mengikuti brand aktif) -->
     <div
-        class="min-h-screen flex font-sans bg-gradient-to-br from-[#e0f2f1] via-[#f0f9ff] to-[#e0f2fe]"
+        :class="[
+            'min-h-screen flex font-sans bg-gradient-to-br',
+            brand.background,
+        ]"
     >
         <!-- BACKDROP DRAWER (HP) -->
         <div
@@ -563,7 +649,7 @@ const approvalMenuLabel = computed(() =>
             ]"
         >
             <div
-                class="h-16 md:h-20 flex items-center border-b border-slate-700/50 shrink-0 px-4 overflow-hidden"
+                class="relative h-16 md:h-20 flex items-center border-b border-slate-700/50 shrink-0 px-4 overflow-hidden"
                 :class="showLabel ? 'justify-start gap-3' : 'justify-center'"
             >
                 <div
@@ -581,11 +667,14 @@ const approvalMenuLabel = computed(() =>
                 >
                     <span
                         class="block text-base font-bold text-white tracking-wide leading-tight"
-                        >Agri<span class="text-green-500">Leave</span></span
+                        >{{ brand.namaDepan
+                        }}<span class="text-green-500">{{
+                            brand.namaBelakang
+                        }}</span></span
                     >
                     <span
                         class="block text-[10px] font-semibold text-green-400 tracking-wide mt-0.5"
-                        >Biro Perencanaan</span
+                        >{{ brand.subjudul }}</span
                     >
                     <span
                         class="block text-[9px] text-slate-400 uppercase tracking-wider mt-0.5"
@@ -612,6 +701,11 @@ const approvalMenuLabel = computed(() =>
                         />
                     </svg>
                 </button>
+                <!-- Garis emas tipis di bawah header logo (opsional per brand) -->
+                <div
+                    v-if="brand.garisEmas"
+                    class="pointer-events-none absolute bottom-0 left-3 right-3 h-px bg-gradient-to-r from-transparent via-amber-400/70 to-transparent"
+                ></div>
             </div>
 
             <nav
@@ -745,7 +839,7 @@ const approvalMenuLabel = computed(() =>
                     </Link>
                 </div>
 
-                <!-- Role 2,3,4,5,6 -> Approval, Role 6 saja -> Penangguhan -->
+                <!-- Role 2,3,4,5,6 -> Approval; Role 6 saja -> Penangguhan -->
                 <div v-if="[2, 3, 4, 5, 6].includes(user.role_id)">
                     <p
                         v-show="showLabel"
@@ -754,8 +848,7 @@ const approvalMenuLabel = computed(() =>
                         Managerial
                     </p>
                     <!-- Label dinamis (route tetap 'atasan.approval'):
-                         - Atasan (role 2,3,4,6) -> "Approval Cuti"
-                         - Admin HR (role 5)     -> "Monitoring Cuti" -->
+                         role 2,3,4,6 -> "Approval Cuti"; role 5 -> "Monitoring Cuti" -->
                     <Link
                         :href="route('atasan.approval')"
                         :title="!showLabel ? approvalMenuLabel : ''"
@@ -784,8 +877,8 @@ const approvalMenuLabel = computed(() =>
                             approvalMenuLabel
                         }}</span>
                     </Link>
-                    <!-- "Monitoring Cuti" (route 'atasan.kuota') disembunyikan untuk role 5.
-                         Role 5 punya "Rekap Kuota Detail" di blok HR Admin. -->
+                    <!-- "Monitoring Cuti" (route 'atasan.kuota') disembunyikan untuk role 5
+                         (role 5 punya "Rekap Kuota Detail" di blok HR Admin). -->
                     <Link
                         v-if="user.role_id !== 5"
                         :href="route('atasan.kuota')"
@@ -853,8 +946,7 @@ const approvalMenuLabel = computed(() =>
                 </div>
 
                 <!-- Role 5 -> HR Admin (Kelola Pegawai, Rekap Kuota Detail,
-                     Rekap Laporan, Kelola Hari Libur). "Approval Cuti" untuk role 5
-                     tetap ada di blok Managerial di atas. -->
+                     Rekap Laporan, Kelola Hari Libur) -->
                 <div v-if="user.role_id === 5">
                     <p
                         v-show="showLabel"
@@ -976,7 +1068,7 @@ const approvalMenuLabel = computed(() =>
                                 stroke-linecap="round"
                                 stroke-linejoin="round"
                                 stroke-width="2"
-                                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2-2v12a2 2 0 002 2z"
+                                d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
                             ></path>
                         </svg>
                         <span v-show="showLabel" class="truncate"
@@ -989,11 +1081,10 @@ const approvalMenuLabel = computed(() =>
             <div
                 class="p-3 bg-[#020617]/50 border-t border-slate-800/50 shrink-0"
             >
-                <Link
-                    :href="route('logout')"
-                    method="post"
-                    as="button"
-                    :data="{ fcm_token: fcmTokenSaatIni }"
+                <!-- Tombol Logout (button + fungsi logout(), bukan Link) -->
+                <button
+                    type="button"
+                    @click="logout"
                     :title="!showLabel ? 'Logout' : ''"
                     :class="[
                         'w-full flex items-center justify-center gap-2 px-4 py-2 bg-slate-800/60 hover:bg-slate-700/80 text-slate-300 hover:text-white border border-slate-700/50 rounded-xl text-sm font-medium transition-all duration-200',
@@ -1014,7 +1105,7 @@ const approvalMenuLabel = computed(() =>
                         ></path>
                     </svg>
                     <span v-show="showLabel" class="truncate">Logout</span>
-                </Link>
+                </button>
             </div>
         </aside>
 
@@ -1079,8 +1170,21 @@ const approvalMenuLabel = computed(() =>
                         </svg>
                     </button>
 
-                    <span class="md:hidden font-bold text-slate-800 truncate">
-                        Agri<span class="text-green-600">Leave</span>
+                    <!-- Identitas di header HP: logo gambar (jika ada) atau teks -->
+                    <img
+                        v-if="brand.logoMobile"
+                        :src="brand.logoMobile"
+                        :alt="brand.namaDepan + brand.namaBelakang"
+                        class="md:hidden h-9 w-auto object-contain"
+                    />
+                    <span
+                        v-else
+                        class="md:hidden font-bold text-slate-800 truncate"
+                    >
+                        {{ brand.namaDepan
+                        }}<span class="text-green-600">{{
+                            brand.namaBelakang
+                        }}</span>
                     </span>
                     <h2
                         class="text-xl font-extrabold text-slate-800 hidden md:block tracking-tight"
@@ -1562,11 +1666,10 @@ const approvalMenuLabel = computed(() =>
                                     Ubah Password
                                 </Link>
                                 <div class="h-px bg-slate-100 my-1"></div>
-                                <Link
-                                    :href="route('logout')"
-                                    method="post"
-                                    as="button"
-                                    :data="{ fcm_token: fcmTokenSaatIni }"
+                                <!-- Tombol Keluar Aplikasi (button + fungsi logout()) -->
+                                <button
+                                    type="button"
+                                    @click="logout"
                                     class="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors text-left font-medium cursor-pointer"
                                 >
                                     <svg
@@ -1583,7 +1686,7 @@ const approvalMenuLabel = computed(() =>
                                         ></path>
                                     </svg>
                                     Keluar Aplikasi
-                                </Link>
+                                </button>
                             </div>
                         </transition>
                     </div>
@@ -1594,7 +1697,7 @@ const approvalMenuLabel = computed(() =>
             <main
                 class="flex-1 min-w-0 p-4 sm:p-6 md:p-8 overflow-y-auto relative z-10"
             >
-                <!-- TAB REKAP (HP, Admin HR): pindah antara Rekap Kuota & Rekap Laporan -->
+                <!-- TAB REKAP (HP, Admin HR): Rekap Kuota & Rekap Laporan -->
                 <div
                     v-if="showRekapTabs"
                     class="md:hidden mb-4 flex w-full rounded-xl border border-slate-200 bg-white p-1 shadow-sm"
@@ -1624,19 +1727,18 @@ const approvalMenuLabel = computed(() =>
             </main>
 
             <!-- FOOTER BAWAH KACA
-                 pb-20 hanya di HP: memberi ruang agar footer tidak tertutup
-                 Bottom Navigation yang fixed di bawah layar. -->
+                 pb-20 hanya di HP agar tidak tertutup Bottom Navigation. -->
             <footer
                 class="border-t border-slate-200/50 py-4 pb-20 md:pb-4 px-4 text-center text-[11px] font-medium text-slate-500 shrink-0 bg-white/40 backdrop-blur-sm relative z-10"
             >
-                &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro Perencanaan.
+                &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro
+                Perencanaan.
             </footer>
         </div>
 
         <!-- BOTTOM NAVIGATION (khusus HP)
-             Fixed di bawah layar. Isi menu menyesuaikan role (4 menu, atau 5 menu
-             untuk Kepala Biro / role 6). Disembunyikan di md ke atas.
-             z-30 supaya tetap di bawah drawer sidebar (z-50) & backdrop (z-40).
+             Fixed di bawah layar, menu sesuai role (4 atau 5 menu). Disembunyikan di md ke atas.
+             z-30 agar di bawah drawer (z-50) & backdrop (z-40).
              pb safe-area agar tidak tertutup home-indicator iPhone. -->
         <nav
             v-if="user"
@@ -1696,7 +1798,7 @@ const approvalMenuLabel = computed(() =>
     transform: translateY(15px);
 }
 
-/* Kustomisasi Scrollbar Khusus Sidebar */
+/* Scrollbar khusus sidebar */
 .custom-scrollbar::-webkit-scrollbar {
     width: 4px;
 }

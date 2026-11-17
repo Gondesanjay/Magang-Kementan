@@ -98,6 +98,7 @@
 
 <body>
 
+
     {{--
         Helper path tanda tangan (dipakai blok L3 dan L4).
         Mengembalikan path file lokal untuk DomPDF, atau null kalau tidak ada.
@@ -121,6 +122,10 @@
 
     $ttdKasubag = $cariTandaTangan($kasubag ?? null, 'kasubag.png');
     $ttdKabiro = $cariTandaTangan($kabiro ?? null, 'kabiro.png');
+
+    // Anak ke-berapa: hanya relevan untuk Cuti Melahirkan.
+    $tampilAnakKe = stripos($pengajuan->jenis_cuti ?? '', 'melahirkan') !== false
+    && !empty($pengajuan->anak_ke);
     @endphp
 
 
@@ -157,6 +162,13 @@
                 <td>:</td>
                 <td>{{ $pengajuan->jenis_cuti ?? 'Cuti Tahunan' }}</td>
             </tr>
+            @if($tampilAnakKe)
+            <tr>
+                <td>Anak ke-</td>
+                <td>:</td>
+                <td>{{ $pengajuan->anak_ke }}</td>
+            </tr>
+            @endif
             <tr>
                 <td>Jumlah Hari</td>
                 <td>:</td>
@@ -194,9 +206,11 @@
         </div>
     </div>
 
+
     <p style="margin-top: 30px; font-size: 10pt; font-style: italic;">
         Cuti ini disetujui otomatis oleh sistem karena pemohon adalah Kepala Biro Perencanaan selaku pejabat yang berwenang memberikan cuti.
     </p>
+
 
     @elseif(!empty($pemohonKasubag))
     {{-- Pemohon = Kasubag TU (L3): rantai approval hanya L4, jadi hanya blok Kepala Biro --}}
@@ -211,6 +225,7 @@
                 Pejabat Yang Berwenang Memberikan Cuti<br>
                 Kepala Biro Perencanaan
 
+
                 <div style="height: 70px; margin: 10px 0;">
                     @if($ttdKabiro)
                     <img src="{{ $ttdKabiro }}" style="height: 70px;">
@@ -218,6 +233,7 @@
                     <span style="font-size: 10pt; color: #555; font-style: italic;">(Tanda Tangan)</span>
                     @endif
                 </div>
+
 
                 <div class="signature-name" style="margin-top: 10px;">
                     {{ $kabiro ? $kabiro->nama : '(Kepala Biro belum ditentukan)' }}
@@ -229,6 +245,7 @@
         </tr>
     </table>
 
+
     @else
     <table class="signature-table">
         <tr>
@@ -238,6 +255,7 @@
                 Atasan Langsung,<br>
                 Kepala Subbagian Tata Usaha
 
+
                 <div style="height: 70px; margin: 10px 0;">
                     @if($ttdKasubag)
                     <img src="{{ $ttdKasubag }}" style="height: 70px;">
@@ -246,6 +264,7 @@
                     @endif
                 </div>
 
+
                 <div class="signature-name" style="margin-top: 10px;">
                     {{ $kasubag ? $kasubag->nama : '(Kasubag TU belum ditentukan)' }}
                 </div>
@@ -253,6 +272,7 @@
                 NIP. {{ $kasubag->nip }}
                 @endif
             </td>
+
 
             <!-- Kolom Kanan: Pejabat Berwenang (L4 - Kepala Biro Perencanaan) -->
             <td>
@@ -263,6 +283,7 @@
                 Pejabat Yang Berwenang Memberikan Cuti<br>
                 Kepala Biro Perencanaan
 
+
                 <div style="height: 70px; margin: 10px 0;">
                     @if($ttdKabiro)
                     <img src="{{ $ttdKabiro }}" style="height: 70px;">
@@ -270,6 +291,7 @@
                     <span style="font-size: 10pt; color: #555; font-style: italic;">(Tanda Tangan)</span>
                     @endif
                 </div>
+
 
                 <div class="signature-name" style="margin-top: 10px;">
                     {{ $kabiro ? $kabiro->nama : '(Kepala Biro belum ditentukan)' }}

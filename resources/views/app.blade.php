@@ -23,14 +23,14 @@
     <link rel="apple-touch-icon" href="/images/apple-touch-icon.png?v=2">
 
 
-    <!-- BARU: aplikasi web (PWA). Dibutuhkan agar AgriLeave bisa dipasang di Layar Utama
+    <!-- BARU: aplikasi web (PWA). Dibutuhkan agar SICA bisa dipasang di Layar Utama
          iPhone dan menerima push notification (iOS hanya mengirim push ke aplikasi
          yang dipasang di Layar Utama). File manifest: public/manifest.json -->
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#16a34a">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="AgriLeave">
+    <meta name="apple-mobile-web-app-title" content="SICA">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
 
 

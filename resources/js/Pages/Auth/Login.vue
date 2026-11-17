@@ -2,7 +2,6 @@
 import { Head, Link, useForm } from "@inertiajs/vue3";
 import { ref } from "vue";
 
-
 defineProps({
     canResetPassword: {
         type: Boolean,
@@ -12,21 +11,16 @@ defineProps({
     },
 });
 
-
 const form = useForm({
     nip: "",
     password: "",
     remember: false,
 });
 
-
 const showPassword = ref(false);
-
-
 const togglePassword = () => {
     showPassword.value = !showPassword.value;
 };
-
 
 const submit = () => {
     form.post(route("login"), {
@@ -34,35 +28,24 @@ const submit = () => {
     });
 };
 
-
-// State untuk menampilkan Modal Panduan Informasi
 const showInfoModal = ref(false);
-
-
-// State untuk Modal Lupa Password
 const showModalLupaPassword = ref(false);
 
-
-// Fungsi untuk memunculkan modal saat tulisan Lupa Password diklik
 const handleForgotPassword = () => {
     showModalLupaPassword.value = true;
 };
 </script>
 
-
 <template>
     <Head title="Masuk" />
-
-
     <div class="min-h-screen flex relative font-sans bg-white overflow-hidden">
-        <!-- FLOATING HEADER UTAMA -->
+        <!-- FLOATING HEADER -->
         <div
             class="absolute top-4 left-0 right-0 z-50 flex justify-center px-4 md:px-8"
         >
             <div
                 class="bg-white rounded-2xl lg:rounded-full shadow-md px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 w-full max-w-6xl border border-slate-100"
             >
-                <!-- Kiri: Logo & Teks Kementan -->
                 <div class="flex items-center gap-2.5 sm:gap-3 min-w-0">
                     <img
                         src="/images/logo-kementan.png"
@@ -75,47 +58,35 @@ const handleForgotPassword = () => {
                         >
                             KEMENTERIAN PERTANIAN
                         </h1>
-
-                        <!-- Desktop/tablet: tampil seperti semula -->
                         <p
                             class="hidden sm:block text-[9px] md:text-[11px] text-slate-500 leading-tight"
                         >
-                            Ministry of Indonesia
+                            Ministry of Agriculture, Republic of Indonesia
                         </p>
-
-                        <!-- HP: teks portal ditaruh di bawah nama kementerian -->
                         <p
                             class="sm:hidden text-[9px] text-slate-600 leading-tight"
                         >
-                            <span class="font-bold text-slate-800"
-                                >AgriLeave</span
-                            >
-                            - Portal Cuti Digital Terintegrasi
+                            <span class="font-bold text-slate-800">SICA</span>
+                            - Sistem Informasi Cuti ASN
                         </p>
                     </div>
                 </div>
-
-
-                <!-- Tengah: Garis Pemisah & Teks Portal (tablet landscape & desktop) -->
                 <div class="hidden lg:flex items-center gap-4 pl-4">
                     <div class="h-8 w-[1.5px] bg-slate-200"></div>
                     <div
                         class="text-slate-800 font-bold text-[15px] tracking-wide pt-0.5"
                     >
-                        AgriLeave
+                        SICA
                         <span class="text-slate-500 font-normal ml-1"
-                            >- Portal Cuti Digital Terintegrasi</span
+                            >- Sistem Informasi Cuti ASN</span
                         >
                     </div>
                 </div>
-
-
-                <!-- Kanan: Tombol Informasi -->
                 <div class="ml-auto shrink-0">
                     <button
                         type="button"
                         @click="showInfoModal = true"
-                        class="bg-[#8c439e] hover:bg-[#7a398a] text-white text-[10px] md:text-xs font-bold px-3 md:px-5 py-2 md:py-2.5 rounded-lg transition-colors shadow-sm tracking-wide"
+                        class="bg-emerald-700 hover:bg-emerald-800 text-white text-[10px] md:text-xs font-bold px-3 md:px-5 py-2 md:py-2.5 rounded-lg transition-colors shadow-sm tracking-wide"
                     >
                         INFORMASI
                     </button>
@@ -123,8 +94,7 @@ const handleForgotPassword = () => {
             </div>
         </div>
 
-
-        <!-- SISI KIRI: ILUSTRASI SMART FARMING -->
+        <!-- SISI KIRI: ILUSTRASI -->
         <div class="hidden lg:block lg:w-[55%] relative bg-[#133c36]">
             <img
                 src="/images/ilustrasi-farm.png"
@@ -133,29 +103,21 @@ const handleForgotPassword = () => {
             />
         </div>
 
-
         <!-- SISI KANAN: FORMULIR LOGIN -->
         <div
             class="w-full lg:w-[45%] flex flex-col justify-center px-5 sm:px-16 md:px-24 relative z-10 bg-white pt-24 pb-24 sm:pt-28 sm:pb-28 lg:pt-0 lg:pb-0"
         >
             <div class="w-full max-w-[360px] mx-auto">
-                <!-- Logo AgriLeave -->
-                <div class="flex items-center gap-3 mb-8">
+                <div class="mb-8">
                     <img
-                        src="/images/logo-agrileave-solo.png"
-                        alt="Logo AgriLeave"
-                        class="h-10 w-auto"
+                        src="/images/logo-sica.png"
+                        alt="SICA - Sistem Informasi Cuti ASN"
+                        class="h-16 w-auto"
                     />
-                    <span
-                        class="text-[26px] font-medium text-[#2d4c42] tracking-tight pt-1"
-                        >AgriLeave</span
-                    >
                 </div>
 
-
-                <!-- Judul & Subjudul -->
                 <div class="mb-8">
-                    <h2 class="text-[28px] font-bold text-[#357a55] mb-2">
+                    <h2 class="text-[28px] font-bold text-emerald-700 mb-2">
                         Selamat Datang
                     </h2>
                     <p class="text-slate-600 text-[13px] leading-relaxed">
@@ -163,18 +125,14 @@ const handleForgotPassword = () => {
                     </p>
                 </div>
 
-
-                <!-- Alert Status -->
                 <div
                     v-if="status"
-                    class="mb-4 text-sm font-medium text-green-600 bg-green-50 p-3 rounded-md border border-green-200"
+                    class="mb-4 text-sm font-medium text-emerald-700 bg-emerald-50 p-3 rounded-md border border-emerald-200"
                 >
                     {{ status }}
                 </div>
 
-
                 <form @submit.prevent="submit" class="space-y-5">
-                    <!-- Input NIP -->
                     <div class="space-y-1.5">
                         <label
                             for="nip"
@@ -185,7 +143,7 @@ const handleForgotPassword = () => {
                             id="nip"
                             name="nip"
                             type="text"
-                            class="w-full min-h-[44px] px-4 py-3 bg-[#f4f7fb] border border-transparent rounded-lg text-slate-800 text-base focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                            class="w-full min-h-[44px] px-4 py-3 bg-[#f4f7fb] border border-transparent rounded-lg text-slate-800 text-base focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none"
                             v-model="form.nip"
                             required
                             autofocus
@@ -200,8 +158,6 @@ const handleForgotPassword = () => {
                         </div>
                     </div>
 
-
-                    <!-- Input Password -->
                     <div class="space-y-1.5 relative">
                         <label
                             for="password"
@@ -213,13 +169,12 @@ const handleForgotPassword = () => {
                                 id="password"
                                 name="password"
                                 :type="showPassword ? 'text' : 'password'"
-                                class="w-full min-h-[44px] pl-4 pr-12 py-3 bg-[#f4f7fb] border border-transparent rounded-lg text-slate-800 text-base focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all outline-none"
+                                class="w-full min-h-[44px] pl-4 pr-12 py-3 bg-[#f4f7fb] border border-transparent rounded-lg text-slate-800 text-base focus:bg-white focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all outline-none"
                                 v-model="form.password"
                                 required
                                 autocomplete="current-password"
                                 placeholder="••••••••"
                             />
-                            <!-- Tombol Mata (Toggle Password) -->
                             <button
                                 type="button"
                                 @click="togglePassword"
@@ -238,13 +193,13 @@ const handleForgotPassword = () => {
                                         stroke-linejoin="round"
                                         stroke-width="2"
                                         d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                                    ></path>
+                                    />
                                     <path
                                         stroke-linecap="round"
                                         stroke-linejoin="round"
                                         stroke-width="2"
                                         d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                                    ></path>
+                                    />
                                 </svg>
                                 <svg
                                     v-else
@@ -258,7 +213,7 @@ const handleForgotPassword = () => {
                                         stroke-linejoin="round"
                                         stroke-width="2"
                                         d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.29 3.29m0 0a10.05 10.05 0 015.188-1.528c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"
-                                    ></path>
+                                    />
                                 </svg>
                             </button>
                         </div>
@@ -270,8 +225,6 @@ const handleForgotPassword = () => {
                         </div>
                     </div>
 
-
-                    <!-- Ingat Saya -->
                     <div class="pt-1">
                         <label
                             class="flex items-center gap-2.5 cursor-pointer w-max group"
@@ -281,7 +234,7 @@ const handleForgotPassword = () => {
                                 name="remember"
                                 type="checkbox"
                                 v-model="form.remember"
-                                class="w-[18px] h-[18px] rounded border-slate-300 text-blue-600 bg-slate-50 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer transition-colors"
+                                class="w-[18px] h-[18px] rounded border-slate-300 text-emerald-600 bg-slate-50 focus:ring-emerald-500 focus:ring-offset-0 cursor-pointer transition-colors"
                             />
                             <span
                                 class="text-[13px] text-slate-600 font-medium group-hover:text-slate-900 transition-colors"
@@ -290,16 +243,11 @@ const handleForgotPassword = () => {
                         </label>
                     </div>
 
-
-                    <!-- Tombol Masuk -->
                     <div class="pt-3">
                         <button
                             type="submit"
-                            class="w-full min-h-[44px] py-3 bg-[#1c75f2] hover:bg-[#1560c9] text-white font-bold text-[13px] tracking-wide rounded-lg shadow-md transition-all flex justify-center items-center active:scale-[0.98]"
-                            :class="{
-                                'opacity-70 cursor-not-allowed':
-                                    form.processing,
-                            }"
+                            class="w-full min-h-[44px] py-3 text-white font-bold text-[13px] tracking-wide rounded-lg shadow-md shadow-emerald-600/20 transition-all flex justify-center items-center active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
+                            style="background: linear-gradient(135deg, #047857, #059669)"
                             :disabled="form.processing"
                         >
                             <span
@@ -332,14 +280,12 @@ const handleForgotPassword = () => {
                         </button>
                     </div>
 
-
-                    <!-- Lupa Password (Modifikasi sesuai request) -->
                     <div class="text-center pt-2">
                         <button
                             v-if="canResetPassword"
                             type="button"
                             @click.prevent="handleForgotPassword"
-                            class="text-[13px] font-bold text-slate-700 hover:text-[#1c75f2] transition-colors hover:underline bg-transparent border-none cursor-pointer p-0"
+                            class="text-[13px] font-bold text-slate-700 hover:text-emerald-700 transition-colors hover:underline bg-transparent border-none cursor-pointer p-0"
                         >
                             Lupa password?
                         </button>
@@ -348,21 +294,19 @@ const handleForgotPassword = () => {
             </div>
         </div>
 
-
-        <!-- FOOTER BAWAH (Diubah menjadi warna hitam) -->
         <div
             class="absolute bottom-0 left-0 right-0 py-4 flex justify-center items-center px-6 z-50 bg-white/70 backdrop-blur-sm lg:bg-white/40"
         >
             <div
                 class="text-center text-[11px] text-black font-semibold drop-shadow-sm"
             >
-                &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro Perencanaan.
+                &copy; 2026 Kementerian Pertanian Republik Indonesia - Biro
+                Perencanaan.
             </div>
         </div>
     </div>
 
-
-    <!-- POP-UP MODAL INFORMASI PANDUAN PENGGUNAAN -->
+    <!-- MODAL INFORMASI -->
     <Teleport to="body">
         <div
             v-if="showInfoModal"
@@ -370,13 +314,12 @@ const handleForgotPassword = () => {
             @click.self="showInfoModal = false"
         >
             <div
-                class="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden transform animate-in zoom-in duration-200 flex flex-col max-h-[90vh]"
+                class="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]"
             >
-                <!-- Modal Header -->
                 <div
-                    class="p-5 border-b border-slate-100 flex items-start gap-4 shrink-0 bg-slate-50/50"
+                    class="p-5 border-b border-slate-100 flex items-start gap-4 shrink-0 bg-emerald-50/50"
                 >
-                    <div class="bg-purple-100 text-[#8c439e] p-3 rounded-xl">
+                    <div class="bg-emerald-100 text-emerald-700 p-3 rounded-xl">
                         <svg
                             class="w-6 h-6"
                             fill="none"
@@ -388,14 +331,14 @@ const handleForgotPassword = () => {
                                 stroke-linejoin="round"
                                 stroke-width="2"
                                 d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                            ></path>
+                            />
                         </svg>
                     </div>
                     <div class="flex-1 pt-1">
                         <h3
                             class="text-lg font-bold text-slate-800 leading-tight"
                         >
-                            Panduan Penggunaan AgriLeave
+                            Panduan Penggunaan SICA
                         </h3>
                         <p class="text-xs font-semibold text-slate-500 mt-1">
                             Pusat Informasi & Bantuan Portal Cuti Digital
@@ -418,13 +361,10 @@ const handleForgotPassword = () => {
                                 stroke-linejoin="round"
                                 stroke-width="2"
                                 d="M6 18L18 6M6 6l12 12"
-                            ></path>
+                            />
                         </svg>
                     </button>
                 </div>
-
-
-                <!-- Modal Body -->
                 <div
                     class="p-6 overflow-y-auto flex-1 space-y-6 text-sm text-slate-600"
                 >
@@ -433,7 +373,7 @@ const handleForgotPassword = () => {
                             class="font-bold text-slate-800 text-[15px] mb-2 flex items-center gap-2"
                         >
                             <span
-                                class="bg-[#8c439e] text-white w-5 h-5 rounded-full flex items-center justify-center text-xs"
+                                class="bg-emerald-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs"
                                 >1</span
                             >
                             Cara Masuk (Login)
@@ -444,49 +384,45 @@ const handleForgotPassword = () => {
                                 terdaftar pada sistem kepegawaian.
                             </li>
                             <li>
-                                Masukkan kata sandi (password). Jika Anda baru
-                                pertama kali login, gunakan password bawaan
-                                (default) yang diberikan oleh Admin SDM.
+                                Masukkan kata sandi. Jika baru pertama kali
+                                login, gunakan password bawaan dari Admin SDM.
                             </li>
-                            <li>Klik tombol biru <strong>MASUK</strong>.</li>
+                            <li>
+                                Klik tombol hijau
+                                <strong>MASUK</strong>.
+                            </li>
                         </ul>
                     </div>
-
-
                     <div>
                         <h4
                             class="font-bold text-slate-800 text-[15px] mb-2 flex items-center gap-2"
                         >
                             <span
-                                class="bg-[#8c439e] text-white w-5 h-5 rounded-full flex items-center justify-center text-xs"
+                                class="bg-emerald-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-xs"
                                 >2</span
                             >
                             Lupa Kata Sandi
                         </h4>
                         <ul class="list-disc pl-9 space-y-1.5">
                             <li>
-                                Karena alasan keamanan, pemulihan kata sandi
-                                tidak dapat dilakukan secara mandiri.
+                                Pemulihan kata sandi tidak dapat dilakukan
+                                secara mandiri.
                             </li>
                             <li>
-                                Silakan hubungi Admin Kepegawaian atau atasan
-                                langsung Anda untuk mengajukan permintaan reset
-                                kata sandi.
+                                Hubungi Admin Kepegawaian atau atasan langsung
+                                untuk reset kata sandi.
                             </li>
                             <li>
-                                Gunakan kata sandi sementara yang diberikan
-                                Admin untuk login, lalu segera perbarui kata
-                                sandi Anda di menu Pengaturan Akun.
+                                Setelah login dengan kata sandi sementara,
+                                segera perbarui di menu Pengaturan Akun.
                             </li>
                         </ul>
                     </div>
-
-
                     <div
-                        class="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3"
+                        class="bg-emerald-50 border border-emerald-100 rounded-xl p-4 flex gap-3"
                     >
                         <svg
-                            class="w-5 h-5 text-blue-600 shrink-0"
+                            class="w-5 h-5 text-emerald-600 shrink-0"
                             fill="none"
                             stroke="currentColor"
                             viewBox="0 0 24 24"
@@ -496,32 +432,30 @@ const handleForgotPassword = () => {
                                 stroke-linejoin="round"
                                 stroke-width="2"
                                 d="M18.364 5.636l-3.536 3.536m0 5.656l3.536 3.536M9.172 9.172L5.636 5.636m3.536 9.192l-3.536 3.536M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5 0a4 4 0 11-8 0 4 4 0 018 0z"
-                            ></path>
+                            />
                         </svg>
                         <div>
-                            <strong class="text-blue-800 block mb-1"
+                            <strong class="text-emerald-800 block mb-1"
                                 >Kendala Teknis?</strong
                             >
-                            <span class="text-blue-700 text-xs leading-relaxed">
-                                Jika Anda masih tidak dapat mengakses portal
-                                setelah mencoba langkah di atas, silakan hubungi
-                                Biro Organisasi dan Kepegawaian (Subkoordinator
-                                Disiplin dan Penghargaan) melalui Helpdesk
-                                Internal atau ext: 1234.
+                            <span
+                                class="text-emerald-700 text-xs leading-relaxed"
+                            >
+                                Hubungi Biro Organisasi dan Kepegawaian
+                                (Subkoordinator Disiplin dan Penghargaan)
+                                melalui Helpdesk Internal.
                             </span>
                         </div>
                     </div>
                 </div>
-
-
-                <!-- Modal Footer -->
                 <div
                     class="p-4 border-t border-slate-100 bg-slate-50 flex justify-end shrink-0"
                 >
                     <button
                         type="button"
                         @click="showInfoModal = false"
-                        class="px-6 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-[13px] font-bold tracking-wide transition shadow-sm"
+                        class="px-6 py-2.5 text-white rounded-lg text-[13px] font-bold tracking-wide transition shadow-sm"
+                        style="background: linear-gradient(135deg, #047857, #059669)"
                     >
                         Mengerti, Tutup
                     </button>
@@ -530,24 +464,22 @@ const handleForgotPassword = () => {
         </div>
     </Teleport>
 
-
-    <!-- Custom Modal Lupa Password / Bantuan Kepegawaian -->
+    <!-- MODAL LUPA PASSWORD -->
     <Teleport to="body">
         <div
             v-if="showModalLupaPassword"
-            class="fixed inset-0 z-[9999] flex items-end justify-center overflow-y-auto overflow-x-hidden bg-slate-900/60 backdrop-blur-sm p-0 transition-all duration-300 sm:items-center sm:p-4"
+            class="fixed inset-0 z-[9999] flex items-end justify-center overflow-y-auto overflow-x-hidden bg-slate-900/60 backdrop-blur-sm p-0 sm:items-center sm:p-4"
             @click.self="showModalLupaPassword = false"
         >
             <div class="relative w-full max-w-md">
                 <div
                     class="relative w-full max-h-[90dvh] overflow-y-auto rounded-t-2xl bg-white p-5 text-center shadow-2xl border border-slate-100 sm:rounded-2xl sm:p-6"
                 >
-                    <!-- Ikon Informasi / Bantuan (Warna Biru) -->
                     <div
-                        class="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-blue-50 mb-5"
+                        class="mx-auto flex items-center justify-center h-14 w-14 rounded-full bg-emerald-50 mb-5"
                     >
                         <svg
-                            class="h-7 w-7 text-blue-600"
+                            class="h-7 w-7 text-emerald-600"
                             fill="none"
                             viewBox="0 0 24 24"
                             stroke-width="2"
@@ -560,21 +492,13 @@ const handleForgotPassword = () => {
                             />
                         </svg>
                     </div>
-
-
-                    <!-- Teks & Judul -->
                     <h3 class="mb-2 text-lg font-bold text-slate-800">
                         Bantuan Kata Sandi
                     </h3>
-
-
                     <p class="mb-4 text-sm text-slate-500 leading-relaxed">
                         Silakan hubungi bagian Kepegawaian atau Admin SDM untuk
                         mengatur ulang kata sandi akun Anda.
                     </p>
-
-
-                    <!-- Highlight Box Kontak/Info Tambahan -->
                     <div
                         class="mb-6 p-3.5 bg-slate-50 border border-slate-100 rounded-xl"
                     >
@@ -585,14 +509,12 @@ const handleForgotPassword = () => {
                             >
                         </p>
                     </div>
-
-
-                    <!-- Tombol Aksi (Tutup) -->
                     <div>
                         <button
                             @click="showModalLupaPassword = false"
                             type="button"
-                            class="w-full px-4 py-2.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-sm hover:shadow-md transition-all"
+                            class="w-full px-4 py-2.5 text-sm font-semibold text-white rounded-xl shadow-sm hover:shadow-md transition-all"
+                            style="background: linear-gradient(135deg, #047857, #059669)"
                         >
                             Mengerti / Tutup
                         </button>

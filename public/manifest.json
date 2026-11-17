@@ -1,6 +1,6 @@
 {
-    "name": "AgriLeave - Portal Cuti Biro Perencanaan",
-    "short_name": "AgriLeave",
+    "name": "SICA - Sistem Informasi Cuti ASN",
+    "short_name": "SICA",
     "description": "Portal cuti digital terintegrasi Biro Perencanaan, Kementerian Pertanian",
     "start_url": "/dashboard",
     "scope": "/",
