@@ -425,6 +425,8 @@ const draft = reactive({
     hak: 0,
 });
 const snapshotDraft = ref("");
+// true = admin mengetik sendiri kotak Sisa tahun lalu (tidak ikut Tgh).
+const sisaN1Manual = ref(false);
 const isDirty = computed(() => JSON.stringify(draft) !== snapshotDraft.value);
 
 // Ubah isian (bisa '' saat dikosongkan) jadi angka bulat >= 0.
@@ -458,10 +460,13 @@ const previewEdit = computed(() => {
     if (!p) return null;
 
     const hak = angka(draft.hak);
-    const n1 = angka(draft.sisa_n1);
+    const tghN1 = angka(draft.tgh_n1);
     const n2 = angka(draft.sisa_n2);
     // Tgh tahun ini sudah termasuk di Terpakai (tampil).
     const tghTahunIni = angka(draft.tgh_n0);
+
+    // draft.sisa_n1 sudah ikut Tgh tahun lalu lewat watch di atas.
+    const n1 = angka(draft.sisa_n1);
 
     const normal = n2 === 12 && n1 === 12 ? 12 : Math.min(6, n1);
     // [DIUBAH] Batas 24 dinonaktifkan: Bawaan tidak bergantung pada Hak
@@ -471,9 +476,10 @@ const previewEdit = computed(() => {
     const terpakai = (Number(p.cuti_terpakai) || 0) + tghTahunIni;
     // Tgh N-1 menambah Total Tersedia (sama dengan backend). Tgh N-2 hanya
     // catatan, jadi tidak masuk.
-    const total = hak + bawaan + angka(draft.tgh_n1);
+    const total = hak + bawaan + tghN1;
 
     return {
+        sisaN1: n1,
         bawaan,
         total,
         terpakai,
@@ -487,7 +493,9 @@ const previewEdit = computed(() => {
 const nilaiSisaN2 = (p) =>
     isEditing(p) ? angka(draft.sisa_n2) : getSisaDuaTahunLalu(p);
 const nilaiSisaN1 = (p) =>
-    isEditing(p) ? angka(draft.sisa_n1) : getSisaTahunLalu(p);
+    isEditing(p) && previewEdit.value
+        ? previewEdit.value.sisaN1
+        : getSisaTahunLalu(p);
 const nilaiHak = (p) => (isEditing(p) ? angka(draft.hak) : getSisaTahunIni(p));
 const nilaiTghN2 = (p) =>
     isEditing(p) ? angka(draft.tgh_n2) : getSisaDitangguhkanN2(p);
@@ -662,7 +670,7 @@ const OPERATOR_SUMBER = {
 //
 // PETA DAMPAK (harus selaras dengan rumus di atas dan previewEdit):
 //   Sisa N-2 / Sisa N-1 -> Bawaan -> Total -> Saldo Akhir
-//   Tgh N-1             -> Total -> Saldo Akhir
+//   Tgh N-1             -> Total -> Saldo Akhir (+ Sisa N-1 & Bawaan bila dompet tahun lalu asli)
 //   Hak                 -> Sisa N, Total -> Saldo Akhir
 //   Tgh N               -> Terpakai -> Sisa N, Saldo Akhir
 //   Tgh N-2             -> (hanya catatan, tidak memengaruhi kolom lain)
@@ -677,6 +685,16 @@ const DAMPAK_EDIT = {
     hak: ["sisa_n0", "total", "saldo"],
 };
 
+// Peta dampak bisa bergantung pada pegawai: mengubah Tgh tahun lalu juga
+// mengubah Sisa tahun lalu (dan Bawaan) bila dompet tahun lalu asli.
+const dampakEdit = (p, field) => {
+    const dasar = DAMPAK_EDIT[field] ?? [];
+    if (field === "tgh_n1" && p?.dompet_tahun_lalu_asli) {
+        return ["sisa_n1", "bawaan", ...dasar];
+    }
+    return dasar;
+};
+
 // Cincin oranye untuk kolom yang terdampak (literal supaya terbaca Tailwind).
 const KELAS_DAMPAK = "ring-2 ring-offset-1 ring-orange-400";
 
@@ -687,7 +705,7 @@ const fokusEdit = ref(null);
 const statusDampak = (p, key) => {
     if (!isEditing(p) || !fokusEdit.value) return null;
     if (key === fokusEdit.value) return "fokus";
-    return DAMPAK_EDIT[fokusEdit.value]?.includes(key) ? "dampak" : "redup";
+    return dampakEdit(p, fokusEdit.value).includes(key) ? "dampak" : "redup";
 };
 
 // Lacak kotak input yang sedang difokus (tabel & kartu HP memakai atribut
@@ -772,7 +790,8 @@ const kelasHeader = (key) => {
     const sedangEdit = editingId.value !== null && Boolean(f);
     if (sedangEdit) {
         if (key === f) return "bg-emerald-100";
-        if (DAMPAK_EDIT[f]?.includes(key)) return "bg-orange-100";
+        if (dampakEdit(pegawaiEdit.value, f).includes(key))
+            return "bg-orange-100";
     }
 
     if (a || sedangEdit) return "bg-slate-50 text-slate-300";
@@ -855,6 +874,7 @@ const tutupRumusSaatKlikLuar = (e) => {
 // (isDirty = false sampai admin benar-benar mengubah isian).
 const isiDraftDariPegawai = (p) => {
     saldoForm.clearErrors();
+    sisaN1Manual.value = false;
     Object.assign(draft, {
         sisa_n2: getSisaDuaTahunLalu(p),
         tgh_n2: getSisaDitangguhkanN2(p),
@@ -868,8 +888,23 @@ const isiDraftDariPegawai = (p) => {
 
 // Ubah satu isian draft.
 const ubahDraft = (field, nilai) => {
+    if (field === "sisa_n1") sisaN1Manual.value = true;
     draft[field] = nilai;
 };
+
+// [OTOMATIS] Ubah Tgh tahun lalu -> Sisa tahun lalu langsung ikut berubah di
+// kotaknya (tanpa Enter), selama dompet tahun lalu asli dan Sisa tahun lalu
+// tidak diketik manual. Sama dengan logika backend updateSaldo.
+watch(
+    () => draft.tgh_n1,
+    () => {
+        if (editingId.value === null || sisaN1Manual.value) return;
+        const p = pegawaiEdit.value;
+        if (!p || !p.dompet_tahun_lalu_asli) return;
+        const selisih = angka(draft.tgh_n1) - getSisaDitangguhkanN1(p);
+        draft.sisa_n1 = Math.max(0, getSisaTahunLalu(p) - selisih);
+    },
+);
 
 // Fokus ke kotak yang sedang terlihat (tabel & kartu sama-sama ada di DOM,
 // salah satunya disembunyikan CSS, jadi pilih yang offsetParent-nya ada).
@@ -922,7 +957,11 @@ const simpanSaldo = (pegawai) => {
     saldoForm
         .transform(() => ({
             hak_tahun_ini: angka(draft.hak),
-            carry_forward_normal: angka(draft.sisa_n1),
+            // Bila tidak diketik manual, kirim nilai tersimpan supaya backend
+            // yang menghitung otomatis (log "Otomatis" tetap jalan).
+            carry_forward_normal: sisaN1Manual.value
+                ? angka(draft.sisa_n1)
+                : getSisaTahunLalu(pegawai),
             sisa_cuti_dua_tahun_lalu: angka(draft.sisa_n2),
             sisa_ditangguhkan_dua_tahun_lalu: angka(draft.tgh_n2),
             sisa_ditangguhkan_tahun_lalu: angka(draft.tgh_n1),
@@ -3112,9 +3151,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                                 @update:model-value="
                                                     ubahDraft('sisa_n1', $event)
                                                 "
-                                                :nilai="
-                                                    getSisaTahunLalu(pegawai)
-                                                "
+                                                :nilai="nilaiSisaN1(pegawai)"
                                                 :editing="isEditing(pegawai)"
                                                 :label="`Sisa ${tahunAktif - 1}`"
                                                 :max="12"
@@ -3691,6 +3728,11 @@ watch(adaModalTerbuka, (terbuka) => {
                     disorot. Sisa {{ tahunAktif }}, Bawaan, Total, Terpakai, dan
                     Saldo Akhir dihitung otomatis. Tekan Enter untuk menyimpan
                     atau Esc untuk membatalkan.
+                    <template v-if="pegawaiEdit?.dompet_tahun_lalu_asli">
+                        Mengubah Tgh '{{ (tahunAktif - 1).toString().slice(-2) }} juga
+                        menghitung ulang Sisa {{ tahunAktif - 1 }} secara otomatis, kecuali
+                        Sisa {{ tahunAktif - 1 }} ikut kamu ketik.
+                    </template>
                 </p>
 
                 <!-- Catatan kaki: hanya tampil kalau ada minimal 1 baris yang
@@ -4761,7 +4803,10 @@ watch(adaModalTerbuka, (terbuka) => {
                                 Gunakan template Rekap Cuti, sheet "Saldo
                                 Tahunan". Yang diperbarui hanya angka Sisa
                                 {{ tahunAktif - 2 }}, Sisa {{ tahunAktif - 1 }},
-                                dan Hak {{ tahunAktif }}. Kolom hasil hitungan
+                                Hak {{ tahunAktif }}, dan Sisa Ditangguhkan
+                                {{ tahunAktif - 2 }} sampai {{ tahunAktif }}
+                                (angka di file menimpa total yang tersimpan;
+                                isi 0 untuk menghapus). Kolom hasil hitungan
                                 diabaikan dan dihitung ulang oleh sistem. Sel
                                 kosong tidak mengubah data.
                             </p>
@@ -4857,8 +4902,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                     cuti disetujui, dibatalkan, atau
                                     ditangguhkan. Bawaan dari sisa saldo biasa
                                     maks. 6 hari (12 hari jika sisa N-2 dan N-1
-                                    sama-sama 12). Catatan penangguhan hanya
-                                    untuk pelaporan, bukan carry-over.
+                                    sama-sama 12). Sisa tahun lalu dihitung
+                                    sebagai Hak − Terpakai − Tgh tahun itu.
                                 </p>
 
                                 <label

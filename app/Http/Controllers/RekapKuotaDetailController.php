@@ -47,6 +47,19 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 //                      tampil di kedua tahunnya).
 // ================= END PERUBAHAN =================
 
+// ================= PERUBAHAN (SINKRON Tgh TAHUN LALU -> SISA TAHUN LALU) =================
+//   - hitungKuota()  : field baru 'dompet_tahun_lalu_asli' (true bila dompet
+//                      tahun lalu ASLI, kuota_tahunan > 0). Dipakai Vue untuk
+//                      tahu apakah mengubah Tgh tahun lalu ikut menghitung ulang
+//                      Sisa tahun lalu.
+//   - updateSaldo()  : bila hanya Tgh tahun lalu yang berubah (Sisa tahun lalu
+//                      tidak diketik), Sisa tahun lalu dihitung ulang lewat
+//                      SaldoCuti::sinkronkanBawaan() dan dicatat di log dengan
+//                      alasan "Otomatis". Seluruh penulisan data dibungkus
+//                      DB::transaction supaya tidak tersimpan setengah-setengah;
+//                      notifikasi dikirim SETELAH transaksi berhasil.
+// ================= END PERUBAHAN =================
+
 class RekapKuotaDetailController extends Controller
 {
     // Alasan perubahan WAJIB diisi kalau ada angka yang berubah.
@@ -709,6 +722,13 @@ class RekapKuotaDetailController extends Controller
      * 'koreksi_saldo' kalau masih dikirim frontend lama DIABAIKAN, dan kolom
      * koreksi_* tidak disentuh.
      *
+     * [SINKRON Tgh TAHUN LALU] Bila hanya Tgh tahun lalu yang berubah (Sisa
+     * tahun lalu tidak diketik), Sisa tahun lalu ikut dihitung ulang.
+     *
+     * [TRANSAKSI] Semua penulisan data dibungkus DB::transaction. Notifikasi
+     * dikirim SETELAH transaksi berhasil, jadi pegawai tidak menerima
+     * notifikasi untuk perubahan yang akhirnya dibatalkan.
+     *
      * Setelah tersimpan, pegawai yang bersangkutan otomatis menerima
      * notifikasi berisi ringkasan perubahan (hanya jika ada yang berubah).
      */
@@ -809,59 +829,107 @@ class RekapKuotaDetailController extends Controller
             ]);
         }
 
-        // koreksi_saldo & kolom koreksi_* SENGAJA tidak ada di daftar ini.
-        SaldoCuti::updateOrCreate(
-            ['pegawai_id' => $pegawai->id, 'tahun' => $tahunIni],
-            [
-                'kuota_tahunan' => $data['hak_tahun_ini'],
-                'carry_forward_normal' => $data['carry_forward_normal'],
-                'sisa' => max(0, $data['hak_tahun_ini'] - $cutiTerpakai),
-            ]
-        );
-
-        // [FIX] Baris tahun lalu yang BELUM ada dibuat sebagai baris bayangan
-        // (kuota_tahunan = 0), bukan 12. Kalau 12, baris itu dianggap "dompet
-        // asli" oleh dompetTahunAsli() dan tahun tersebut mendadak muncul di Rekap.
-        SaldoCuti::updateOrCreate(
-            ['pegawai_id' => $pegawai->id, 'tahun' => $tahunLalu],
-            [
-                'kuota_tahunan' => $saldoTahunLalu->kuota_tahunan ?? 0,
-                'carry_forward_normal' => $data['sisa_cuti_dua_tahun_lalu'],
-                'sisa' => $saldoTahunLalu->sisa ?? 0,
-            ]
-        );
-
-        // Tgh: hanya field yang benar-benar dikirim yang diproses.
-        // Nilai 0 SAH (artinya "tidak ada hari ditangguhkan").
-        foreach (
-            [
-                'sisa_ditangguhkan_dua_tahun_lalu' => $tahunIni - 2,
-                'sisa_ditangguhkan_tahun_lalu'     => $tahunIni - 1,
-                'sisa_ditangguhkan_tahun_ini'      => $tahunIni,
-            ] as $field => $tahunAsal
+        // [TRANSAKSI] Semua penulisan data di bawah ini berhasil bersama-sama
+        // atau dibatalkan bersama-sama. $baru dipakai by-reference karena
+        // sinkronisasi Tgh tahun lalu bisa memperbarui angka Sisa tahun lalu.
+        DB::transaction(function () use (
+            $request,
+            $data,
+            $pegawai,
+            $tahunIni,
+            $tahunLalu,
+            $saldoTahunLalu,
+            $cutiTerpakai,
+            $daftarPerubahan,
+            $alasan,
+            $lama,
+            &$baru
         ) {
-            if ($request->has($field) && $request->input($field) !== null && $request->input($field) !== '') {
-                $this->setTotalDitangguhkan((int) $pegawai->id, $tahunAsal, (int) $request->input($field));
+            // koreksi_saldo & kolom koreksi_* SENGAJA tidak ada di daftar ini.
+            SaldoCuti::updateOrCreate(
+                ['pegawai_id' => $pegawai->id, 'tahun' => $tahunIni],
+                [
+                    'kuota_tahunan' => $data['hak_tahun_ini'],
+                    'carry_forward_normal' => $data['carry_forward_normal'],
+                    'sisa' => max(0, $data['hak_tahun_ini'] - $cutiTerpakai),
+                ]
+            );
+
+            // [FIX] Baris tahun lalu yang BELUM ada dibuat sebagai baris bayangan
+            // (kuota_tahunan = 0), bukan 12. Kalau 12, baris itu dianggap "dompet
+            // asli" oleh dompetTahunAsli() dan tahun tersebut mendadak muncul di Rekap.
+            SaldoCuti::updateOrCreate(
+                ['pegawai_id' => $pegawai->id, 'tahun' => $tahunLalu],
+                [
+                    'kuota_tahunan' => $saldoTahunLalu->kuota_tahunan ?? 0,
+                    'carry_forward_normal' => $data['sisa_cuti_dua_tahun_lalu'],
+                    'sisa' => $saldoTahunLalu->sisa ?? 0,
+                ]
+            );
+
+            // Tgh: hanya field yang benar-benar dikirim yang diproses.
+            // Nilai 0 SAH (artinya "tidak ada hari ditangguhkan").
+            foreach (
+                [
+                    'sisa_ditangguhkan_dua_tahun_lalu' => $tahunIni - 2,
+                    'sisa_ditangguhkan_tahun_lalu'     => $tahunIni - 1,
+                    'sisa_ditangguhkan_tahun_ini'      => $tahunIni,
+                ] as $field => $tahunAsal
+            ) {
+                if ($request->has($field) && $request->input($field) !== null && $request->input($field) !== '') {
+                    $this->setTotalDitangguhkan((int) $pegawai->id, $tahunAsal, (int) $request->input($field));
+                }
             }
-        }
 
-        // Log perubahan: satu baris per angka yang berubah.
-        foreach ($daftarPerubahan as $perubahan) {
-            LogPerubahanSaldo::create([
-                'pegawai_id' => $pegawai->id,
-                'diubah_oleh' => $request->user()->id,
-                'tahun' => $tahunIni,
-                'kolom' => $perubahan['kolom'],
-                'nilai_lama' => $perubahan['lama'],
-                'nilai_baru' => $perubahan['baru'],
-                'alasan' => $alasan !== '' ? $alasan : null,
-            ]);
-        }
+            // Log perubahan: satu baris per angka yang berubah.
+            foreach ($daftarPerubahan as $perubahan) {
+                LogPerubahanSaldo::create([
+                    'pegawai_id' => $pegawai->id,
+                    'diubah_oleh' => $request->user()->id,
+                    'tahun' => $tahunIni,
+                    'kolom' => $perubahan['kolom'],
+                    'nilai_lama' => $perubahan['lama'],
+                    'nilai_baru' => $perubahan['baru'],
+                    'alasan' => $alasan !== '' ? $alasan : null,
+                ]);
+            }
 
-        // [AUTO-SYNC] Saldo tahun ini berubah -> bawaan tahun depan ikut dihitung ulang.
-        SaldoCuti::sinkronkanBawaan((int) $pegawai->id, $tahunIni);
+            // [SINKRON Tgh TAHUN LALU] Sisa tahun lalu = Hak - Terpakai - Tgh tahun itu.
+            // Bila Admin HR hanya mengubah Tgh tahun lalu (tidak mengetik Sisa tahun lalu
+            // di permintaan yang sama), Sisa tahun lalu ikut dihitung ulang. Kalau Sisa
+            // diketik manual, angka ketikan itu yang menang. Untuk tahun lalu yang hanya
+            // baris bayangan (bawaan dari buku lama), sinkronisasi dilewati oleh penjaga
+            // di SaldoCuti::sinkronkanBawaan(), jadi Sisa-nya tetap angka manual.
+            $tghTahunLaluBerubah = collect($daftarPerubahan)->contains('kolom', 'tgh_n1');
+            $sisaTahunLaluDiketik = (int) $baru['carry'] !== (int) $lama['carry'];
+
+            if ($tghTahunLaluBerubah && !$sisaTahunLaluDiketik) {
+                SaldoCuti::sinkronkanBawaan((int) $pegawai->id, (int) $tahunLalu);
+
+                $carrySegar = (int) (SaldoCuti::where('pegawai_id', $pegawai->id)
+                    ->where('tahun', $tahunIni)
+                    ->value('carry_forward_normal') ?? $baru['carry']);
+
+                if ($carrySegar !== (int) $baru['carry']) {
+                    LogPerubahanSaldo::create([
+                        'pegawai_id' => $pegawai->id,
+                        'diubah_oleh' => $request->user()->id,
+                        'tahun' => $tahunIni,
+                        'kolom' => 'sisa_n1',
+                        'nilai_lama' => (int) $lama['carry'],
+                        'nilai_baru' => $carrySegar,
+                        'alasan' => 'Otomatis: Tgh tahun lalu berubah',
+                    ]);
+                    $baru['carry'] = $carrySegar; // supaya notifikasi memuat angka terbaru
+                }
+            }
+
+            // [AUTO-SYNC] Saldo tahun ini berubah -> bawaan tahun depan ikut dihitung ulang.
+            SaldoCuti::sinkronkanBawaan((int) $pegawai->id, $tahunIni);
+        });
 
         // Kirim notifikasi ke pegawai (hanya jika ada nilai yang berubah).
+        // Dipanggil SETELAH transaksi selesai, memakai $baru yang sudah segar.
         $this->kirimNotifikasiPerubahanSaldo($pegawai, $tahunIni, $lama, $baru, $cutiTerpakai);
 
         return back()->with('success', 'Saldo cuti pegawai berhasil diperbarui.');
@@ -936,7 +1004,7 @@ class RekapKuotaDetailController extends Controller
         $barisMaks = min(10, $sheet->getHighestRow());
 
         for ($baris = 1; $baris <= $barisMaks; $baris++) {
-            $peta = ['nip' => null, 'hak' => [], 'sisa' => []];
+            $peta = ['nip' => null, 'hak' => [], 'sisa' => [], 'tgh' => []];
 
             for ($i = 1; $i <= $kolomTerakhir; $i++) {
                 $kolom = Coordinate::stringFromColumnIndex($i);
@@ -948,6 +1016,8 @@ class RekapKuotaDetailController extends Controller
                     $peta['hak'][(int) $m[1]] = $kolom;
                 } elseif (preg_match('/^sisa (\d{4})$/', $teks, $m)) {
                     $peta['sisa'][(int) $m[1]] = $kolom;
+                } elseif (preg_match('/^sisa ditangguhkan (\d{4})$/', $teks, $m)) {
+                    $peta['tgh'][(int) $m[1]] = $kolom;
                 }
             }
 
@@ -974,6 +1044,12 @@ class RekapKuotaDetailController extends Controller
                 'hak' => $peta['hak'][$tahunIni],
                 'sisa1' => $peta['sisa'][$tahunLalu],
                 'sisa2' => $peta['sisa'][$tahunDuaLalu] ?? null, // opsional
+                // Kolom "Sisa Ditangguhkan" (opsional; null = kolom tidak ada di file)
+                'tgh' => [
+                    'tgh_n2' => $peta['tgh'][$tahunDuaLalu] ?? null,
+                    'tgh_n1' => $peta['tgh'][$tahunLalu] ?? null,
+                    'tgh_n0' => $peta['tgh'][$tahunIni] ?? null,
+                ],
             ];
         }
 
@@ -1016,6 +1092,7 @@ class RekapKuotaDetailController extends Controller
 
         $tahunIni = $this->resolveTahun($request);
         $tahunLalu = $tahunIni - 1;
+        $idAdmin = (int) $request->user()->id;
 
         try {
             $spreadsheet = IOFactory::load($request->file('file')->getRealPath());
@@ -1036,6 +1113,17 @@ class RekapKuotaDetailController extends Controller
             ->get(['id', 'nama', 'nip'])
             ->keyBy(fn($p) => $this->normalisasiNip($p->nip));
 
+        // Total Tgh tersimpan per pegawai & tahun asal (satu query, bukan per baris).
+        $tghTersimpan = [];
+        foreach (
+            CutiDitangguhkan::whereIn('tahun_asal', [$tahunIni - 2, $tahunLalu, $tahunIni])
+                ->get(['pegawai_id', 'tahun_asal', 'jumlah_hari']) as $b
+        ) {
+            $p = (int) $b->pegawai_id;
+            $t = (int) $b->tahun_asal;
+            $tghTersimpan[$p][$t] = ($tghTersimpan[$p][$t] ?? 0) + (int) $b->jumlah_hari;
+        }
+
         $diperbarui = 0;
         $tanpaPerubahan = 0;
         $dilewati = [];
@@ -1044,6 +1132,8 @@ class RekapKuotaDetailController extends Controller
             $sheet,
             $peta,
             $pegawaiByNip,
+            $tghTersimpan,
+            $idAdmin,
             $tahunIni,
             $tahunLalu,
             &$diperbarui,
@@ -1081,15 +1171,27 @@ class RekapKuotaDetailController extends Controller
                 $sisa1 = $this->bacaAngkaImpor($sheet, $peta['sisa1'], $baris);
                 $sisa2 = $peta['sisa2'] ? $this->bacaAngkaImpor($sheet, $peta['sisa2'], $baris) : null;
 
+                // Tgh (opsional): null = kolom tidak ada / sel kosong -> dipertahankan.
+                $tghFile = [];
+                foreach ($peta['tgh'] as $kolomLog => $kolomExcel) {
+                    $tghFile[$kolomLog] = $kolomExcel ? $this->bacaAngkaImpor($sheet, $kolomExcel, $baris) : null;
+                }
+                $tghTidakValid = collect($tghFile)->contains(
+                    fn($v) => $v === false || ($v !== null && $v > 365)
+                );
+
                 if (
                     $hak === false || $sisa1 === false || $sisa2 === false
                     || ($sisa1 !== null && $sisa1 > 12) || ($sisa2 !== null && $sisa2 > 12)
+                    || $tghTidakValid
                 ) {
                     $dilewati[] = "baris {$baris} ({$pegawai->nama}): angka tidak valid";
                     continue;
                 }
 
-                if ($hak === null && $sisa1 === null && $sisa2 === null) {
+                $adaTgh = collect($tghFile)->contains(fn($v) => $v !== null);
+
+                if ($hak === null && $sisa1 === null && $sisa2 === null && !$adaTgh) {
                     continue;
                 }
 
@@ -1118,7 +1220,20 @@ class RekapKuotaDetailController extends Controller
                 $baru['carry'] = $sisa1 ?? $lama['carry'];
                 $baru['dua_tahun_lalu'] = $sisa2 ?? $lama['dua_tahun_lalu'];
 
-                if ($baru == $lama) {
+                // Tgh lama vs baru (kunci sama dengan kolom log di updateSaldo).
+                $tahunAsalTgh = [
+                    'tgh_n2' => $tahunIni - 2,
+                    'tgh_n1' => $tahunLalu,
+                    'tgh_n0' => $tahunIni,
+                ];
+                $tghLama = [];
+                $tghBaru = [];
+                foreach ($tahunAsalTgh as $kolomLog => $tahunAsal) {
+                    $tghLama[$kolomLog] = (int) ($tghTersimpan[(int) $pegawai->id][$tahunAsal] ?? 0);
+                    $tghBaru[$kolomLog] = $tghFile[$kolomLog] ?? $tghLama[$kolomLog];
+                }
+
+                if ($baru == $lama && $tghBaru == $tghLama) {
                     $tanpaPerubahan++;
                     continue;
                 }
@@ -1146,6 +1261,53 @@ class RekapKuotaDetailController extends Controller
                     );
                 }
 
+                // [TGH] Total Tgh di file menimpa total tersimpan, lewat jalur yang
+                // SAMA dengan edit di baris (setTotalDitangguhkan). Dicatat di log.
+                foreach ($tahunAsalTgh as $kolomLog => $tahunAsal) {
+                    if ($tghBaru[$kolomLog] === $tghLama[$kolomLog]) {
+                        continue;
+                    }
+
+                    $this->setTotalDitangguhkan((int) $pegawai->id, $tahunAsal, $tghBaru[$kolomLog]);
+
+                    LogPerubahanSaldo::create([
+                        'pegawai_id' => $pegawai->id,
+                        'diubah_oleh' => $idAdmin,
+                        'tahun' => $tahunIni,
+                        'kolom' => $kolomLog,
+                        'nilai_lama' => $tghLama[$kolomLog],
+                        'nilai_baru' => $tghBaru[$kolomLog],
+                        'alasan' => 'Impor Excel',
+                    ]);
+                }
+
+                // [SINKRON Tgh TAHUN LALU] Sama dengan updateSaldo(): bila Tgh tahun
+                // lalu berubah dan Sisa tahun lalu TIDAK diubah di file, Sisa tahun
+                // lalu dihitung ulang. Kalau Sisa diubah di file, angka file menang.
+                $tghTahunLaluBerubah = $tghBaru['tgh_n1'] !== $tghLama['tgh_n1'];
+                $sisaTahunLaluDiubah = (int) $baru['carry'] !== (int) $lama['carry'];
+
+                if ($tghTahunLaluBerubah && !$sisaTahunLaluDiubah) {
+                    SaldoCuti::sinkronkanBawaan((int) $pegawai->id, (int) $tahunLalu);
+
+                    $carrySegar = (int) (SaldoCuti::where('pegawai_id', $pegawai->id)
+                        ->where('tahun', $tahunIni)
+                        ->value('carry_forward_normal') ?? $baru['carry']);
+
+                    if ($carrySegar !== (int) $baru['carry']) {
+                        LogPerubahanSaldo::create([
+                            'pegawai_id' => $pegawai->id,
+                            'diubah_oleh' => $idAdmin,
+                            'tahun' => $tahunIni,
+                            'kolom' => 'sisa_n1',
+                            'nilai_lama' => (int) $lama['carry'],
+                            'nilai_baru' => $carrySegar,
+                            'alasan' => 'Otomatis: Tgh tahun lalu berubah (impor)',
+                        ]);
+                        $baru['carry'] = $carrySegar; // supaya notifikasi memuat angka terbaru
+                    }
+                }
+
                 // [AUTO-SYNC] Bawaan tahun depan ikut dihitung ulang.
                 SaldoCuti::sinkronkanBawaan((int) $pegawai->id, $tahunIni);
 
@@ -1168,6 +1330,7 @@ class RekapKuotaDetailController extends Controller
 
         return back()->with('success', $pesan . '.');
     }
+    
     // ================= END IMPOR KUOTA CUTI =================
 
     // Hitung field-field kuota cuti untuk satu pegawai.
@@ -1201,6 +1364,11 @@ class RekapKuotaDetailController extends Controller
                 ->where('tahun', $tahunIni - 1)
                 ->first();
         }
+
+        // Dompet tahun lalu ASLI (bukan baris bayangan)? Dipakai Vue untuk tahu
+        // apakah mengubah Tgh tahun lalu ikut menghitung ulang Sisa tahun lalu.
+        $dompetTahunLaluAsli = $saldoTahunLalu !== null
+            && (int) ($saldoTahunLalu->kuota_tahunan ?? 0) > 0;
 
         $cutiTerpakaiMurni = $this->hitungCutiTerpakaiMurniDariRelasi($pegawai, $tahunIni);
 
@@ -1338,6 +1506,10 @@ class RekapKuotaDetailController extends Controller
             'sisa_ditangguhkan_tahun_lalu' => $sisaDitangguhkanTahunLalu,
             'sisa_ditangguhkan_tahun_ini' => $sisaDitangguhkanTahunIni,
             'potongan_tgh_tahun_ini' => $potonganTghTahunIni,
+
+            // Dompet tahun lalu ASLI? Bila ya, mengubah Tgh tahun lalu di Vue
+            // ikut menghitung ulang Sisa tahun lalu (lihat updateSaldo()).
+            'dompet_tahun_lalu_asli' => $dompetTahunLaluAsli,
 
             // Koreksi
             // [TERPAKAI DIKUNCI] 'terpakai_dikunci' selalu true: Vue menampilkan
