@@ -7,6 +7,7 @@ use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use App\Models\HariLibur;
+use App\Support\RincianSaldo;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Inertia\Inertia;
@@ -16,7 +17,9 @@ use Carbon\Carbon;
  * Dashboard semua role.
  *
  * Ringkasan aturan:
- * - Saldo: satu rumus di hitungSaldoPegawai(), sama dengan Rekap Kuota Detail
+ * - Saldo: PENGAMBILAN DATA di hitungSaldoPegawai(); rumus aritmetikanya
+ *   (terpakai total, sisa hak, total tersedia) dipanggil dari
+ *   RincianSaldo::hitungTotal(), satu sumber dengan Rekap Kuota Detail
  *   (Tgh tahun ini mengurangi sisa, Tgh tahun lalu dikembalikan).
  * - Chart, kalender, dan KPI memakai cuti yang BERIRISAN dengan tahun/bulan
  *   terpilih; cuti lintas tahun dipotong lewat potongCutiKeTahun().
@@ -26,6 +29,17 @@ use Carbon\Carbon;
  *   setujui sendiri; Admin HR melihat semua.
  * - Antrean (total_antrean) tidak difilter tanggal.
  * - Relasi approver dibatasi kolomnya agar remember_token/hash tidak bocor.
+ *
+ * PERBAIKAN N+1 (jumlah query turun, hasil tampilan sama):
+ * - Relasi 'pegawai' ikut di-eager load pada $withAtasanPribadi, sehingga
+ *   RincianSaldo::lengkapi() dan attachNamaApproverL1L2KePegawai() tidak
+ *   memuatnya satu per satu.
+ * - Koleksi yang sama (mis. $recentCuti = $recentCutiPribadi untuk role 1)
+ *   hanya diproses SEKALI, bukan dua kali.
+ * - Semua daftar cuti DIGABUNG lalu diproses SEKALI oleh
+ *   RincianSaldo::lengkapi() (4 query tetap) dan attachNamaApprover...()
+ *   (maksimal 2 query lewat Pegawai::petaKetua()), bukan sekali per daftar.
+ * - Tiga count() statistik pengajuan role 1 digabung jadi satu query.
  */
 class DashboardController extends Controller
 {
@@ -51,7 +65,7 @@ class DashboardController extends Controller
 
     // Pegawai yang harus selalu ikut terhitung sebagai anggota tim (LIKE pada
     // kolom nama). Tidak dipakai pada MODE_ATASAN_TERPISAH = true.
-    private const ANGGOTA_TAMBAHAN_NAMA = ['SETA RUKMALASARI'];
+    private const ANGGOTA_TAMBAHAN_NAMA = [];
 
     /**
      * Jumlah hari cuti ditangguhkan (Tgh) dengan tahun asal $tahun.
@@ -65,10 +79,11 @@ class DashboardController extends Controller
     }
 
     /**
-     * Satu-satunya tempat hitung saldo dashboard (sama dengan Rekap Kuota Detail):
-     * bawaan = 12 jika sisa N-2 & N-1 sama-sama 12, selain itu min(6, sisa N-1);
-     * terpakai total = digunakan + Tgh tahun ini;
-     * total tersedia = kuota + bawaan + dikembalikan (Tgh tahun lalu) - terpakai total.
+     * Tempat PENGAMBILAN DATA saldo dashboard (sama dengan Rekap Kuota Detail):
+     * bawaan = 12 jika sisa N-2 & N-1 sama-sama 12, selain itu min(6, sisa N-1).
+     * Rumus aritmetikanya ada di RincianSaldo::hitungTotal():
+     *   terpakai total = digunakan + Tgh tahun ini;
+     *   total tersedia = kuota + bawaan + dikembalikan (Tgh tahun lalu) - terpakai total.
      */
     private function hitungSaldoPegawai(int $pegawaiId, int $tahun, ?SaldoCuti $saldo = null): array
     {
@@ -94,10 +109,18 @@ class DashboardController extends Controller
             $kuota
         );
 
-        $terpakaiTotal = $terpakai + $tangguh;
+        // Rumus aritmetika dipusatkan di RincianSaldo::hitungTotal().
+        $hasil = RincianSaldo::hitungTotal(
+            (int) $kuota,
+            (int) $bawaanEligible,
+            (int) $dikembalikan,
+            (int) $terpakai,
+            (int) $tangguh
+        );
 
-        $sisaKuotaTahunIni = max($kuota - $terpakaiTotal, 0);
-        $totalTersedia     = max(($kuota + $bawaanEligible + $dikembalikan) - $terpakaiTotal, 0);
+        $terpakaiTotal     = $hasil['cuti_terpakai_total'];
+        $sisaKuotaTahunIni = $hasil['sisa_hak_tahun_berjalan'];
+        $totalTersedia     = $hasil['total_cuti_tersedia'];
 
         return [
             'sisa_cuti'                     => $totalTersedia,
@@ -135,41 +158,38 @@ class DashboardController extends Controller
      */
     private function attachSaldoInfoKePegawai(iterable $collection, int $tahun): void
     {
-        \App\Support\RincianSaldo::lengkapi($collection, $tahun);
+        RincianSaldo::lengkapi($collection, $tahun);
     }
 
     /**
      * Menempelkan nama atasan L1, L2, L3, L4 milik PEGAWAI PEMILIK PENGAJUAN
      * ke $item->pegawai.
      *
+     * [N+1] L1 & L2 seluruh pegawai di daftar dimuat sekaligus lewat
+     * Pegawai::petaKetua() (maksimal 2 query), bukan lewat accessor
+     * ketua_tim_kerja / ketua_kelompok per pegawai. L3 & L4 dicari sekali.
+     *
      * @param  iterable<int, mixed>  $collection
      */
     private function attachNamaApproverL1L2KePegawai(iterable $collection): void
     {
-        static $cache = [];
-        static $namaL3 = false;
-        static $namaL4 = false;
+        $items = collect($collection);
 
-        if ($namaL3 === false) {
-            $namaL3 = $this->namaPejabatAktif(4) ?? 'Kasubag TU';
-            $namaL4 = $this->namaPejabatAktif(6) ?? 'Kepala Biro Perencanaan';
-        }
+        $namaL3 = $this->namaPejabatAktif(4) ?? 'Kasubag TU';
+        $namaL4 = $this->namaPejabatAktif(6) ?? 'Kepala Biro Perencanaan';
 
-        foreach ($collection as $item) {
+        $peta = Pegawai::petaKetua(
+            $items->map(fn($item) => $item->pegawai ?? null)->filter()
+        );
+
+        foreach ($items as $item) {
             $pegawai = $item->pegawai ?? null;
             if (!$pegawai) {
                 continue;
             }
 
-            if (!isset($cache[$pegawai->id])) {
-                $cache[$pegawai->id] = [
-                    'nama_l1' => optional($pegawai->ketua_tim_kerja)->nama,
-                    'nama_l2' => optional($pegawai->ketua_kelompok)->nama,
-                ];
-            }
-
-            $pegawai->nama_l1 = $cache[$pegawai->id]['nama_l1'];
-            $pegawai->nama_l2 = $cache[$pegawai->id]['nama_l2'];
+            $pegawai->nama_l1 = $peta[(int) $pegawai->id]['nama_l1'] ?? null;
+            $pegawai->nama_l2 = $peta[(int) $pegawai->id]['nama_l2'] ?? null;
             $pegawai->nama_l3 = $namaL3;
             $pegawai->nama_l4 = $namaL4;
         }
@@ -428,7 +448,10 @@ class DashboardController extends Controller
             ->get();
 
         // Relasi atasan & approver: hanya kolom yang dibutuhkan UI.
+        // [N+1] 'pegawai' ikut di-eager load (dibaca oleh RincianSaldo::lengkapi()
+        // dan attachNamaApproverL1L2KePegawai()), sehingga tidak dimuat per item.
         $withAtasanPribadi = [
+            'pegawai',
             'atasanL1:id,nama',
             'atasanL2:id,nama',
             'atasanL3:id,nama',
@@ -459,13 +482,18 @@ class DashboardController extends Controller
                 && $saldo->koreksi_saldo !== null
                 && (int) $saldo->koreksi_saldo !== $cutiTerpakaiSistem;
 
+            // [N+1] Tiga count() digabung menjadi satu query.
+            $ringkasPengajuan = PengajuanCuti::where('pegawai_id', $user->id)
+                ->selectRaw("COUNT(*) AS total, SUM(CASE WHEN status LIKE 'menunggu%' THEN 1 ELSE 0 END) AS menunggu, SUM(CASE WHEN status = 'disetujui' THEN 1 ELSE 0 END) AS disetujui")
+                ->first();
+
             $stats = array_merge($saldoStats, [
                 'ada_koreksi'          => $adaKoreksi,
                 'cuti_terpakai_sistem' => $cutiTerpakaiSistem,
                 'selisih_koreksi'      => $cutiTerpakai - $cutiTerpakaiSistem,
-                'total_pengajuan'      => PengajuanCuti::where('pegawai_id', $user->id)->count(),
-                'menunggu'             => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'like', 'menunggu%')->count(),
-                'disetujui'            => PengajuanCuti::where('pegawai_id', $user->id)->where('status', 'disetujui')->count(),
+                'total_pengajuan'      => (int) ($ringkasPengajuan->total ?? 0),
+                'menunggu'             => (int) ($ringkasPengajuan->menunggu ?? 0),
+                'disetujui'            => (int) ($ringkasPengajuan->disetujui ?? 0),
             ]);
 
             $recentCuti = PengajuanCuti::with($withAtasanPribadi)
@@ -708,30 +736,23 @@ class DashboardController extends Controller
             ->orderBy('kelompok_substansi')
             ->pluck('kelompok_substansi');
 
-        $this->attachSaldoInfoKePegawai($recentCuti, $tahun);
-        $this->attachSaldoInfoKePegawai($recentCutiPribadi, $tahun);
-        $this->attachSaldoInfoKePegawai($allCutiDisetujui, $tahun);
-        $this->attachSaldoInfoKePegawai($cutiPribadiDisetujui, $tahun);
-        $this->attachSaldoInfoKePegawai($timCutiHariIni, $tahun);
-        $this->attachSaldoInfoKePegawai($cutiDisetujuiBulanIni, $tahun);
-
+        // [N+1] Kumpulkan daftar UNIK. Untuk role 1, $recentCuti dan
+        // $recentCutiPribadi adalah objek yang sama, begitu juga
+        // $allCutiDisetujui dan $cutiPribadiDisetujui, jadi tidak perlu
+        // diproses dua kali. Array kosong (belum terisi) dilewati.
+        $daftarUnik = [];
         foreach ([$recentCuti, $recentCutiPribadi, $allCutiDisetujui, $cutiPribadiDisetujui, $timCutiHariIni, $cutiDisetujuiBulanIni] as $daftar) {
-            if (!$daftar instanceof \Illuminate\Database\Eloquent\Collection) {
-                continue;
+            if (is_object($daftar)) {
+                $daftarUnik[spl_object_id($daftar)] = $daftar;
             }
-
-            $daftar->loadMissing('cutiDitangguhkan');
-            $daftar->each(function (PengajuanCuti $cuti) {
-                $cuti->bisa_direvisi = $cuti->bisaDirevisi();
-            });
         }
 
-        $this->attachNamaApproverL1L2KePegawai($recentCuti);
-        $this->attachNamaApproverL1L2KePegawai($recentCutiPribadi);
-        $this->attachNamaApproverL1L2KePegawai($allCutiDisetujui);
-        $this->attachNamaApproverL1L2KePegawai($cutiPribadiDisetujui);
-        $this->attachNamaApproverL1L2KePegawai($timCutiHariIni);
-        $this->attachNamaApproverL1L2KePegawai($cutiDisetujuiBulanIni);
+        // [N+1] Semua daftar digabung, lalu diproses SEKALI (bukan sekali per
+        // daftar), supaya pegawai yang sama tidak dihitung ulang.
+        $semuaItem = collect($daftarUnik)->flatMap(fn($d) => $d->all())->values();
+
+        $this->attachSaldoInfoKePegawai($semuaItem, $tahun);
+        $this->attachNamaApproverL1L2KePegawai($semuaItem);
 
         // Pejabat L3 & L4 untuk bagian "Atasan" di modal Daftar Anggota Tim
         // (kosong bila MODE_ATASAN_TERPISAH = false).

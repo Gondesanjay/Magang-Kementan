@@ -11,7 +11,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\PembatalanController;
 use App\Http\Controllers\NotificationController;
 use App\Http\Middleware\PreventBackHistory;
-use Illuminate\Http\Request;
+use App\Http\Requests\GantiPasswordRequest;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -29,13 +29,10 @@ Route::middleware(['auth', PreventBackHistory::class])->group(function () {
         return Inertia::render('Auth/GantiPassword');
     })->name('password.change');
 
-    Route::post('/ganti-password', function (Request $request) {
-        $request->validate([
-            'password' => ['required', 'confirmed', 'min:8'],
-        ]);
-
+    // Validasi ada di GantiPasswordRequest.
+    Route::post('/ganti-password', function (GantiPasswordRequest $request) {
         $request->user()->update([
-            'password' => Hash::make($request->password),
+            'password' => Hash::make($request->validated()['password']),
             'is_first_login' => false,
         ]);
 
@@ -92,7 +89,6 @@ Route::middleware(['auth', 'force.password', PreventBackHistory::class])->group(
         Route::get('/karyawan/riwayat-cuti', [CutiController::class, 'history'])->name('karyawan.riwayat');
         Route::post('/karyawan/riwayat-cuti/{id}/batal', [CutiController::class, 'cancel'])->name('karyawan.cuti.batal');
         Route::post('/karyawan/cuti/{id}/batalkan-mandiri', [CutiController::class, 'batalkanMandiri'])->name('karyawan.cuti.batalkan-mandiri');
-        Route::post('/karyawan/cuti/{id}/revisi', [CutiController::class, 'revisi'])->name('karyawan.cuti.revisi');
         Route::get('/karyawan/kalender-tim', [CutiController::class, 'teamCalendar'])->name('karyawan.kalender');
         Route::get('/karyawan/riwayat-cuti/{id}/pdf', [CutiController::class, 'downloadPdf'])->name('karyawan.cuti.pdf');
     });

@@ -1,0 +1,7 @@
+# Use this workspace to collaborate
+workspace:
+  id: 44fe7fcd-1653-48f9-8e19-8f5843f0a2d8
+
+localResources:
+  specs:
+    - ../vendor/google/grpc-gcp/src/grpc_gcp.proto

@@ -1413,41 +1413,6 @@ const resetFilters = () => {
                                         }}</span>
                                     </h5>
 
-                                    <!-- Ringkasan verifikasi Terpakai: total Cuti Tahunan
-                                         disetujui di tahun aktif vs angka sistem. Hijau
-                                         kalau cocok, kuning kalau berbeda. -->
-                                    <div
-                                        class="mb-3 rounded-lg border px-3 py-2 text-xs leading-relaxed"
-                                        :class="
-                                            ringkasanDisetujui.total === ringkasanDisetujui.sistem
-                                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                                                : 'border-amber-200 bg-amber-50 text-amber-800'
-                                        "
-                                    >
-                                        Cuti Tahunan disetujui {{ tahunAktif }}:
-                                        <span class="font-bold">{{ ringkasanDisetujui.total }} hari</span>
-                                        dari {{ ringkasanDisetujui.jumlahPengajuan }}
-                                        pengajuan. Sistem mencatat
-                                        <span class="font-bold">{{ ringkasanDisetujui.sistem }} hari</span>.
-                                        <template v-if="ringkasanDisetujui.total !== ringkasanDisetujui.sistem">
-                                            Angkanya berbeda, periksa riwayat di bawah.
-                                        </template>
-                                        <template v-if="getSisaDitangguhkanTahunIni(selectedPegawai) > 0">
-                                            Ditambah Tgh
-                                            {{ getSisaDitangguhkanTahunIni(selectedPegawai) }}
-                                            hari, Terpakai yang tampil
-                                            {{ getTerpakaiSistemTampil(selectedPegawai) }}
-                                            hari.
-                                        </template>
-                                        <template v-if="adaKoreksi(selectedPegawai)">
-                                            Terpakai yang tampil di tabel:
-                                            <span class="font-bold"
-                                                >{{ getTerpakaiTampil(selectedPegawai) }}
-                                                hari (koreksi Admin HR)</span
-                                            >.
-                                        </template>
-                                    </div>
-
                                     <!-- Filter: chip status + hanya Cuti Tahunan -->
                                     <div class="mb-3 space-y-2">
                                         <div

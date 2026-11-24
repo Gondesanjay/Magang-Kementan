@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CutiDitangguhkan;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use App\Models\Notifikasi;
@@ -10,7 +11,7 @@ use App\Models\ApprovalLog;
 use App\Support\RincianSaldo;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
-use Illuminate\Support\Facades\Auth; 
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 // File ini WAJIB disimpan di app/Http/Controllers/MonitoringCutiController.php
@@ -22,7 +23,8 @@ use Illuminate\Support\Facades\DB;
 //   - process(): transaksi DB + lockForUpdate, validasi alasan tolak, batasan wilayah
 //     L1 per Tim Kerja & L2 per Kelompok Substansi.
 //   - Rumus saldo disamakan dengan DashboardController::hitungSaldoPegawai()
-//     (bawaan eligible, terpakai total, dikembalikan, total tersedia).
+//     (bawaan eligible, terpakai total, dikembalikan, total tersedia). Rumus
+//     aritmetikanya kini dipanggil dari RincianSaldo::hitungTotal() (satu sumber).
 //   - Cuti lintas tahun: saldo dicek per tahun saat L4 menyetujui, kolom legacy `sisa`
 //     disesuaikan lewat SaldoCuti::sesuaikanSisaLegacy(), bawaan disinkronkan lewat
 //     SaldoCuti::sinkronkanBawaanPengajuan().
@@ -32,19 +34,41 @@ use Illuminate\Support\Facades\DB;
 //   - Rincian saldo per pengajuan dihitung lewat App\Support\RincianSaldo::lengkapi().
 //   - L3 (role 4) tidak melihat pengajuan milik sendiri maupun milik Kepala Biro.
 //
-// PERBAIKAN BARU (KEPALA BIRO TIDAK MELIHAT RIWAYAT CUTI SENDIRI):
+// PERBAIKAN (KEPALA BIRO TIDAK MELIHAT RIWAYAT CUTI SENDIRI):
 //   - index() (query $antrean) & history(): Kepala Biro (role 6) tidak melihat riwayat
 //     pengajuan miliknya sendiri. Daftar "Menunggu Persetujuan" TIDAK diubah, jadi
 //     pengajuan yang butuh persetujuannya tetap muncul. Admin HR (role 5) tidak terpengaruh.
+//
+// PERBAIKAN BARU (SATU RUMUS TERPAKAI & ATASAN AKTIF):
+//   - process() (L4 menyetujui): pengecekan saldo kini memakai
+//     SaldoCuti::terpakaiEfektif() (koreksi bulanan -> koreksi tahunan -> hitungan
+//     sistem), SATU rumus dengan Rekap Kuota Detail & Rekap Laporan. Sebelumnya hanya
+//     koreksi tahunan + terpakai murni, sehingga pegawai berkoreksi bulanan bisa dicek
+//     dengan angka yang berbeda dari yang tampil di Rekap.
+//     hitungInfoSaldo() sekarang menerima Terpakai yang SUDAH efektif.
+//   - process() (L4 menyetujui): pengecekan saldo kini memasukkan cuti ditangguhkan (Tgh)
+//     seperti Rekap Kuota Detail: Tgh tahun yang dicek MEMOTONG saldo, Tgh tahun
+//     sebelumnya MENAMBAH total tersedia. Sebelumnya Tgh diabaikan.
+//   - index(): peta nama atasan L1 (Ketua Tim) & L2 (Ketua Kelompok) hanya memakai
+//     pejabat AKTIF (status_aktif 'Aktif' / NULL), dan bila ada lebih dari satu dipilih
+//     id terkecil. Sama dengan aturan di RekapKuotaDetailController::getApproverName().
+//
+// PERBAIKAN (RUMUS SALDO SATU SUMBER):
+//   - hitungInfoSaldo(): aritmetika (terpakai total, sisa hak, total tersedia)
+//     dipanggil dari RincianSaldo::hitungTotal(). Pengambilan datanya tidak berubah.
 class MonitoringCutiController extends Controller
 {
     private const STATUS_MENUNGGU = ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'];
     private const ROLE_ID_KEPALA_BIRO = 6;
 
+    /**
+     * @param int $terpakaiEfektif Terpakai yang SUDAH efektif (ikut koreksi bulanan /
+     *                             koreksi tahunan), dari SaldoCuti::terpakaiEfektif().
+     */
     private function hitungInfoSaldo(
         ?SaldoCuti $saldo,
         ?SaldoCuti $saldoTahunLalu,
-        int $terpakaiMurni,
+        int $terpakaiEfektif,
         int $tangguhTahunIni = 0,
         int $dikembalikan = 0
     ): array {
@@ -52,12 +76,7 @@ class MonitoringCutiController extends Controller
         $sisaTahunLalu    = (int) ($saldo->carry_forward_normal ?? 0);
         $sisaDuaTahunLalu = (int) ($saldoTahunLalu->carry_forward_normal ?? 0);
 
-        $koreksi  = $saldo?->koreksi_saldo;
-        $terpakai = $koreksi !== null
-            ? max(0, (int) $koreksi)
-            : max(0, $terpakaiMurni);
-
-        $terpakaiTotal = $terpakai + $tangguhTahunIni;
+        $terpakai = max(0, $terpakaiEfektif);
 
         $bawaanEligible = SaldoCuti::hitungBawaan(
             $sisaDuaTahunLalu,
@@ -65,8 +84,18 @@ class MonitoringCutiController extends Controller
             $kuota
         );
 
-        $sisaHakTahunIni = max($kuota - $terpakaiTotal, 0);
-        $totalTersedia   = max(($kuota + $bawaanEligible + $dikembalikan) - $terpakaiTotal, 0);
+        // Rumus aritmetika dipusatkan di RincianSaldo::hitungTotal().
+        $hasil = RincianSaldo::hitungTotal(
+            $kuota,
+            (int) $bawaanEligible,
+            $dikembalikan,
+            $terpakai,
+            $tangguhTahunIni
+        );
+
+        $terpakaiTotal   = $hasil['cuti_terpakai_total'];
+        $sisaHakTahunIni = $hasil['sisa_hak_tahun_berjalan'];
+        $totalTersedia   = $hasil['total_cuti_tersedia'];
 
         return [
             'kuota_tahunan'            => $kuota,
@@ -279,18 +308,28 @@ class MonitoringCutiController extends Controller
             ->values()
             ->all();
 
+        // Hanya pejabat AKTIF (status_aktif 'Aktif' / NULL), urut id terkecil.
+        // unique() mempertahankan yang PERTAMA, jadi bila ada dua pejabat di
+        // tim/kelompok yang sama, yang id-nya terkecil yang tampil (sama dengan
+        // RekapKuotaDetailController::getApproverName()).
+        $hanyaAktif = fn($q) => $q->where(
+            fn($s) => $s->where('status_aktif', 'Aktif')->orWhereNull('status_aktif')
+        );
+
         $petaAtasanL2 = empty($kelompokUnik)
             ? collect()
-            : Pegawai::where('role_id', 3)
-            ->whereIn('kelompok_substansi', $kelompokUnik)
+            : $hanyaAktif(Pegawai::where('role_id', 3)->whereIn('kelompok_substansi', $kelompokUnik))
+            ->orderBy('id')
             ->get()
+            ->unique('kelompok_substansi')
             ->keyBy('kelompok_substansi');
 
         $petaAtasanL1 = empty($timKerjaUnik)
             ? collect()
-            : Pegawai::where('role_id', 2)
-            ->whereIn('tim_kerja', $timKerjaUnik)
+            : $hanyaAktif(Pegawai::where('role_id', 2)->whereIn('tim_kerja', $timKerjaUnik))
+            ->orderBy('id')
             ->get()
+            ->unique('tim_kerja')
             ->keyBy('tim_kerja');
 
         $namaPejabatAktif = fn(int $roleId) => Pegawai::where('role_id', $roleId)
@@ -508,10 +547,24 @@ class MonitoringCutiController extends Controller
                             );
                         }
 
+                        // Cuti ditangguhkan (Tgh), aturan SAMA dengan Rekap Kuota Detail:
+                        //   - Tgh tahun yang dicek   -> MEMOTONG saldo tahun itu
+                        //   - Tgh tahun sebelumnya   -> MENAMBAH total tersedia (dikembalikan)
+                        $tghTahunIni = (int) CutiDitangguhkan::where('pegawai_id', $targetUserId)
+                            ->where('tahun_asal', $tahunCuti)
+                            ->sum('jumlah_hari');
+                        $tghTahunLalu = (int) CutiDitangguhkan::where('pegawai_id', $targetUserId)
+                            ->where('tahun_asal', $tahunCuti - 1)
+                            ->sum('jumlah_hari');
+
+                        // Terpakai EFEKTIF (koreksi bulanan -> koreksi tahunan -> sistem),
+                        // satu rumus dengan Rekap Kuota Detail & Rekap Laporan.
                         $infoSaldo = $this->hitungInfoSaldo(
                             $saldoTahun,
                             SaldoCuti::where('pegawai_id', $targetUserId)->where('tahun', $tahunCuti - 1)->first(),
-                            $this->hitungTerpakaiMurni((int) $targetUserId, (int) $tahunCuti)
+                            SaldoCuti::terpakaiEfektif((int) $targetUserId, (int) $tahunCuti, $saldoTahun),
+                            $tghTahunIni,
+                            $tghTahunLalu
                         );
 
                         if ($infoSaldo['total_cuti_tersedia'] < $hari) {

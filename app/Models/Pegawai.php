@@ -84,6 +84,9 @@ class Pegawai extends Authenticatable
     // ================= APPROVER DINAMIS (L1 & L2) =================
     // Nama atasan L1/L2 di Modal Detail (RiwayatPengajuan / Dashboard).
     // L3/L4 biasanya satu orang per biro; L1/L2 per tim / kelompok.
+    //
+    // Accessor di bawah ini menjalankan 1 query per pemanggilan. Untuk DAFTAR
+    // pegawai, pakai Pegawai::petaKetua() (maksimal 2 query untuk semuanya).
 
     public function getKetuaTimKerjaAttribute()
     {
@@ -107,6 +110,58 @@ class Pegawai extends Authenticatable
             ->where('jabatan', 'like', '%KETUA KELOMPOK%')
             ->where('id', '!=', $this->id)
             ->first();
+    }
+
+    /**
+     * [BATCH] Nama Ketua Tim Kerja (L1) & Ketua Kelompok (L2) untuk banyak
+     * pegawai sekaligus (maksimal 2 query, bukan 2 query per pegawai).
+     * Aturan SAMA dengan accessor ketua_tim_kerja / ketua_kelompok:
+     * jabatan LIKE '%KETUA TIM KERJA%' / '%KETUA KELOMPOK%', dan bukan
+     * pegawai itu sendiri. Bila ada lebih dari satu kandidat, yang ber-id
+     * terkecil dipakai.
+     *
+     * @param  iterable<int, Pegawai>  $daftarPegawai
+     * @return array<int, array{nama_l1: ?string, nama_l2: ?string}>  kunci: id pegawai
+     */
+    public static function petaKetua(iterable $daftarPegawai): array
+    {
+        $daftar = collect($daftarPegawai)->filter()->unique('id')->values();
+        $norm   = fn($v) => mb_strtolower(trim((string) $v));
+
+        $tims = $daftar->pluck('tim_kerja')->filter(fn($v) => !empty($v))->unique()->values()->all();
+        $kels = $daftar->pluck('kelompok_substansi')->filter(fn($v) => !empty($v))->unique()->values()->all();
+
+        $ketuaTim = empty($tims) ? collect() : static::whereIn('tim_kerja', $tims)
+            ->where('jabatan', 'like', '%KETUA TIM KERJA%')
+            ->orderBy('id')
+            ->get(['id', 'nama', 'tim_kerja'])
+            ->groupBy(fn($p) => $norm($p->tim_kerja));
+
+        $ketuaKel = empty($kels) ? collect() : static::whereIn('kelompok_substansi', $kels)
+            ->where('jabatan', 'like', '%KETUA KELOMPOK%')
+            ->orderBy('id')
+            ->get(['id', 'nama', 'kelompok_substansi'])
+            ->groupBy(fn($p) => $norm($p->kelompok_substansi));
+
+        $hasil = [];
+        foreach ($daftar as $p) {
+            $l1 = empty($p->tim_kerja)
+                ? null
+                : $ketuaTim->get($norm($p->tim_kerja), collect())
+                ->first(fn($k) => (int) $k->id !== (int) $p->id);
+
+            $l2 = empty($p->kelompok_substansi)
+                ? null
+                : $ketuaKel->get($norm($p->kelompok_substansi), collect())
+                ->first(fn($k) => (int) $k->id !== (int) $p->id);
+
+            $hasil[(int) $p->id] = [
+                'nama_l1' => $l1?->nama,
+                'nama_l2' => $l2?->nama,
+            ];
+        }
+
+        return $hasil;
     }
 
     // ================= SCOPE =================

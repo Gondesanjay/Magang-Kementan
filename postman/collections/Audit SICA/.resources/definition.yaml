@@ -1,0 +1,11 @@
+$kind: collection
+scripts:
+  - type: http:beforeRequest
+    code: "const xsrf = pm.cookies.get('XSRF-TOKEN');\r
+
+      if (xsrf) {\r
+
+      \  pm.request.headers.upsert({ key: 'X-XSRF-TOKEN', value: decodeURIComponent(xsrf) });\r
+
+      }"
+    language: text/javascript

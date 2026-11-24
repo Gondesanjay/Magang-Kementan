@@ -58,11 +58,6 @@ class PengajuanCuti extends Model
         return $this->alasanTidakBisaDitangguhkan() === null;
     }
 
-    public function bisaDirevisi(): bool
-    {
-        return $this->status === 'dibatalkan_ditangguhkan';
-    }
-
     // ================= URL LAMPIRAN LEWAT ROUTE TERPROTEKSI =================
     // Accessor mengembalikan alamat route 'lampiran.unduh' (bukan URL publik
     // /storage/...), yang mengecek login & hak akses (pemilik cuti, atasan

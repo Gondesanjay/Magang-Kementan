@@ -34,17 +34,20 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
-    // Masa kerja & kelayakan Cuti Besar dihitung backend dari
-    // tanggal_masuk (CutiController@create). Dipakai sebagai sumber utama
-    // supaya konsisten dengan validasi store(). null = backend belum
-    // mengirim, jatuh ke perkiraan dari NIP.
+    // Masa kerja & kelayakan Cuti Besar dihitung dan diputuskan backend
+    // (CutiController@create, dicek ulang di store()). Vue hanya menampilkan.
     masa_kerja_tahun: {
         type: Number,
-        default: null,
+        default: 0,
     },
     boleh_cuti_besar: {
         type: Boolean,
-        default: null,
+        default: true,
+    },
+    // Batas minimal masa kerja Cuti Besar (tahun), dari backend.
+    masa_kerja_minimal_cuti_besar: {
+        type: Number,
+        default: 0,
     },
     // Cuti Alasan Penting hanya untuk PNS (dikirim CutiController@create).
     boleh_cuti_alasan_penting: {
@@ -78,30 +81,15 @@ const page = usePage();
 const authUser = computed(() => page.props.auth.user);
 
 // ================= MASA KERJA (syarat Cuti Besar) =================
-// Sumber utama: prop dari backend (dihitung dari tanggal_masuk, sama dengan
-// validasi di CutiController::store). Cadangan: perkiraan dari NIP.
-// Format NIP PNS 18 digit: 8 digit tgl lahir + 6 digit TMT (YYYYMM) + 6 digit lainnya
-// Tahun pengangkatan = digit ke-9 s/d ke-12 → substring(8, 12)
-const masaKerjaTahun = computed(() => {
-    if (typeof props.masa_kerja_tahun === "number") {
-        return props.masa_kerja_tahun;
-    }
-    const nip = authUser.value?.nip || "";
-    if (nip.length >= 12) {
-        const tahunAngkat = parseInt(nip.substring(8, 12), 10);
-        if (!isNaN(tahunAngkat) && tahunAngkat > 1900) {
-            return new Date().getFullYear() - tahunAngkat;
-        }
-    }
-    // Default aman: jangan mengunci opsi secara keliru. Backend tetap penjaga akhir.
-    return 5;
-});
+// Dihitung dan diputuskan backend (CutiController@create dan store()).
+// Vue hanya menampilkan hasilnya, tidak menghitung sendiri.
+const masaKerjaTahun = computed(() => props.masa_kerja_tahun);
 
-const canChooseCutiBesar = computed(() =>
-    typeof props.boleh_cuti_besar === "boolean"
-        ? props.boleh_cuti_besar
-        : masaKerjaTahun.value >= 5,
+const syaratMasaKerjaCutiBesar = computed(
+    () => props.masa_kerja_minimal_cuti_besar,
 );
+
+const canChooseCutiBesar = computed(() => props.boleh_cuti_besar !== false);
 
 const canChooseAlasanPenting = computed(() => props.boleh_cuti_alasan_penting);
 
@@ -262,7 +250,7 @@ const opsiJenisCuti = computed(() => [
         value: "Cuti Besar",
         label: canChooseCutiBesar.value
             ? "Cuti Besar"
-            : "Cuti Besar (Belum memenuhi syarat masa kerja 5 tahun)",
+            : `Cuti Besar (Belum memenuhi syarat masa kerja ${syaratMasaKerjaCutiBesar.value} tahun)`,
         disabled: !canChooseCutiBesar.value,
     },
     {
@@ -1159,7 +1147,7 @@ const submit = () => {
         Swal.fire({
             icon: "error",
             title: "Belum memenuhi syarat",
-            text: `Cuti Besar hanya dapat diajukan jika masa kerja sudah mencapai 5 tahun. Masa kerja Anda saat ini terhitung ${masaKerjaTahun.value} tahun.`,
+            text: `Cuti Besar hanya dapat diajukan jika masa kerja sudah mencapai ${syaratMasaKerjaCutiBesar.value} tahun. Masa kerja Anda saat ini terhitung ${masaKerjaTahun.value} tahun.`,
             confirmButtonColor: "#ef4444",
         });
         return;

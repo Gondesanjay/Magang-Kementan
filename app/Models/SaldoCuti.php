@@ -21,6 +21,11 @@ use Illuminate\Support\Facades\DB;
 //      tampil  = hitungan sistem SEKARANG + selisih
 //    Contoh: sistem 3, koreksi jadi 4 (selisih +1); ada cuti baru -> sistem 4,
 //    tampil 5. (terpakaiMurniPerBulan, petaSelisihTahun, terpakaiEfektif)
+//
+// 3) VERSI BATCH (anti N+1): muatBahanTerpakai() + terpakaiEfektifDariBahan()
+//    menghitung Terpakai Efektif untuk BANYAK pegawai dari 2 query tetap,
+//    dengan aturan prioritas yang SAMA dengan terpakaiEfektif(). Dipakai
+//    App\Support\RincianSaldo::lengkapi().
 class SaldoCuti extends Model
 {
     /**
@@ -401,6 +406,103 @@ class SaldoCuti extends Model
         // 3) Hitungan sistem
         return static::terpakaiMurni($pegawaiId, $tahun);
     }
+
+    // ================= VERSI BATCH (ANTI N+1) =================
+
+    /**
+     * [BATCH] Muat bahan hitung Terpakai untuk banyak pegawai & tahun sekaligus
+     * (2 query tetap, bukan 2-3 query per pegawai).
+     *   'selisih' : ["{pegawai_id}-{tahun}" => SUM(nilai - nilai_sistem)]
+     *               (ada kuncinya = ada koreksi bulanan, walau jumlahnya 0)
+     *   'cuti'    : Cuti Tahunan disetujui, dikelompokkan per pegawai_id
+     *
+     * Hasilnya dipakai terpakaiEfektifDariBahan().
+     *
+     * @param  array<int, int>  $pegawaiIds
+     * @param  array<int, int>  $tahunList
+     */
+    public static function muatBahanTerpakai(array $pegawaiIds, array $tahunList): array
+    {
+        $pegawaiIds = array_values(array_unique(array_map('intval', $pegawaiIds)));
+        $tahunList  = array_values(array_unique(array_map('intval', $tahunList)));
+
+        if (empty($pegawaiIds) || empty($tahunList)) {
+            return ['selisih' => [], 'cuti' => collect()];
+        }
+
+        $selisih = [];
+        $koreksi = KoreksiCutiBulanan::whereIn('pegawai_id', $pegawaiIds)
+            ->whereIn('tahun', $tahunList)
+            ->get(['pegawai_id', 'tahun', 'nilai', 'nilai_sistem']);
+
+        foreach ($koreksi as $b) {
+            $kunci = (int) $b->pegawai_id . '-' . (int) $b->tahun;
+            $selisih[$kunci] = ($selisih[$kunci] ?? 0) + (int) $b->nilai - (int) $b->nilai_sistem;
+        }
+
+        $awal  = min($tahunList);
+        $akhir = max($tahunList);
+
+        $cuti = PengajuanCuti::whereIn('pegawai_id', $pegawaiIds)
+            ->where('jenis_cuti', 'Cuti Tahunan')
+            ->where('status', 'disetujui')
+            ->whereDate('tanggal_mulai', '<=', "{$akhir}-12-31")
+            ->whereDate('tanggal_selesai', '>=', "{$awal}-01-01")
+            ->get(['pegawai_id', 'tanggal_mulai', 'tanggal_selesai', 'jumlah_hari'])
+            ->groupBy('pegawai_id');
+
+        return ['selisih' => $selisih, 'cuti' => $cuti];
+    }
+
+    /**
+     * [BATCH] Versi memori dari terpakaiEfektif(): aturan prioritas SAMA
+     * (koreksi bulanan -> koreksi_saldo tahunan -> hitungan sistem), tetapi
+     * tanpa query. $bahan berasal dari muatBahanTerpakai().
+     */
+    public static function terpakaiEfektifDariBahan(
+        int $pegawaiId,
+        int $tahun,
+        ?self $saldo,
+        array $bahan
+    ): int {
+        $kunci = $pegawaiId . '-' . $tahun;
+
+        // Terpakai murni dari cuti yang sudah dimuat (sama dengan terpakaiMurni()).
+        $murni = 0;
+        foreach ($bahan['cuti']->get($pegawaiId, collect()) as $cuti) {
+            if ($cuti->tanggal_selesai === null) {
+                continue;
+            }
+
+            if (
+                Carbon::parse($cuti->tanggal_mulai)->year > $tahun
+                || Carbon::parse($cuti->tanggal_selesai)->year < $tahun
+            ) {
+                continue;
+            }
+
+            $murni += self::hariCutiDiTahun(
+                $cuti->tanggal_mulai,
+                $cuti->tanggal_selesai,
+                (int) $cuti->jumlah_hari,
+                $tahun
+            );
+        }
+
+        // 1) Koreksi bulanan (selisih terhadap hitungan sistem)
+        if (isset($bahan['selisih'][$kunci])) {
+            return max(0, $murni + $bahan['selisih'][$kunci]);
+        }
+
+        // 2) Koreksi tahunan lama
+        if ($saldo && $saldo->koreksi_saldo !== null) {
+            return max(0, (int) $saldo->koreksi_saldo);
+        }
+
+        // 3) Hitungan sistem
+        return (int) $murni;
+    }
+    // ================= END VERSI BATCH =================
 
     /**
      * Saldo bawaan yang eligible.

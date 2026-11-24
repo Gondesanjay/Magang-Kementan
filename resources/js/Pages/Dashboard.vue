@@ -203,6 +203,77 @@ const tampilFilterKelompok = computed(
         (isAdminHR.value || activeTab.value === "tim"),
 );
 
+// ===== Filter Tim Kerja (khusus L2 / role 3, hanya untuk Total Absensi Tim) =====
+const TIM_TANPA = "__none__";
+const selectedTimKerja = ref(""); // "" = semua tim kerja
+
+const normTim = (v) => {
+    const t = String(v ?? "").trim();
+    return t === "-" ? "" : t;
+};
+
+// Opsi diambil dari anggota tim + pegawai yang punya cuti di chart,
+// jadi semua tim yang ikut terhitung di "Semua Tim Kerja" ada di dropdown.
+const opsiTimKerja = computed(() => {
+    const set = new Set();
+    let adaTanpa = false;
+    const catat = (v) => {
+        const t = normTim(v);
+        if (t) set.add(t);
+        else adaTanpa = true;
+    };
+    (props.anggotaTim || []).forEach((a) => catat(a.tim_kerja));
+    (props.cutiDisetujuiChart || []).forEach((c) => {
+        if (c?.pegawai) catat(c.pegawai.tim_kerja);
+    });
+    return [
+        { value: "", label: "Semua Tim Kerja" },
+        ...[...set]
+            .sort((a, b) => a.localeCompare(b, "id"))
+            .map((t) => ({ value: t, label: t })),
+        ...(adaTanpa ? [{ value: TIM_TANPA, label: "Tanpa Tim Kerja" }] : []),
+    ];
+});
+
+// Hanya L2, hanya mode Tim, dan hanya bila ada minimal 2 tim kerja.
+const tampilFilterTim = computed(
+    () =>
+        user.value.role_id === 3 &&
+        !isPribadiMode.value &&
+        opsiTimKerja.value.length > 2,
+);
+
+// Filter hanya benar-benar aktif bila dropdown-nya tampil.
+const filterTimAktif = computed(
+    () => tampilFilterTim.value && selectedTimKerja.value !== "",
+);
+
+const labelTimKerja = computed(
+    () =>
+        opsiTimKerja.value.find((o) => o.value === selectedTimKerja.value)
+            ?.label ?? "Semua Tim Kerja",
+);
+
+const cocokTim = (cuti) => {
+    if (!filterTimAktif.value) return true;
+    const t = normTim(cuti?.pegawai?.tim_kerja);
+    return selectedTimKerja.value === TIM_TANPA
+        ? t === ""
+        : t === selectedTimKerja.value;
+};
+
+// Reset bila tim terpilih sudah tidak ada di daftar opsi.
+watch(opsiTimKerja, (opsi) => {
+    if (!opsi.some((o) => o.value === selectedTimKerja.value)) {
+        selectedTimKerja.value = "";
+    }
+});
+
+const pilihTimKerja = (nilai) => {
+    selectedTimKerja.value = nilai;
+    dropdownTerbuka.value = null;
+};
+
 const tutupDropdownSaatKlikLuar = (event) => {
     if (filterRef.value && !filterRef.value.contains(event.target)) {
         dropdownTerbuka.value = null;
@@ -688,8 +759,9 @@ const chartData = computed(() => {
         sourceCuti = props.cutiDisetujuiPribadiChart || [];
         sourceChart = props.chartDataPribadi || [];
     } else {
-        sourceCuti = props.cutiDisetujuiChart || [];
-        sourceChart = props.chartDataBackend || [];
+        sourceCuti = (props.cutiDisetujuiChart || []).filter(cocokTim);
+        // Saat filter aktif, total dihitung dari cuti terfilter, bukan angka mentah controller.
+        sourceChart = filterTimAktif.value ? [] : props.chartDataBackend || [];
     }
 
     if (sourceCuti.length > 0) {
@@ -1087,6 +1159,17 @@ const nextWeek = () => {
 const detailModal = ref({ show: false, data: null });
 const showTeamModal = ref(false);
 const approvedModal = ref({ show: false });
+const suspendData = ref({ show: false, id: null, alasan: "" });
+
+const openDetailModal = (item) => {
+    detailModal.value.data = item;
+    detailModal.value.show = true;
+};
+
+const closeDetailModal = () => {
+    detailModal.value.show = false;
+    detailModal.value.data = null;
+};
 
 const getAlasanBersih = (text) => {
     if (!text || text === "-") return "-";
@@ -1109,225 +1192,6 @@ const getAlasanBersih = (text) => {
     return text;
 };
 
-const modeRevisi = ref(false);
-const formRevisi = ref({
-    tanggal_mulai: "",
-    tanggal_selesai: "",
-});
-
-const revisiError = ref("");
-
-const tahunTanpaSaldoRevisi = computed(() => {
-    if (!Array.isArray(props.tahun_saldo_tersedia)) return null;
-
-    const jenis = (
-        detailModal.value.data?.jenis_cuti || "Cuti Tahunan"
-    ).toLowerCase();
-    if (!jenis.includes("tahunan")) return null;
-
-    const { tanggal_mulai, tanggal_selesai } = formRevisi.value;
-    if (!tanggal_mulai || !tanggal_selesai) return null;
-    if (tanggal_mulai > tanggal_selesai) return null;
-
-    const awal = parseInt(tanggal_mulai.slice(0, 4), 10);
-    const akhir = parseInt(tanggal_selesai.slice(0, 4), 10);
-    if (isNaN(awal) || isNaN(akhir)) return null;
-
-    for (let t = awal; t <= akhir; t++) {
-        if (!props.tahun_saldo_tersedia.includes(t)) return t;
-    }
-    return null;
-});
-
-watch(
-    () => [
-        detailModal.value.show,
-        modeRevisi.value,
-        formRevisi.value.tanggal_mulai,
-        formRevisi.value.tanggal_selesai,
-    ],
-    () => {
-        revisiError.value = "";
-    },
-);
-
-const isStatusBisaDirevisi = (item) => {
-    return item?.bisa_direvisi === true;
-};
-
-const canRevisiCurrentItem = computed(() => {
-    const item = detailModal.value.data;
-    const currentUserId = user.value?.id;
-
-    return (
-        isStatusBisaDirevisi(item) &&
-        String(item?.pegawai_id) === String(currentUserId)
-    );
-});
-
-const openDetailModal = (item) => {
-    detailModal.value.data = item;
-    detailModal.value.show = true;
-    modeRevisi.value = false;
-    formRevisi.value.tanggal_mulai = "";
-    formRevisi.value.tanggal_selesai = "";
-};
-
-const openRevisiModal = (item) => {
-    detailModal.value.data = item;
-    detailModal.value.show = true;
-    modeRevisi.value = true;
-    formRevisi.value.tanggal_mulai = "";
-    formRevisi.value.tanggal_selesai = "";
-};
-
-const closeDetailModal = () => {
-    detailModal.value.show = false;
-    detailModal.value.data = null;
-    modeRevisi.value = false;
-    formRevisi.value.tanggal_mulai = "";
-    formRevisi.value.tanggal_selesai = "";
-};
-
-const activateRevisiMode = () => {
-    modeRevisi.value = true;
-};
-
-const cancelRevisiMode = () => {
-    modeRevisi.value = false;
-    formRevisi.value.tanggal_mulai = "";
-    formRevisi.value.tanggal_selesai = "";
-};
-
-const minDate = computed(() => toDateStr(new Date()));
-
-const MAKS_RENTANG_HARI = 92;
-
-const maxTanggalMulaiRevisi = computed(
-    () => `${new Date().getFullYear() + 1}-12-31`,
-);
-
-const maxTanggalSelesaiRevisi = computed(() => {
-    const batasGlobal = maxTanggalMulaiRevisi.value;
-    if (!formRevisi.value.tanggal_mulai) return batasGlobal;
-    const m = new Date(`${formRevisi.value.tanggal_mulai}T00:00:00`);
-    m.setDate(m.getDate() + (MAKS_RENTANG_HARI - 1));
-    const maxDariMulai = toDateStr(m);
-    return maxDariMulai < batasGlobal ? maxDariMulai : batasGlobal;
-});
-
-watch(
-    () => formRevisi.value.tanggal_mulai,
-    (val) => {
-        if (!val || !formRevisi.value.tanggal_selesai) return;
-        if (formRevisi.value.tanggal_selesai < val) {
-            formRevisi.value.tanggal_selesai = val;
-        } else if (
-            formRevisi.value.tanggal_selesai > maxTanggalSelesaiRevisi.value
-        ) {
-            formRevisi.value.tanggal_selesai = maxTanggalSelesaiRevisi.value;
-        }
-    },
-);
-
-const hariLiburSet = computed(
-    () => new Set((props.hariLiburs || []).map((hari) => hari.tanggal)),
-);
-
-const liburBertepatan = computed(() => {
-    if (!formRevisi.value.tanggal_mulai || !formRevisi.value.tanggal_selesai) {
-        return [];
-    }
-
-    const start = new Date(formRevisi.value.tanggal_mulai);
-    const end = new Date(formRevisi.value.tanggal_selesai);
-    if (start > end) return [];
-
-    const hasil = [];
-    const current = new Date(start);
-    while (current <= end) {
-        const tanggal = toDateStr(current);
-        const libur = (props.hariLiburs || []).find(
-            (hari) => hari.tanggal === tanggal,
-        );
-        if (libur) hasil.push(libur);
-        current.setDate(current.getDate() + 1);
-    }
-
-    return hasil;
-});
-
-const jumlahHariKerja = computed(() => {
-    if (!formRevisi.value.tanggal_mulai || !formRevisi.value.tanggal_selesai)
-        return 0;
-
-    let start = new Date(formRevisi.value.tanggal_mulai);
-    let end = new Date(formRevisi.value.tanggal_selesai);
-    if (start > end) return 0;
-
-    let count = 0;
-    let current = new Date(start);
-
-    while (current <= end) {
-        const day = current.getDay();
-        const tanggal = toDateStr(current);
-        if (day !== 0 && day !== 6 && !hariLiburSet.value.has(tanggal)) {
-            count++;
-        }
-        current.setDate(current.getDate() + 1);
-    }
-    return count;
-});
-
-const isInvalidWeekendOnly = computed(() => {
-    if (!formRevisi.value.tanggal_mulai || !formRevisi.value.tanggal_selesai)
-        return false;
-
-    let start = new Date(formRevisi.value.tanggal_mulai);
-    let end = new Date(formRevisi.value.tanggal_selesai);
-    if (start > end) return false;
-
-    let hasWeekday = false;
-    let current = new Date(start);
-
-    while (current <= end) {
-        const day = current.getDay();
-        const tanggal = toDateStr(current);
-        if (day !== 0 && day !== 6 && !hariLiburSet.value.has(tanggal)) {
-            hasWeekday = true;
-            break;
-        }
-        current.setDate(current.getDate() + 1);
-    }
-    return !hasWeekday;
-});
-
-const submitRevisi = () => {
-    if (isInvalidWeekendOnly.value || jumlahHariKerja.value === 0) return;
-    if (tahunTanpaSaldoRevisi.value !== null) return;
-    if (!detailModal.value.data?.id) return;
-
-    revisiError.value = "";
-
-    router.post(
-        route("karyawan.cuti.revisi", detailModal.value.data.id),
-        formRevisi.value,
-        {
-            preserveScroll: true,
-            onSuccess: () => {
-                closeDetailModal();
-            },
-            onError: (errors) => {
-                revisiError.value =
-                    errors.tanggal_mulai ||
-                    errors.tanggal_selesai ||
-                    "Revisi gagal diproses.";
-            },
-        },
-    );
-};
-
-const suspendData = ref({ show: false, id: null, alasan: "" });
 const openSuspendModal = (id) => {
     suspendData.value.id = id;
     suspendData.value.alasan = "";
@@ -1764,7 +1628,7 @@ const getCatatanAtasanList = (item) => {
                     <p
                         class="text-[10px] font-extrabold uppercase tracking-[0.2em] text-emerald-200"
                     >
-                        AgriLeave Digital
+                        SICA Digital 
                     </p>
                     <h1
                         class="mt-3 text-2xl font-black leading-tight text-white md:text-3xl"
@@ -2477,7 +2341,7 @@ const getCatatanAtasanList = (item) => {
                             @keydown.esc="dropdownTerbuka = null"
                             class="flex flex-nowrap items-center gap-2"
                             :class="
-                                tampilFilterKelompok
+                                tampilFilterKelompok || tampilFilterTim
                                     ? 'w-full sm:w-auto'
                                     : 'w-auto shrink-0'
                             "
@@ -2585,6 +2449,94 @@ const getCatatanAtasanList = (item) => {
                                             class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm cursor-pointer"
                                         >
                                             {{ namaKelompok(kelompok) }}
+                                        </button>
+                                    </li>
+                                </ul>
+                            </div>
+
+                            <!-- Filter Tim Kerja: khusus L2 (role 3), hanya untuk grafik & donut -->
+                            <div
+                                v-if="tampilFilterTim"
+                                class="relative flex-1 min-w-0 sm:flex-none sm:w-64"
+                            >
+                                <div
+                                    class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                                >
+                                    <svg
+                                        class="w-4 h-4 text-gray-400"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                                        />
+                                    </svg>
+                                </div>
+                                <button
+                                    id="filter-timkerja-dashboard"
+                                    type="button"
+                                    aria-label="Filter tim kerja"
+                                    aria-haspopup="listbox"
+                                    :aria-expanded="
+                                        dropdownTerbuka === 'timkerja'
+                                    "
+                                    :title="labelTimKerja"
+                                    @click="toggleDropdown('timkerja')"
+                                    class="w-full min-h-[40px] text-left text-sm border border-gray-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none rounded-lg shadow-sm text-gray-600 py-2 pl-8 pr-6 sm:pl-9 sm:pr-8 bg-white cursor-pointer"
+                                >
+                                    <span class="block truncate">{{
+                                        labelTimKerja
+                                    }}</span>
+                                </button>
+                                <span
+                                    class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                                >
+                                    <svg
+                                        class="w-3.5 h-3.5 text-gray-500 transition-transform"
+                                        :class="{
+                                            'rotate-180':
+                                                dropdownTerbuka === 'timkerja',
+                                        }"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M19 9l-7 7-7-7"
+                                        ></path>
+                                    </svg>
+                                </span>
+                                <ul
+                                    v-if="dropdownTerbuka === 'timkerja'"
+                                    role="listbox"
+                                    class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 min-w-[16rem] overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+                                >
+                                    <li
+                                        v-for="opsi in opsiTimKerja"
+                                        :key="opsi.value || 'semua'"
+                                    >
+                                        <button
+                                            type="button"
+                                            role="option"
+                                            :aria-selected="
+                                                selectedTimKerja === opsi.value
+                                            "
+                                            @click="pilihTimKerja(opsi.value)"
+                                            :class="
+                                                selectedTimKerja === opsi.value
+                                                    ? 'bg-emerald-50 text-emerald-700 font-semibold'
+                                                    : 'text-gray-700 hover:bg-gray-50'
+                                            "
+                                            class="block w-full whitespace-normal break-words leading-tight px-3 py-2 text-left text-sm cursor-pointer"
+                                        >
+                                            {{ opsi.label }}
                                         </button>
                                     </li>
                                 </ul>
@@ -2834,7 +2786,10 @@ const getCatatanAtasanList = (item) => {
                                 class="text-center text-[11px] font-medium text-slate-400 mt-2"
                             >
                                 Belum ada cuti yang disetujui pada tahun
-                                {{ selectedTahun }}.
+                                {{ selectedTahun
+                                }}<span v-if="filterTimAktif">
+                                    untuk {{ labelTimKerja }}</span
+                                >.
                             </p>
 
                             <div
@@ -3313,20 +3268,12 @@ const getCatatanAtasanList = (item) => {
                                 <h3
                                     class="text-base font-bold text-slate-900 leading-tight"
                                 >
-                                    {{
-                                        modeRevisi
-                                            ? "Revisi Tanggal Cuti"
-                                            : "Detail Cuti"
-                                    }}
+                                    Detail Cuti
                                 </h3>
                                 <p
                                     class="text-[11px] font-medium text-slate-500 mt-0.5"
                                 >
-                                    {{
-                                        modeRevisi
-                                            ? "Ajukan ulang tanggal cuti Anda."
-                                            : "Informasi lengkap status dan permohonan."
-                                    }}
+                                    Informasi lengkap status dan permohonan.
                                 </p>
                             </div>
                         </div>
@@ -3908,192 +3855,12 @@ const getCatatanAtasanList = (item) => {
                         </div>
                     </div>
 
-                    <div
-                        v-if="modeRevisi && canRevisiCurrentItem"
-                        class="p-3.5 bg-amber-50 border border-amber-200 rounded-xl space-y-3"
-                    >
-                        <h4
-                            class="text-xs font-extrabold text-amber-800 uppercase tracking-wider"
-                        >
-                            Form Pengajuan Ulang Tanggal Cuti
-                        </h4>
-                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                            <div>
-                                <label
-                                    for="tanggal-mulai-revisi"
-                                    class="block text-[10px] font-bold text-slate-600 mb-1"
-                                    >Tanggal Mulai Baru *</label
-                                >
-                                <input
-                                    id="tanggal-mulai-revisi"
-                                    name="tanggal_mulai"
-                                    type="date"
-                                    v-model="formRevisi.tanggal_mulai"
-                                    :min="minDate"
-                                    :max="maxTanggalMulaiRevisi"
-                                    class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
-                                />
-                                <p class="text-[10px] text-slate-400 mt-1">
-                                    Maks. 31 Des
-                                    {{ new Date().getFullYear() + 1 }}
-                                </p>
-                            </div>
-                            <div>
-                                <label
-                                    for="tanggal-selesai-revisi"
-                                    class="block text-[10px] font-bold text-slate-600 mb-1"
-                                    >Tanggal Selesai Baru *</label
-                                >
-                                <input
-                                    id="tanggal-selesai-revisi"
-                                    name="tanggal_selesai"
-                                    type="date"
-                                    v-model="formRevisi.tanggal_selesai"
-                                    :min="formRevisi.tanggal_mulai || minDate"
-                                    :max="maxTanggalSelesaiRevisi"
-                                    class="w-full min-h-[44px] px-2.5 py-1.5 border border-slate-200 rounded-lg text-base sm:text-sm focus:ring-amber-500 focus:border-amber-500"
-                                />
-                                <p class="text-[10px] text-slate-400 mt-1">
-                                    Rentang maks. {{ MAKS_RENTANG_HARI }} hari
-                                    kalender
-                                </p>
-                            </div>
-                        </div>
-                        <div
-                            v-if="liburBertepatan.length > 0"
-                            class="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-xl px-3.5 py-2.5"
-                        >
-                            <svg
-                                class="w-4 h-4 text-blue-500 mt-0.5 shrink-0"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                                ></path>
-                            </svg>
-                            <p class="text-xs text-blue-700 leading-relaxed">
-                                <span class="font-semibold"
-                                    >{{ liburBertepatan.length }} tanggal tidak
-                                    dihitung</span
-                                >
-                                karena bertepatan dengan hari libur:
-                                <span
-                                    v-for="(libur, idx) in liburBertepatan"
-                                    :key="libur.tanggal"
-                                >
-                                    <span class="font-semibold">{{
-                                        libur.keterangan
-                                    }}</span>
-                                    ({{
-                                        new Date(
-                                            libur.tanggal,
-                                        ).toLocaleDateString("id-ID", {
-                                            day: "2-digit",
-                                            month: "short",
-                                        })
-                                    }})<span
-                                        v-if="idx < liburBertepatan.length - 1"
-                                        >,
-                                    </span>
-                                </span>
-                            </p>
-                        </div>
-                        <div class="flex justify-between items-center text-xs">
-                            <span class="text-emerald-700 font-semibold"
-                                >Estimasi Hari Kerja:
-                                <strong
-                                    >{{ jumlahHariKerja }} Hari</strong
-                                ></span
-                            >
-                        </div>
-                        <p
-                            v-if="
-                                (detailModal.data?.jenis_cuti || 'Cuti Tahunan')
-                                    .toLowerCase()
-                                    .includes('tahunan')
-                            "
-                            class="text-xs text-amber-800 bg-amber-100 border border-amber-200 rounded-lg px-3 py-2"
-                        >
-                            Revisi Cuti Tahunan akan memotong saldo sesuai
-                            tanggal baru setelah disetujui.
-                        </p>
-                        <p
-                            v-else
-                            class="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
-                        >
-                            Jenis cuti ini tidak memotong saldo cuti tahunan.
-                        </p>
-                        <div
-                            v-if="tahunTanpaSaldoRevisi !== null"
-                            class="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-3.5 py-2.5"
-                        >
-                            <svg
-                                class="w-4 h-4 text-red-500 mt-0.5 shrink-0"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                                ></path>
-                            </svg>
-                            <p class="text-xs text-red-700 leading-relaxed">
-                                <span class="font-semibold"
-                                    >Saldo cuti tahun
-                                    {{ tahunTanpaSaldoRevisi }} belum
-                                    tersedia.</span
-                                >
-                                Cuti Tahunan untuk tahun tersebut baru bisa
-                                diajukan setelah Admin SDM membuat saldonya.
-                            </p>
-                        </div>
-                        <p
-                            v-if="revisiError"
-                            class="text-[11px] font-bold text-red-500"
-                        >
-                            {{ revisiError }}
-                        </p>
-                        <p
-                            v-if="isInvalidWeekendOnly"
-                            class="text-[11px] font-bold text-red-500"
-                        >
-                            *Tanggal yang dipilih tidak valid karena hanya
-                            mencakup hari libur (Sabtu/Minggu).
-                        </p>
-                    </div>
                 </div>
 
                 <div
-                    class="p-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center gap-3 flex-wrap"
+                    class="p-4 bg-slate-50 border-t border-slate-100 flex justify-end items-center gap-3 flex-wrap"
                     v-if="detailModal.data"
                 >
-                    <div>
-                        <button
-                            v-if="canRevisiCurrentItem && !modeRevisi"
-                            type="button"
-                            @click="activateRevisiMode"
-                            class="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition shadow-sm"
-                        >
-                            Revisi Tanggal
-                        </button>
-                        <button
-                            v-else-if="modeRevisi"
-                            type="button"
-                            @click="cancelRevisiMode"
-                            class="px-3.5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl text-xs font-bold transition"
-                        >
-                            Batal Revisi
-                        </button>
-                    </div>
-
                     <div
                         class="flex flex-wrap items-center gap-2 w-full sm:w-auto"
                     >
@@ -4105,22 +3872,8 @@ const getCatatanAtasanList = (item) => {
                             Tutup
                         </button>
 
-                        <button
-                            v-if="modeRevisi"
-                            type="button"
-                            @click="submitRevisi"
-                            :disabled="
-                                isInvalidWeekendOnly ||
-                                jumlahHariKerja === 0 ||
-                                tahunTanpaSaldoRevisi !== null
-                            "
-                            class="px-5 py-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-bold transition shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            Kirim Revisi
-                        </button>
-
                         <template
-                            v-else-if="
+                            v-if="
                                 (user.role_id === 2 &&
                                     detailModal.data.status ===
                                         'menunggu_l1') ||
@@ -4480,7 +4233,6 @@ const getCatatanAtasanList = (item) => {
                                 Total pengajuan disetujui:
                                 {{ cutiDisetujuiBulanIniList.length }} Pengajuan
                             </p>
-                            <!-- TAMBAHKAN DI SINI (setelah baris Total pengajuan) -->
                             <p class="text-[11px] text-slate-400 mt-0.5">
                                 {{ isAdminHR ? 'Semua cuti disetujui bulan ini.' : 'Hanya cuti yang Anda setujui sendiri.' }}
                                 </p>

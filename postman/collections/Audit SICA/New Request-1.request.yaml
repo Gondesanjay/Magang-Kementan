@@ -1,0 +1,33 @@
+$kind: http-request
+name: New Request
+url: "{{base}}/login"
+method: POST
+headers:
+  Accept: application/json
+body:
+  type: formdata
+  content:
+    - type: text
+      key: nip
+      value: "199004042015041004"
+      description: ""
+      disabled: false
+    - type: text
+      key: password
+      value: ikmal123
+      description: ""
+      disabled: false
+scripts:
+  - type: beforeRequest
+    code: "const xsrf = pm.cookies.get('XSRF-TOKEN');\r
+
+      if (xsrf) {\r
+
+      \  pm.request.headers.upsert({ key: 'X-XSRF-TOKEN', value: decodeURIComponent(xsrf) });\r
+
+      }"
+    language: text/javascript
+settings:
+  disabledSystemHeaders:
+    - accept
+order: 2000
