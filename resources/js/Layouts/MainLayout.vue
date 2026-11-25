@@ -678,7 +678,7 @@ const approvalMenuLabel = computed(() =>
                     >
                     <span
                         class="block text-[9px] text-slate-400 uppercase tracking-wider mt-0.5"
-                        >Kementerian Pertanian</span
+                        >Biro Perencanaan</span
                     >
                 </div>
                 <!-- Tombol tutup drawer (HP) -->

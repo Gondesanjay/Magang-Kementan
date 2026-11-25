@@ -17,28 +17,25 @@ use Carbon\Carbon;
  * Dashboard semua role.
  *
  * Ringkasan aturan:
- * - Saldo: PENGAMBILAN DATA di hitungSaldoPegawai(); rumus aritmetikanya
- *   (terpakai total, sisa hak, total tersedia) dipanggil dari
+ * - Saldo: data diambil di hitungSaldoPegawai(); rumus aritmetikanya dari
  *   RincianSaldo::hitungTotal(), satu sumber dengan Rekap Kuota Detail
  *   (Tgh tahun ini mengurangi sisa, Tgh tahun lalu dikembalikan).
- * - Chart, kalender, dan KPI memakai cuti yang BERIRISAN dengan tahun/bulan
+ * - Chart, kalender, dan KPI memakai cuti yang beririsan dengan tahun/bulan
  *   terpilih; cuti lintas tahun dipotong lewat potongCutiKeTahun().
  * - Anggota tim: lihat MODE_ATASAN_TERPISAH. Hanya pegawai aktif yang sudah
  *   terdaftar pada/sebelum akhir tahun berjalan.
  * - "Disetujui bulan ini" untuk atasan (role 2, 3, 4, 6) hanya cuti yang ia
  *   setujui sendiri; Admin HR melihat semua.
  * - Antrean (total_antrean) tidak difilter tanggal.
- * - Relasi approver dibatasi kolomnya agar remember_token/hash tidak bocor.
+ * - Kolom relasi approver dibatasi agar remember_token/hash tidak bocor.
  *
- * PERBAIKAN N+1 (jumlah query turun, hasil tampilan sama):
- * - Relasi 'pegawai' ikut di-eager load pada $withAtasanPribadi, sehingga
- *   RincianSaldo::lengkapi() dan attachNamaApproverL1L2KePegawai() tidak
- *   memuatnya satu per satu.
+ * Perbaikan N+1 (hasil tampilan sama):
+ * - Relasi 'pegawai' ikut di-eager load pada $withAtasanPribadi.
  * - Koleksi yang sama (mis. $recentCuti = $recentCutiPribadi untuk role 1)
- *   hanya diproses SEKALI, bukan dua kali.
- * - Semua daftar cuti DIGABUNG lalu diproses SEKALI oleh
+ *   hanya diproses sekali.
+ * - Semua daftar cuti digabung lalu diproses sekali oleh
  *   RincianSaldo::lengkapi() (4 query tetap) dan attachNamaApprover...()
- *   (maksimal 2 query lewat Pegawai::petaKetua()), bukan sekali per daftar.
+ *   (maksimal 2 query lewat Pegawai::petaKetua()).
  * - Tiga count() statistik pengajuan role 1 digabung jadi satu query.
  */
 class DashboardController extends Controller
@@ -53,23 +50,22 @@ class DashboardController extends Controller
     private const KOLOM_STATUS_PEGAWAI = 'status_aktif';
     private const STATUS_PENSIUN = 'Pensiun';
 
-    // Nilai status yang dianggap AKTIF (NULL juga dianggap aktif).
+    // Status AKTIF (NULL juga dianggap aktif).
     private const STATUS_AKTIF = 'Aktif';
 
-    // Kolom tanggal pegawai mulai terdaftar/masuk.
+    // Kolom tanggal pegawai mulai terdaftar.
     private const KOLOM_TANGGAL_MASUK = 'created_at';
 
-    // role_id pejabat L3 (Kasubag TU). Ikut tampil di tim milik L1 & L2
-    // (hanya pada MODE_ATASAN_TERPISAH = false).
+    // role_id pejabat L3 (Kasubag TU); ikut di tim L1 & L2 (mode false).
     private const ROLE_L3 = 4;
 
-    // Pegawai yang harus selalu ikut terhitung sebagai anggota tim (LIKE pada
-    // kolom nama). Tidak dipakai pada MODE_ATASAN_TERPISAH = true.
+    // Pegawai yang selalu ikut sebagai anggota tim (LIKE pada nama);
+    // tidak dipakai pada MODE_ATASAN_TERPISAH = true.
     private const ANGGOTA_TAMBAHAN_NAMA = [];
 
     /**
      * Jumlah hari cuti ditangguhkan (Tgh) dengan tahun asal $tahun.
-     * SUMBER SAMA dengan RekapKuotaDetailController::hitungKuota().
+     * Sumber sama dengan RekapKuotaDetailController::hitungKuota().
      */
     private function hitungTangguh(int $pegawaiId, int $tahun): int
     {
@@ -79,11 +75,9 @@ class DashboardController extends Controller
     }
 
     /**
-     * Tempat PENGAMBILAN DATA saldo dashboard (sama dengan Rekap Kuota Detail):
-     * bawaan = 12 jika sisa N-2 & N-1 sama-sama 12, selain itu min(6, sisa N-1).
-     * Rumus aritmetikanya ada di RincianSaldo::hitungTotal():
-     *   terpakai total = digunakan + Tgh tahun ini;
-     *   total tersedia = kuota + bawaan + dikembalikan (Tgh tahun lalu) - terpakai total.
+     * Pengambilan data saldo dashboard (sama dengan Rekap Kuota Detail).
+     * Bawaan = 12 jika sisa N-2 & N-1 sama-sama 12, selain itu min(6, sisa N-1).
+     * Rumus aritmetika ada di RincianSaldo::hitungTotal().
      */
     private function hitungSaldoPegawai(int $pegawaiId, int $tahun, ?SaldoCuti $saldo = null): array
     {
@@ -100,7 +94,7 @@ class DashboardController extends Controller
         // Tgh tahun berjalan: mengurangi Sisa & Total.
         $tangguh = $this->hitungTangguh($pegawaiId, $tahun);
 
-        // Tgh tahun LALU: dikembalikan ke saldo tahun ini.
+        // Tgh tahun lalu: dikembalikan ke saldo tahun ini.
         $dikembalikan = $this->hitungTangguh($pegawaiId, $tahun - 1);
 
         $bawaanEligible = SaldoCuti::hitungBawaan(
@@ -109,7 +103,6 @@ class DashboardController extends Controller
             $kuota
         );
 
-        // Rumus aritmetika dipusatkan di RincianSaldo::hitungTotal().
         $hasil = RincianSaldo::hitungTotal(
             (int) $kuota,
             (int) $bawaanEligible,
@@ -130,15 +123,15 @@ class DashboardController extends Controller
             'carry_forward_normal'          => $sisaTahunLalu,
             'sisa_cuti_dua_tahun_lalu'      => $sisaDuaTahunLalu,
             'saldo_bawaan_eligible'         => $bawaanEligible,
-            // Hanya cuti yang benar-benar digunakan (sudah termasuk koreksi Admin HR).
+            // Hanya cuti yang benar-benar digunakan (termasuk koreksi Admin HR).
             'cuti_terpakai'                 => $terpakai,
             'cuti_digunakan'                => $terpakai,
             // Digunakan + ditangguhkan: angka utama kartu "Cuti Terpakai".
             'cuti_terpakai_total'           => $terpakaiTotal,
             'cuti_ditangguhkan'             => $tangguh,
-            // Berasal dari penangguhan tahun lalu, masuk ke total tahun ini.
+            // Dari penangguhan tahun lalu, masuk ke total tahun ini.
             'cuti_dikembalikan'             => $dikembalikan,
-            // Hanya informasi: akan dikembalikan ke saldo tahun depan.
+            // Informasi: akan dikembalikan ke saldo tahun depan.
             'akan_dikembalikan_tahun_depan' => $tangguh,
             'total_cuti_tersedia'           => $totalTersedia,
             'saldo_tahunan'                 => [
@@ -150,9 +143,8 @@ class DashboardController extends Controller
     }
 
     /**
-     * Menempelkan info saldo cuti tahunan milik PEGAWAI PEMILIK PENGAJUAN
-     * (bukan Auth::user()) ke setiap item collection, agar modal detail
-     * menampilkan saldo yang benar.
+     * Menempelkan info saldo milik pegawai pemilik pengajuan (bukan
+     * Auth::user()) ke setiap item, agar modal detail menampilkan saldo yang benar.
      *
      * @param  iterable<int, mixed>  $collection
      */
@@ -162,12 +154,11 @@ class DashboardController extends Controller
     }
 
     /**
-     * Menempelkan nama atasan L1, L2, L3, L4 milik PEGAWAI PEMILIK PENGAJUAN
-     * ke $item->pegawai.
+     * Menempelkan nama atasan L1-L4 milik pegawai pemilik pengajuan ke
+     * $item->pegawai.
      *
-     * [N+1] L1 & L2 seluruh pegawai di daftar dimuat sekaligus lewat
-     * Pegawai::petaKetua() (maksimal 2 query), bukan lewat accessor
-     * ketua_tim_kerja / ketua_kelompok per pegawai. L3 & L4 dicari sekali.
+     * [N+1] L1 & L2 semua pegawai dimuat sekaligus lewat Pegawai::petaKetua()
+     * (maksimal 2 query); L3 & L4 dicari sekali.
      *
      * @param  iterable<int, mixed>  $collection
      */
@@ -220,7 +211,7 @@ class DashboardController extends Controller
         $akhirTahun  = Carbon::create($tahun, 12, 31)->endOfDay();
         $terpisah    = self::MODE_ATASAN_TERPISAH;
 
-        // Role yang dianggap "anggota tim" pada mode hierarki.
+        // Role "anggota tim" pada mode hierarki.
         //   L4 (6): L3 ke bawah | L3 (4): L2 ke bawah | L2 (3): L1 & L2
         //   Admin HR (5): L1-L3 (L3 & L4 tampil di bagian "Atasan")
         //   L1 (2) & lainnya: pegawai biasa
@@ -256,7 +247,7 @@ class DashboardController extends Controller
                     $q->orWhere('id', $user->id);
                 }
 
-                // Pejabat L3 ikut di tim milik L1 & L2 (mode false).
+                // Pejabat L3 ikut di tim L1 & L2 (mode false).
                 if (!$terpisah && !$kelompokSubstansiFilter && in_array($user->role_id, [2, 3], true)) {
                     $q->orWhere('role_id', self::ROLE_L3);
                 }
@@ -270,12 +261,12 @@ class DashboardController extends Controller
             })
             // Mode hierarki: akun sendiri tidak ikut.
             ->when($terpisah, fn($q) => $q->where('id', '!=', $user->id))
-            // Hanya pegawai AKTIF (NULL dianggap aktif).
+            // Hanya pegawai aktif (NULL dianggap aktif).
             ->where(function ($q) use ($kolomStatus) {
                 $q->whereNull($kolomStatus)
                     ->orWhere($kolomStatus, self::STATUS_AKTIF);
             })
-            // Sudah terdaftar pada/ sebelum akhir tahun berjalan.
+            // Terdaftar pada/sebelum akhir tahun berjalan.
             ->where(function ($q) use ($kolomMasuk, $akhirTahun) {
                 $q->whereNull($kolomMasuk)
                     ->orWhere($kolomMasuk, '<=', $akhirTahun);
@@ -331,8 +322,8 @@ class DashboardController extends Controller
 
     /**
      * Memotong cuti lintas tahun ke bagian yang jatuh di $tahun (salinan untuk
-     * chart saja, database tidak berubah). Hitungan hari kerja, atau hari
-     * kalender bila cuti aslinya dihitung kalender. Hasil 0 hari dibuang.
+     * chart, database tidak berubah). Dihitung hari kerja, atau hari kalender
+     * bila cuti aslinya dihitung kalender. Hasil 0 hari dibuang.
      *
      * @param  iterable<int, PengajuanCuti>  $daftarCuti
      */
@@ -388,7 +379,7 @@ class DashboardController extends Controller
                     return null;
                 }
 
-                // Salinan khusus chart (tidak menyentuh model asli / database).
+                // Salinan khusus chart (model asli & database tidak disentuh).
                 $salinan = clone $cuti;
                 $salinan->setAttribute('tanggal_mulai', $mulaiPotong->toDateString());
                 $salinan->setAttribute('tanggal_selesai', $selesaiPotong->toDateString());
@@ -406,22 +397,22 @@ class DashboardController extends Controller
         $user = Auth::user();
         $tahun = (int) date('Y');
 
-        // Rentang tahun & bulan berjalan untuk filter cuti yang BERIRISAN
-        // (cuti lintas tahun/bulan tetap terbaca di tahun/bulan berikutnya).
+        // Rentang tahun & bulan berjalan untuk cuti yang beririsan
+        // (cuti lintas tahun/bulan tetap terbaca di periode berikutnya).
         $awalTahunIni  = Carbon::create($tahun, 1, 1)->toDateString();
         $akhirTahunIni = Carbon::create($tahun, 12, 31)->toDateString();
         $awalBulanIni  = Carbon::create($tahun, (int) date('n'), 1)->startOfMonth()->toDateString();
         $akhirBulanIni = Carbon::create($tahun, (int) date('n'), 1)->endOfMonth()->toDateString();
 
-        // Tahun khusus CHART & DONUT (dropdown di dashboard). $tahun TIDAK
-        // diubah karena dipakai kartu saldo/kuota/statistik (selalu tahun berjalan).
+        // Tahun khusus chart & donut (dropdown dashboard). $tahun tidak diubah
+        // karena dipakai kartu saldo/kuota/statistik (selalu tahun berjalan).
         $tahunChart = (int) $request->query('tahun', $tahun);
         if ($tahunChart < $tahun - 2 || $tahunChart > $tahun + 1) {
             $tahunChart = $tahun;
         }
 
-        // Diinisialisasi di luar if/elseif supaya bisa dipakai query chart
-        // di bagian bawah (untuk role 1 nilainya tetap null).
+        // Diinisialisasi di luar if/elseif agar bisa dipakai query chart di
+        // bawah (untuk role 1 tetap null).
         $wilayahField = null;
         $wilayahValue = null;
 
@@ -448,8 +439,8 @@ class DashboardController extends Controller
             ->get();
 
         // Relasi atasan & approver: hanya kolom yang dibutuhkan UI.
-        // [N+1] 'pegawai' ikut di-eager load (dibaca oleh RincianSaldo::lengkapi()
-        // dan attachNamaApproverL1L2KePegawai()), sehingga tidak dimuat per item.
+        // [N+1] 'pegawai' ikut di-eager load (dibaca RincianSaldo::lengkapi()
+        // dan attachNamaApproverL1L2KePegawai()).
         $withAtasanPribadi = [
             'pegawai',
             'atasanL1:id,nama',
@@ -519,10 +510,8 @@ class DashboardController extends Controller
             // =====================================================================
         } elseif (in_array($user->role_id, [2, 3, 4, 5, 6])) {
 
-            // Granularitas wilayah:
-            //   L1 (role 2) → tim_kerja
-            //   L2 (role 3) → kelompok_substansi
-            //   L3/L4/HR    → tidak dibatasi
+            // Wilayah: L1 (role 2) tim_kerja, L2 (role 3) kelompok_substansi,
+            // L3/L4/HR tidak dibatasi.
             $wilayahField = null;
             $wilayahValue = null;
             if ($user->role_id === 2) {
@@ -541,7 +530,7 @@ class DashboardController extends Controller
             ][$user->role_id] ?? null;
 
             // --- Antrean ---
-            // TIDAK difilter tanggal: pengajuan boleh dibuat setelah tanggal cuti.
+            // Tidak difilter tanggal: pengajuan boleh dibuat setelah tanggal cuti.
             $antreanQuery = $targetStatus
                 ? PengajuanCuti::where('status', $targetStatus)
                 : PengajuanCuti::where('status', 'like', 'menunggu%');
@@ -566,11 +555,11 @@ class DashboardController extends Controller
                 $tahun
             )->get();
 
-            // Total dihitung dari daftar yang sama, jadi pasti cocok.
+            // Total dari daftar yang sama, jadi pasti cocok.
             $totalAnggota = $anggotaTim->count();
 
-            // ID anggota tim: dipakai agar KPI, kalender & daftar cuti selalu
-            // sama dengan isi popup Daftar Anggota Tim.
+            // ID anggota tim: KPI, kalender & daftar cuti selalu sama dengan
+            // popup Daftar Anggota Tim.
             $idAnggota = $anggotaTim->pluck('id')->all();
 
             // --- Saldo Atasan (role 2,3,4,6) ---
@@ -585,8 +574,8 @@ class DashboardController extends Controller
             $saldoStats = $this->hitungSaldoPegawai($user->id, $tahun, $saldoAtasan);
 
             // --- Cuti Disetujui BULAN INI (beririsan dengan bulan berjalan) ---
-            // Untuk atasan role 2, 3, 4, 6 hanya cuti yang DISETUJUI OLEH atasan
-            // yang sedang login. Admin HR (role 5) melihat semua.
+            // Atasan role 2, 3, 4, 6: hanya cuti yang ia setujui sendiri.
+            // Admin HR (role 5) melihat semua.
             $cutiDisetujuiBulanIni = PengajuanCuti::with($withAtasanTim)
                 ->whereIn('pegawai_id', $idAnggota)
                 ->when($user->role_id !== 5, function ($query) use ($user) {
@@ -626,9 +615,8 @@ class DashboardController extends Controller
                 ->take(5)
                 ->get();
 
-            // --- Cuti Disetujui TIM (tahun berjalan, BERIRISAN) ---
-            // Dipakai kalender "Ketersediaan Tim"; memakai daftar anggota yang
-            // sama dengan popup (whereIn).
+            // --- Cuti Disetujui TIM (tahun berjalan, beririsan) ---
+            // Untuk kalender "Ketersediaan Tim"; daftar anggota sama dengan popup.
             $allCutiDisetujui = PengajuanCuti::with($withAtasanTim)
                 ->whereIn('pegawai_id', $idAnggota)
                 ->where('status', 'disetujui')
@@ -644,7 +632,7 @@ class DashboardController extends Controller
                 ->whereDate('tanggal_selesai', '>=', Carbon::today())
                 ->get();
 
-            // --- Data cuti Pribadi untuk Atasan (role 2,3,4,6) ---
+            // --- Data cuti pribadi untuk atasan (role 2,3,4,6) ---
             if (in_array($user->role_id, [2, 3, 4, 6], true)) {
                 $cutiPribadiDisetujui = PengajuanCuti::with($withAtasanPribadi)
                     ->where('pegawai_id', $user->id)
@@ -662,9 +650,9 @@ class DashboardController extends Controller
         }
 
         // =====================================================================
-        // DATA CHART & DONUT — mengikuti tahun terpilih ($tahunChart)
-        // Cuti yang BERIRISAN dengan tahun terpilih, dipotong per tahun lewat
-        // potongCutiKeTahun() supaya cuti lintas tahun terbagi dengan benar.
+        // DATA CHART & DONUT: mengikuti tahun terpilih ($tahunChart)
+        // Cuti beririsan dengan tahun terpilih, dipotong lewat
+        // potongCutiKeTahun() agar cuti lintas tahun terbagi benar.
         // =====================================================================
         $awalTahunChart  = $tahunChart . '-01-01';
         $akhirTahunChart = $tahunChart . '-12-31';
@@ -680,8 +668,8 @@ class DashboardController extends Controller
             );
             $cutiChartTim = $cutiChartPribadi;
         } else {
-            // Akun pengguna sendiri selalu dikecualikan dari chart TIM (semua
-            // role); cuti pribadinya tampil di chart "Pribadi".
+            // Akun sendiri dikecualikan dari chart TIM (semua role); cuti
+            // pribadinya tampil di chart "Pribadi".
             $cutiChartTim = $this->potongCutiKeTahun(
                 PengajuanCuti::with('pegawai')
                     ->where('pegawai_id', '!=', $user->id)
@@ -736,10 +724,9 @@ class DashboardController extends Controller
             ->orderBy('kelompok_substansi')
             ->pluck('kelompok_substansi');
 
-        // [N+1] Kumpulkan daftar UNIK. Untuk role 1, $recentCuti dan
-        // $recentCutiPribadi adalah objek yang sama, begitu juga
-        // $allCutiDisetujui dan $cutiPribadiDisetujui, jadi tidak perlu
-        // diproses dua kali. Array kosong (belum terisi) dilewati.
+        // [N+1] Kumpulkan daftar unik. Untuk role 1, $recentCuti dan
+        // $recentCutiPribadi adalah objek yang sama (juga $allCutiDisetujui
+        // dan $cutiPribadiDisetujui). Array kosong dilewati.
         $daftarUnik = [];
         foreach ([$recentCuti, $recentCutiPribadi, $allCutiDisetujui, $cutiPribadiDisetujui, $timCutiHariIni, $cutiDisetujuiBulanIni] as $daftar) {
             if (is_object($daftar)) {
@@ -747,8 +734,8 @@ class DashboardController extends Controller
             }
         }
 
-        // [N+1] Semua daftar digabung, lalu diproses SEKALI (bukan sekali per
-        // daftar), supaya pegawai yang sama tidak dihitung ulang.
+        // [N+1] Semua daftar digabung lalu diproses sekali, agar pegawai yang
+        // sama tidak dihitung ulang.
         $semuaItem = collect($daftarUnik)->flatMap(fn($d) => $d->all())->values();
 
         $this->attachSaldoInfoKePegawai($semuaItem, $tahun);

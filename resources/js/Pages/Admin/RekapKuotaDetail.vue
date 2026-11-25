@@ -14,15 +14,10 @@ import MainLayout from "@/Layouts/MainLayout.vue";
 import SelAngka from "@/Components/SelAngka.vue";
 import { useTahunFilter } from "@/composables/useTahunFilter";
 
-// Tahun kalender sebenarnya (hari ini). Dipakai sebagai default filter tahun
-// dan sebagai batas tahun yang boleh digenerate (currentYear + 1).
+// Tahun kalender hari ini: default filter & batas generate (currentYear + 1).
 const currentYear = new Date().getFullYear();
 
-// Ikon pensil kecil untuk penanda kolom yang bisa diedit (dipakai di header
-// tabel, label kartu HP, dan legenda). Komponen fungsional supaya path SVG
-// tidak diulang di tiap tempat.
-// Hiasan saja (aria-hidden); artinya dijelaskan oleh legenda di bawah tabel
-// dan tooltip pada header.
+// Ikon pensil: penanda kolom yang bisa diedit (hiasan, aria-hidden).
 const IkonPensil = () =>
     h(
         "svg",
@@ -43,8 +38,7 @@ const IkonPensil = () =>
         ],
     );
 
-// [TERPAKAI DIKUNCI] Ikon gembok kecil untuk penanda kolom yang HANYA TAMPIL
-// (Cuti Terpakai). Angkanya diubah per bulan di Rekap Laporan.
+// [TERPAKAI DIKUNCI] Ikon gembok: kolom yang hanya tampil (Cuti Terpakai).
 const IkonGembok = () =>
     h(
         "svg",
@@ -65,10 +59,8 @@ const IkonGembok = () =>
         ],
     );
 
-// Tooltip untuk header kolom yang bisa diedit.
 const KETERANGAN_BISA_DIEDIT = "Kolom bisa diedit: klik angkanya";
 
-// [TERPAKAI DIKUNCI] Tooltip kolom Terpakai.
 const KETERANGAN_TERPAKAI_DIKUNCI =
     "Terpakai dikunci di halaman ini. Ubah per bulan di Rekap Laporan.";
 
@@ -87,14 +79,10 @@ const NAMA_BULAN_PENDEK = [
     "Des",
 ];
 
-/**
- * Hitung saldo bawaan eligible — selaras dengan Dashboard karyawan & Excel:
- * IF (sisa N-2 == 12 AND sisa N-1 == 12) → 12
- * else → MIN(6, sisa N-1)
- * [DIUBAH] Batas total 24 hari DINONAKTIFKAN: Bawaan tidak bergantung pada Hak
- * (selaras dengan SaldoCuti::TERAPKAN_BATAS_ATAS_TOTAL_HAK = false di backend).
- * Jika backend sudah kirim saldo_bawaan_eligible, pakai itu.
- */
+// Bawaan eligible (selaras Dashboard & Excel):
+// 12 jika sisa N-2 dan N-1 sama-sama 12, selain itu MIN(6, sisa N-1).
+// Tidak bergantung pada Hak (TERAPKAN_BATAS_ATAS_TOTAL_HAK = false di backend).
+// Pakai saldo_bawaan_eligible dari backend bila ada.
 const getSaldoBawaanEligible = (pegawai) => {
     if (pegawai?.saldo_bawaan_eligible != null) {
         return Number(pegawai.saldo_bawaan_eligible) || 0;
@@ -108,8 +96,7 @@ const getSaldoBawaanEligible = (pegawai) => {
 const getSisaDuaTahunLalu = (pegawai) =>
     Number(pegawai?.sisa_cuti_dua_tahun_lalu ?? 0);
 
-// Hak tahun berjalan adalah kuota awal dari database, bukan sisa setelah
-// dikurangi cuti yang sudah disetujui.
+// Hak tahun berjalan = kuota awal dari database (bukan sisa).
 const getSisaTahunIni = (pegawai) =>
     Number(pegawai?.kuota_tahunan ?? pegawai?.hak_tahun_ini ?? 0);
 
@@ -117,22 +104,12 @@ const getSisaTahunLalu = (pegawai) =>
     Number(pegawai?.carry_forward_normal ?? 0);
 
 // ================================================================
-// [TERPAKAI DIKUNCI] Cuti Terpakai HANYA TAMPIL di halaman ini.
-// Angkanya berasal dari backend ('cuti_terpakai') dan diubah per bulan di
-// Rekap Laporan (koreksi bulanan), supaya selalu jelas koreksinya jatuh di
-// bulan mana. Tidak ada lagi input Terpakai / tombol "kembalikan ke sistem"
-// di sini.
-//
-// Field dari backend:
-//   cuti_terpakai          : Terpakai efektif (belum termasuk Tgh tahun ini)
-//   cuti_terpakai_sistem   : hitungan murni sistem (riwayat disetujui)
-//   ada_koreksi            : ada koreksi (tahunan lama ATAU bulanan)
-//   ada_koreksi_bulanan    : ada koreksi bulanan dari Rekap Laporan
-//   koreksi_bulanan        : { bulan(1-12): nilai }
-//   koreksi_saldo          : koreksi tahunan LAMA (null = tidak ada), info saja
+// [TERPAKAI DIKUNCI] Cuti Terpakai hanya tampil di sini; diubah per bulan
+// di Rekap Laporan.
+// Field backend: cuti_terpakai (efektif, tanpa Tgh tahun ini),
+// cuti_terpakai_sistem (murni dari riwayat disetujui), ada_koreksi,
+// ada_koreksi_bulanan, koreksi_bulanan {bulan: nilai}, koreksi_saldo (lama).
 // ================================================================
-
-// Ada koreksi dari Admin HR atau tidak (bulanan atau tahunan lama).
 const adaKoreksi = (pegawai) => {
     if (pegawai?.ada_koreksi != null) return Boolean(pegawai.ada_koreksi);
     const k = pegawai?.koreksi_saldo;
@@ -149,30 +126,23 @@ const bulanDikoreksi = (pegawai) =>
         .sort((a, b) => a - b)
         .map((b) => NAMA_BULAN_PENDEK[b - 1]);
 
-// Angka cuti terpakai MURNI dari sistem (riwayat pengajuan disetujui),
-// dipakai untuk keterangan "Cuti terpakai dari sistem: X hari".
+// Cuti terpakai murni dari sistem (riwayat disetujui).
 const getTerpakaiSistem = (pegawai) =>
     Number(
         pegawai?.cuti_terpakai_sistem ?? pegawai?.cuti_terpakai_murni ?? 0,
     ) || 0;
 
 // ================================================================
-// Sisa ditangguhkan (Tgh) — tampil di tabel utama & modal Rincian.
-// Nilainya dihitung backend dari tabel cuti_ditangguhkans (SUM jumlah_hari
-// per tahun_asal).
-//
+// Sisa ditangguhkan (Tgh), dihitung backend dari cuti_ditangguhkans.
 // [ATURAN]
-//   - Tgh TAHUN YANG DILIHAT (N) adalah BAGIAN dari Terpakai N:
-//     Terpakai (tampil) = cuti terpakai + Tgh N. Angka Tgh tetap tampil
-//     sebagai catatan di kolom Tgh. Karena Tgh sudah ada di dalam Terpakai,
-//     Sisa N dan Saldo Akhir N TIDAK mengurangi Tgh lagi
-//     (Sisa N = Hak - Terpakai; Saldo Akhir = Total - Terpakai).
-//   - Tgh N-1 (tahun lalu) MENAMBAH Total Tersedia (aturan A, sama dengan
-//     backend RekapKuotaDetailController::TGH_MASUK_TOTAL = true):
+//   - Tgh N (tahun dilihat) tercatat di kolom Tgh dan sudah ada di Terpakai N
+//     (tampil = cuti terpakai + Tgh N), jadi Sisa N & Saldo Akhir tidak
+//     mengurangi Tgh lagi.
+//   - Tgh N-1 menambah Total Tersedia (backend TGH_MASUK_TOTAL = true):
 //     Total = Hak + Bawaan + Tgh N-1.
-//   - Tgh N-2 hanya CATATAN Admin HR (tidak memengaruhi saldo).
-// Admin HR boleh mengubah angkanya langsung di baris (klik angkanya);
-// backend menyesuaikan total lewat setTotalDitangguhkan().
+//   - Tgh N-2 hanya catatan Admin HR.
+// Admin HR bisa mengubah angkanya di baris; backend menyesuaikan lewat
+// setTotalDitangguhkan().
 // ================================================================
 const getSisaDitangguhkanN2 = (pegawai) =>
     Number(
@@ -188,7 +158,6 @@ const getSisaDitangguhkanN1 = (pegawai) =>
             0,
     );
 
-// Ditangguhkan pada tahun yang sedang dilihat (tahun_asal = tahun aktif).
 const getSisaDitangguhkanTahunIni = (pegawai) =>
     Number(pegawai?.sisa_ditangguhkan_tahun_ini ?? 0);
 
@@ -196,7 +165,7 @@ const getTotalTersedia = (pegawai) => {
     if (pegawai?.total_cuti_tersedia != null) {
         return Number(pegawai.total_cuti_tersedia) || 0;
     }
-    // Total Tersedia = Hak + Bawaan Eligible + Tgh tahun lalu (aturan A)
+    // Total = Hak + Bawaan Eligible + Tgh tahun lalu
     return (
         getSisaTahunIni(pegawai) +
         getSaldoBawaanEligible(pegawai) +
@@ -204,30 +173,23 @@ const getTotalTersedia = (pegawai) => {
     );
 };
 
-// Cuti Terpakai yang DITAMPILKAN = cuti terpakai dari backend
-// ('cuti_terpakai': sudah ikut koreksi bulanan Rekap Laporan) + Tgh tahun
-// ini. Sama dengan Dashboard karyawan (mis. 2 digunakan + 1 ditangguhkan = 3).
-// Nilai 'cuti_terpakai' dari backend TIDAK menyertakan Tgh.
-const getTerpakaiTampil = (pegawai) =>
-    Number(pegawai?.cuti_terpakai ?? 0) + getSisaDitangguhkanTahunIni(pegawai);
+// Terpakai tampil = 'cuti_terpakai' backend (sudah ikut koreksi bulanan).
+// Tgh tahun ini tidak ikut dihitung di sini.
+const getTerpakaiTampil = (pegawai) => Number(pegawai?.cuti_terpakai ?? 0);
 
-// Angka sistem (tanpa koreksi Admin) dalam bentuk TAMPIL: sistem + Tgh tahun ini.
-const getTerpakaiSistemTampil = (pegawai) =>
-    getTerpakaiSistem(pegawai) + getSisaDitangguhkanTahunIni(pegawai);
+// Angka sistem (tanpa koreksi Admin).
+const getTerpakaiSistemTampil = (pegawai) => getTerpakaiSistem(pegawai);
 
 const getSaldoAkhir = (pegawai) => {
     if (pegawai?.saldo_akhir != null) {
         return Number(pegawai.saldo_akhir) || 0;
     }
-    // Tgh tahun ini sudah termasuk di Terpakai (tampil), jadi tidak
-    // dikurangkan lagi: Saldo Akhir = Total - Terpakai (tampil).
+    // Saldo Akhir = Total - Terpakai
     return Math.max(0, getTotalTersedia(pegawai) - getTerpakaiTampil(pegawai));
 };
 
-// Sisa jatah tahun berjalan untuk KPI modal. Ini berbeda dari Total
-// Tersedia karena tidak memasukkan Saldo Bawaan Eligible maupun Tgh N-1.
-// Sisa = Hak - Terpakai (tampil, sudah termasuk Tgh tahun ini).
-// Angka final dari backend ('sisa_kuota_tahun_ini') dipakai bila tersedia.
+// Sisa jatah tahun berjalan (KPI modal) = Hak - Terpakai, tanpa bawaan dan
+// Tgh N-1. Pakai 'sisa_kuota_tahun_ini' dari backend bila ada.
 const getSisaTahunBerjalan = (pegawai) => {
     if (pegawai?.sisa_kuota_tahun_ini != null) {
         return Math.max(0, Number(pegawai.sisa_kuota_tahun_ini) || 0);
@@ -236,16 +198,12 @@ const getSisaTahunBerjalan = (pegawai) => {
     return Math.max(0, sisa);
 };
 
-// Teks tooltip untuk Tgh tahun lalu (N-1): menambah Total Tersedia.
 const KETERANGAN_TGH_N1 = "Tgh tahun lalu menambah Total Tersedia";
 
-// Teks tooltip untuk Tgh dua tahun lalu (N-2): hanya catatan.
 const KETERANGAN_TGH_N2 = "Catatan Admin HR (tidak memengaruhi saldo)";
 
-// Teks tooltip untuk angka hasil hitungan yang bisa diklik (sorot rumusnya).
 const KETERANGAN_KLIK_RUMUS = "Klik untuk menyorot kolom sumber rumusnya";
 
-// Menerima 'dataPegawai' (satu baris per pegawai), bukan 'pengajuan'
 const props = defineProps({
     dataPegawai: Object,
     filters: Object,
@@ -253,24 +211,18 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
-    // Daftar tahun yang bisa dipilih di Filter Tahun (dikirim backend).
-    // Kalau kosong, frontend memakai daftar standar dari composable
-    // useTahunFilter (Tahun Sekarang +1 / 0 / -1 / -2).
+    // Daftar tahun filter dari backend; kosong = pakai useTahunFilter.
     daftarTahun: {
         type: Array,
         default: () => [],
     },
-    // KPI ringkasan (Total Pegawai, Rata-rata Terpakai, Rata-rata Saldo
-    // Akhir, Akumulasi Penuh) — dikirim LANGSUNG dari backend
-    // (RekapKuotaDetailController::hitungKpi()), dihitung dari SELURUH
-    // data hasil filter, bukan hanya 10 baris di halaman aktif.
+    // KPI dari backend (hitungKpi()), dihitung dari SELURUH data hasil filter.
     kpi: {
         type: Object,
         default: () => ({}),
     },
     // true = semua pegawai aktif sudah punya dompet tahun depan
-    // (dikirim RekapKuotaDetailController::index()). Tombol Generate dikunci.
-    // Nilai ini mengacu ke tahun kalender depan (currentYear + 1).
+    // (currentYear + 1); tombol Generate dikunci.
     sudahGenerateTahunDepan: {
         type: Boolean,
         default: false,
@@ -282,25 +234,20 @@ const filterKelompok = ref(props.filters?.kelompok_substansi || "");
 
 // ================================================================
 // FILTER TAHUN
-// Default = tahun berjalan (atau tahun yang dikembalikan backend lewat
-// props.filters.tahun, misalnya setelah reload/pagination).
-//
-// 'tahunAktif' adalah SATU-SATUNYA sumber tahun untuk seluruh label di
-// halaman ini (header kolom, KPI modal, edit inline, tombol Generate, dll).
+// 'tahunAktif' adalah satu-satunya sumber tahun untuk semua label di halaman.
 // ================================================================
 const filterTahun = ref(Number(props.filters?.tahun) || currentYear);
 
 const tahunAktif = computed(() => Number(filterTahun.value) || currentYear);
 
-// [TERPAKAI DIKUNCI] Link ke Rekap Laporan, sudah terfilter ke pegawai &
-// tahun yang sedang dilihat, tempat Terpakai diubah per bulan.
+// [TERPAKAI DIKUNCI] Link ke Rekap Laporan (terfilter pegawai & tahun).
 const urlRekapLaporan = (pegawai) =>
     route("admin.rekap", {
         tahun: tahunAktif.value,
         search: pegawai?.nip || pegawai?.nama || undefined,
     });
 
-// Tooltip kotak Terpakai: keterangan kunci + bulan yang dikoreksi.
+// Tooltip Terpakai: keterangan kunci + bulan yang dikoreksi.
 const titleTerpakai = (pegawai) => {
     let teks = KETERANGAN_TERPAKAI_DIKUNCI;
     if (adaKoreksi(pegawai)) {
@@ -310,33 +257,27 @@ const titleTerpakai = (pegawai) => {
     return teks;
 };
 
-// Tgh tahun ini tetap tercatat dan menjadi bagian dari Terpakai.
 const KETERANGAN_TGH_TAHUN_INI = computed(
     () =>
-        `Cuti ${tahunAktif.value} yang ditangguhkan: tetap tercatat dan sudah termasuk dalam Terpakai ${tahunAktif.value}.`,
+        `Cuti ${tahunAktif.value} yang ditangguhkan: tidak mengurangi saldo ${tahunAktif.value}, dibawa ke ${tahunAktif.value + 1} dan menambah Total ${tahunAktif.value + 1}.`,
 );
 
-// Tooltip kolom "Sisa {tahun}" (kolom hitungan otomatis, tidak bisa diedit).
 const KETERANGAN_SISA_TAHUN_INI = computed(
     () =>
-        `Sisa jatah ${tahunAktif.value} = Hak − Terpakai (Terpakai sudah termasuk Tgh ${tahunAktif.value}; belum termasuk bawaan). Dihitung otomatis.`,
+        `Sisa jatah ${tahunAktif.value} = Hak − Terpakai (belum termasuk bawaan). Tgh ${tahunAktif.value} tidak mengurangi saldo. Dihitung otomatis.`,
 );
 
-// Tooltip Bawaan: aturannya bukan penjumlahan, jadi dijelaskan di sini
-// (bukan lewat panel) supaya sorotan warna tetap bersih.
+// Aturan Bawaan bukan penjumlahan, jadi dijelaskan lewat tooltip.
 const KETERANGAN_BAWAAN = computed(
     () =>
         `Bawaan = yang lebih kecil antara 6 dan Sisa ${tahunAktif.value - 1}. Bila Sisa ${tahunAktif.value - 2} dan Sisa ${tahunAktif.value - 1} sama-sama 12, bawaan 12. Klik untuk menyorot sumbernya.`,
 );
 
-// Daftar tahun standar dari composable (satu sumber logika untuk semua
-// halaman). Default: tahun berjalan +1 sampai -2
-// (di 2026: 2027, 2026, 2025, 2024).
+// Daftar tahun standar (tahun berjalan +1 sampai -2).
 const daftarTahunDefault = useTahunFilter();
 
-// Daftar opsi tahun (urut terbaru -> terlama). Memakai props.daftarTahun
-// bila backend mengirimnya; bila tidak, memakai daftarTahunDefault.
-// Tahun yang sedang aktif selalu dijamin ada di daftar.
+// Opsi tahun (terbaru -> terlama): props.daftarTahun atau default;
+// tahun aktif selalu ada.
 const daftarTahunPilihan = computed(() => {
     const dariBackend = (props.daftarTahun || [])
         .map((t) => Number(t))
@@ -348,8 +289,7 @@ const daftarTahunPilihan = computed(() => {
     return [...new Set([...daftar, tahunAktif.value])].sort((a, b) => b - a);
 });
 
-// URL Export Excel — ikut mengekspor data sesuai tahun (dan filter
-// pencarian/kelompok substansi) yang sedang aktif.
+// URL Export Excel mengikuti tahun & filter aktif.
 const exportUrl = computed(() =>
     route("admin.monitoring.export", {
         tahun: tahunAktif.value,
@@ -359,17 +299,14 @@ const exportUrl = computed(() =>
 );
 
 // ================================================================
-// KPI Cards ringkasan — DIAMBIL LANGSUNG dari prop 'kpi' backend,
-// supaya nilainya mencerminkan SELURUH data hasil filter.
+// KPI Cards: langsung dari prop 'kpi' (seluruh data hasil filter).
 // ================================================================
 const daftarPegawaiHalamanIni = computed(() => props.dataPegawai?.data || []);
 
-// Ada baris data di halaman ini? Dipakai untuk memilih tampilan
-// tabel / kartu mobile / state kosong.
+// Ada baris data di halaman ini? (pilih tabel / kartu / state kosong)
 const punyaData = computed(() => daftarPegawaiHalamanIni.value.length > 0);
 
-// Nama kelompok substansi untuk tampilan. Nilai kosong atau "-" dari
-// backend memakai fallback "Biro Perencanaan".
+// Kelompok substansi; kosong atau "-" memakai "Biro Perencanaan".
 const getKelompok = (pegawai) => {
     const k = (pegawai?.kelompok_substansi ?? "").toString().trim();
     return k === "" || k === "-" ? "Biro Perencanaan" : k;
@@ -389,31 +326,20 @@ const kpiAkumulasiPenuh = computed(() => props.kpi?.akumulasi_penuh ?? 0);
 // ========================================== //
 // ---> FITUR: EDIT SALDO INLINE (KLIK ANGKA) <---
 // ========================================== //
-// Klik salah satu angka yang boleh diedit (Sisa N-2, Tgh N-2, Sisa N-1,
-// Tgh N-1, Tgh N, Hak) -> SEMUA kapsul editable di baris itu berubah jadi
-// input seukuran kapsul (baris tidak melebar), fokus ke angka yang diklik.
-// Hanya SATU baris yang boleh diedit pada satu waktu ('editingId').
-// Isian sejajar dengan sheet "Saldo Tahunan" Excel:
-//   - hak           -> hak_tahun_ini            (Hak {tahun})
-//   - sisa_n1       -> carry_forward_normal     (Sisa {tahun-1})
-//   - sisa_n2       -> sisa_cuti_dua_tahun_lalu (Sisa {tahun-2})
-//   - tgh_n2/n1/n0  -> sisa_ditangguhkan_*      (N-2 hanya catatan; N-1
-//                                                menambah Total; N sudah
-//                                                termasuk di Terpakai)
-// Bawaan Eligible, Sisa {tahun}, Total Tersedia, Terpakai & Saldo Akhir
-// dihitung otomatis (pratinjau langsung saat mengetik; angka final tetap
-// dari backend).
-//
-// [TERPAKAI DIKUNCI] Terpakai TIDAK bisa diedit di sini. Admin HR mengubahnya
-// per bulan di Rekap Laporan. Mengubah Tgh tahun ini tetap menggeser angka
-// Terpakai yang tampil (Terpakai = cuti terpakai + Tgh tahun ini).
-//
-// Enter = Simpan, Esc = Batal.
+// Klik angka yang bisa diedit (Sisa N-2, Tgh N-2, Sisa N-1, Tgh N-1, Tgh N,
+// Hak): semua kapsul editable di baris itu jadi input, fokus ke yang diklik.
+// Hanya SATU baris diedit pada satu waktu ('editingId'). Enter = Simpan,
+// Esc = Batal.
+// Peta isian (sejajar sheet "Saldo Tahunan"):
+//   hak -> hak_tahun_ini, sisa_n1 -> carry_forward_normal,
+//   sisa_n2 -> sisa_cuti_dua_tahun_lalu, tgh_n2/n1/n0 -> sisa_ditangguhkan_*
+// Bawaan, Sisa N, Total, Terpakai & Saldo Akhir dihitung otomatis (pratinjau
+// saat mengetik; angka final dari backend).
+// [TERPAKAI DIKUNCI] Terpakai tidak bisa diedit di sini, tapi mengubah Tgh
+// tahun ini tetap menggeser angka Terpakai yang tampil.
 const editingId = ref(null);
 
-// useForm hanya dipakai untuk processing, errors, dan kirim PUT.
-// Isian disimpan di 'draft' (reactive biasa) supaya tidak bergantung pada
-// perilaku defaults()/isDirty milik useForm.
+// useForm hanya untuk processing, errors, dan PUT; isian ada di 'draft'.
 const saldoForm = useForm({});
 
 const draft = reactive({
@@ -425,36 +351,35 @@ const draft = reactive({
     hak: 0,
 });
 const snapshotDraft = ref("");
-// true = admin mengetik sendiri kotak Sisa tahun lalu (tidak ikut Tgh).
+// true = admin mengetik sendiri kotak Sisa tahun lalu.
 const sisaN1Manual = ref(false);
 const isDirty = computed(() => JSON.stringify(draft) !== snapshotDraft.value);
 
-// Ubah isian (bisa '' saat dikosongkan) jadi angka bulat >= 0.
+// Isian (bisa '') jadi angka bulat >= 0.
 const angka = (v) => Math.max(0, Number(v) || 0);
 
 const isSavingSaldo = computed(() => saldoForm.processing);
 
-// Pesan sukses singkat di atas halaman setelah Simpan Saldo.
+// Pesan sukses singkat setelah Simpan Saldo.
 const pesanSukses = ref("");
 let timerPesanSukses = null;
 
 const isEditing = (pegawai) =>
     editingId.value !== null && editingId.value === pegawai?.id;
 
-// Data pegawai (dari props terbaru) yang sedang diedit.
 const pegawaiEdit = computed(
     () =>
         daftarPegawaiHalamanIni.value.find((p) => p.id === editingId.value) ??
         null,
 );
 
-// Semua pesan error validasi backend untuk baris yang sedang diedit.
+// Semua pesan error validasi backend untuk baris yang diedit.
 const daftarErrorEdit = computed(() =>
     Object.values(saldoForm.errors || {}).filter(Boolean),
 );
 
-// Pratinjau hitungan saat mengetik. Rumus SAMA dengan getSaldoBawaanEligible
-// & SaldoCuti::hitungBawaan di backend. Angka final tetap dari backend.
+// Pratinjau hitungan saat mengetik (rumus sama dengan getSaldoBawaanEligible
+// & SaldoCuti::hitungBawaan). Angka final tetap dari backend.
 const previewEdit = computed(() => {
     const p = pegawaiEdit.value;
     if (!p) return null;
@@ -462,20 +387,26 @@ const previewEdit = computed(() => {
     const hak = angka(draft.hak);
     const tghN1 = angka(draft.tgh_n1);
     const n2 = angka(draft.sisa_n2);
-    // Tgh tahun ini sudah termasuk di Terpakai (tampil).
-    const tghTahunIni = angka(draft.tgh_n0);
-
-    // draft.sisa_n1 sudah ikut Tgh tahun lalu lewat watch di atas.
     const n1 = angka(draft.sisa_n1);
 
     const normal = n2 === 12 && n1 === 12 ? 12 : Math.min(6, n1);
-    // [DIUBAH] Batas 24 dinonaktifkan: Bawaan tidak bergantung pada Hak
-    // (selaras dengan SaldoCuti::TERAPKAN_BATAS_ATAS_TOTAL_HAK = false).
+    // Bawaan tidak bergantung pada Hak (batas 24 dinonaktifkan).
     const bawaan = Math.max(0, normal);
-    // Terpakai (dikunci) dari backend + Tgh tahun ini hasil ketikan.
-    const terpakai = (Number(p.cuti_terpakai) || 0) + tghTahunIni;
-    // Tgh N-1 menambah Total Tersedia (sama dengan backend). Tgh N-2 hanya
-    // catatan, jadi tidak masuk.
+    // Terpakai (dikunci) dikurangi perubahan Tgh tahun ini: Tgh naik = cuti
+    // dikembalikan (Terpakai turun). Tgh manual dikurangi lebih dulu saat
+    // diturunkan, sama dengan backend (setTotalDitangguhkan).
+    const tghLama = getSisaDitangguhkanTahunIni(p);
+    const manualLama = Number(p.tgh_manual_tahun_ini) || 0;
+    const selisihTgh = angka(draft.tgh_n0) - tghLama;
+    const manualBaru =
+        selisihTgh >= 0
+            ? manualLama + selisihTgh
+            : Math.max(0, manualLama + selisihTgh);
+    const terpakai = Math.max(
+        0,
+        (Number(p.cuti_terpakai) || 0) + manualLama - manualBaru,
+    );
+    // Tgh N-1 menambah Total; Tgh N-2 hanya catatan.
     const total = hak + bawaan + tghN1;
 
     return {
@@ -483,13 +414,13 @@ const previewEdit = computed(() => {
         bawaan,
         total,
         terpakai,
-        // Tgh tahun ini sudah ada di dalam 'terpakai', jangan dikurangkan lagi.
+        // Tgh tahun ini sudah ada di 'terpakai'.
         saldoAkhir: Math.max(0, total - terpakai),
     };
 });
 
-// Nilai yang ditampilkan: pratinjau saat baris sedang diedit, angka
-// backend saat tidak. Dipakai tabel DAN kartu supaya satu sumber logika.
+// Nilai tampil: pratinjau saat diedit, angka backend saat tidak
+// (dipakai tabel dan kartu).
 const nilaiSisaN2 = (p) =>
     isEditing(p) ? angka(draft.sisa_n2) : getSisaDuaTahunLalu(p);
 const nilaiSisaN1 = (p) =>
@@ -511,7 +442,6 @@ const nilaiTotal = (p) =>
     isEditing(p) && previewEdit.value
         ? previewEdit.value.total
         : getTotalTersedia(p);
-// Terpakai tampil = cuti terpakai + Tgh tahun ini.
 const nilaiTerpakai = (p) =>
     isEditing(p) && previewEdit.value
         ? previewEdit.value.terpakai
@@ -521,48 +451,29 @@ const nilaiSaldoAkhir = (p) =>
         ? previewEdit.value.saldoAkhir
         : getSaldoAkhir(p);
 
-// Sisa jatah tahun berjalan = Hak - Terpakai (belum termasuk bawaan).
-// Terpakai sudah memuat Tgh tahun ini, jadi Tgh tidak dikurangkan lagi.
-// Kolom hitungan otomatis (tidak bisa diedit). Memakai nilaiHak() dan
-// nilaiTerpakai(), jadi ikut berubah langsung saat baris sedang diedit.
+// Sisa tahun berjalan = Hak - Terpakai (hitungan otomatis, ikut pratinjau).
 const nilaiSisaTahunIni = (p) => Math.max(0, nilaiHak(p) - nilaiTerpakai(p));
 
 // ================================================================
 // FITUR: SOROT RUMUS DENGAN WARNA (KLIK ANGKA HASIL)
-// Kolom hasil hitungan (Sisa N, Bawaan, Total, Terpakai, Saldo Akhir)
-// masing-masing punya WARNA sendiri. Klik angka hasil di satu baris:
+// Klik angka hasil (Sisa N, Bawaan, Total, Terpakai, Saldo Akhir):
 //   - angka yang diklik terisi penuh dengan warnanya,
-//   - kolom sumber rumusnya terisi warna yang SAMA (lebih muda) dan diberi
-//     tanda + / − di atasnya,
-//   - kolom lain di baris itu meredup,
-//   - header kolom sumber ikut diberi warna.
-// Tidak ada panel penjelasan; cukup lewat warna. Aturan Bawaan (bukan
-// penjumlahan) dijelaskan lewat tooltip.
-//
-// Rumus (sesuai catatan Admin HR):
-//   1. Sisa N        = Hak N − Terpakai N
-//   2. Bawaan N      = min(6, Sisa N-1), atau 12 bila Sisa N-2 dan N-1
-//                      sama-sama 12 (lihat getSaldoBawaanEligible)
-//   3. Total N       = Tgh N-1 + Bawaan N + Hak N
-//   4. Saldo Akhir N = Total N − Terpakai N
-//   5. Terpakai N    = cuti terpakai (dikunci) + Tgh N
-// [TERPAKAI DIKUNCI] Klik angka Terpakai sekarang menyorot sumbernya
-// (Tgh tahun ini), bukan masuk mode edit.
-//
-// Hanya SATU baris yang disorot pada satu waktu.
-// SOROTAN TETAP MENYALA selama baris itu diedit, jadi admin bisa menyorot
-// Sisa N, lalu mengklik Hak untuk mengubahnya sambil melihat pratinjau.
-// Sorotan ditutup oleh: Simpan berhasil, Batal, Esc, klik di luar area
-// baris/rumus, pindah ke baris lain, atau klik angka yang sama lagi.
-//
-// Klik angka hasil juga MELEPAS seleksi kotak input sebelumnya
-// ('fokusEdit' = null), jadi cincin oranye / lencana Δ dari kotak yang
-// tadi difokus tidak ikut menempel.
+//   - kolom sumber terisi warna yang sama (lebih muda) + tanda + / −,
+//   - kolom lain meredup, header kolom sumber ikut berwarna.
+// Rumus:
+//   Sisa N        = Hak N − Terpakai N
+//   Bawaan N      = min(6, Sisa N-1), atau 12 bila Sisa N-2 & N-1 sama-sama 12
+//   Total N       = Tgh N-1 + Bawaan N + Hak N
+//   Saldo Akhir N = Total N − Terpakai N
+//   Terpakai N    = cuti terpakai (dikunci) + Tgh N
+// Hanya SATU baris disorot; sorotan tetap menyala saat baris diedit.
+// Ditutup oleh: Simpan berhasil, Batal, Esc, klik di luar, pindah baris,
+// atau klik angka yang sama lagi. Klik angka hasil juga melepas seleksi
+// kotak input ('fokusEdit' = null).
 // ================================================================
 const rumusAktif = ref(null); // { id, kolom: 'sisa'|'bawaan'|'total'|'terpakai'|'saldo' }
 
 const toggleRumus = (p, kolom) => {
-    // Pindah ke kolom lain: seleksi (sorot dampak) kotak sebelumnya dilepas.
     fokusEdit.value = null;
 
     const a = rumusAktif.value;
@@ -573,7 +484,7 @@ const toggleRumus = (p, kolom) => {
 const rumusDibuka = (p, kolom) =>
     rumusAktif.value?.id === p.id && rumusAktif.value?.kolom === kolom;
 
-// Kolom sumber (kunci sel) untuk tiap hasil hitungan.
+// Kolom sumber (kunci sel) tiap hasil hitungan.
 const SUMBER_RUMUS = {
     sisa: ["hak", "terpakai"],
     bawaan: ["sisa_n2", "sisa_n1"],
@@ -582,7 +493,7 @@ const SUMBER_RUMUS = {
     saldo: ["total", "terpakai"],
 };
 
-// Kunci sel untuk angka hasil yang diklik (target).
+// Kunci sel angka hasil yang diklik (target).
 const KUNCI_TARGET_RUMUS = {
     sisa: "sisa_n0",
     bawaan: "bawaan",
@@ -591,12 +502,8 @@ const KUNCI_TARGET_RUMUS = {
     saldo: "saldo",
 };
 
-// Warna per hasil hitungan. Ditulis literal supaya terbaca Tailwind.
-//   dasar       = warna kolom saat tidak disorot
-//   pilih       = kolom yang diklik (terisi penuh)
-//   sumber      = kolom yang masuk rumus (warna kolom yang diklik)
-//   lencana     = bulatan tanda + / −
-//   header      = warna header kolom sumber; headerPilih = header kolom target
+// Warna per hasil (literal supaya terbaca Tailwind): dasar, pilih (diklik),
+// sumber (masuk rumus), lencana (bulatan + / −), header, headerPilih.
 const WARNA_HASIL = {
     sisa: {
         dasar: "bg-sky-100 text-sky-800 border-sky-300/80",
@@ -640,41 +547,32 @@ const WARNA_HASIL = {
     },
 };
 
-// Kolom input (Sisa N-2, Sisa N-1, Tgh, Hak) TIDAK berwarna: putih netral.
-// Warnanya baru muncul sebagai kolom sumber saat ada rumus yang disorot.
+// Kolom input berwarna putih netral; baru berwarna saat jadi kolom sumber.
 const KELAS_INPUT_NETRAL = "bg-white text-slate-700 border-slate-300";
 
-// Tanda operasi di atas kolom sumber. Bawaan sengaja kosong karena
-// aturannya bukan penjumlahan (dijelaskan lewat tooltip).
+// Tanda operasi di atas kolom sumber (Bawaan kosong: bukan penjumlahan).
 const OPERATOR_SUMBER = {
     sisa: { hak: "+", terpakai: "−" },
     total: { tgh_n1: "+", bawaan: "+", hak: "+" },
-    terpakai: { tgh_n0: "+" },
     saldo: { total: "+", terpakai: "−" },
+    terpakai: { tgh_n0: "−" },
 };
 
 // ================================================================
-// FITUR: SOROT DAMPAK EDIT (ARAH KEBALIKAN DARI SOROT RUMUS)
-// Sorot rumus menjawab "angka ini dihitung dari kolom mana?". Fitur ini
-// menjawab pertanyaan yang muncul saat admin klik edit: "kalau saya ubah
-// kolom ini, kolom mana yang ikut berubah?".
+// FITUR: SOROT DAMPAK EDIT (kebalikan sorot rumus)
+// Menjawab "kalau kolom ini diubah, kolom mana yang ikut berubah?".
+// Saat satu kotak input difokus ('fokusEdit'): kotak itu tetap normal,
+// kolom terdampak diberi cincin ORANYE + lencana "Δ" + header oranye,
+// kolom tidak terkait meredup. Fokus dilacak lewat 'focusin' pada
+// data-edit-field. Berjalan bersamaan dengan sorot rumus.
 //
-// Saat baris diedit dan satu kotak input sedang difokus ('fokusEdit'):
-//   - kotak yang difokus tetap normal,
-//   - kolom yang ikut berubah diberi cincin ORANYE + lencana "Δ", header-nya
-//     berwarna oranye, dan tidak diredupkan,
-//   - kolom yang tidak terkait meredup.
-//
-// Fokus dilacak lewat 'focusin' pada atribut data-edit-field. Fitur ini
-// BERJALAN BERSAMAAN dengan sorot rumus.
-//
-// PETA DAMPAK (harus selaras dengan rumus di atas dan previewEdit):
+// PETA DAMPAK (harus selaras dengan rumus & previewEdit; ubah juga bila
+// rumus backend/previewEdit berubah):
 //   Sisa N-2 / Sisa N-1 -> Bawaan -> Total -> Saldo Akhir
-//   Tgh N-1             -> Total -> Saldo Akhir (+ Sisa N-1 & Bawaan bila dompet tahun lalu asli)
+//   Tgh N-1             -> Total -> Saldo Akhir
 //   Hak                 -> Sisa N, Total -> Saldo Akhir
-//   Tgh N               -> Terpakai -> Sisa N, Saldo Akhir
-//   Tgh N-2             -> (hanya catatan, tidak memengaruhi kolom lain)
-// Kalau rumus di backend/previewEdit berubah, UBAH PETA INI JUGA.
+//   Tgh N               -> Terpakai (turun) -> Sisa N, Saldo Akhir
+//   Tgh N-2             -> hanya catatan
 // ================================================================
 const DAMPAK_EDIT = {
     sisa_n2: ["bawaan", "total", "saldo"],
@@ -685,34 +583,23 @@ const DAMPAK_EDIT = {
     hak: ["sisa_n0", "total", "saldo"],
 };
 
-// Peta dampak bisa bergantung pada pegawai: mengubah Tgh tahun lalu juga
-// mengubah Sisa tahun lalu (dan Bawaan) bila dompet tahun lalu asli.
-const dampakEdit = (p, field) => {
-    const dasar = DAMPAK_EDIT[field] ?? [];
-    if (field === "tgh_n1" && p?.dompet_tahun_lalu_asli) {
-        return ["sisa_n1", "bawaan", ...dasar];
-    }
-    return dasar;
-};
+const dampakEdit = (p, field) => DAMPAK_EDIT[field] ?? [];
 
-// Cincin oranye untuk kolom yang terdampak (literal supaya terbaca Tailwind).
+// Cincin oranye kolom terdampak (literal supaya terbaca Tailwind).
 const KELAS_DAMPAK = "ring-2 ring-offset-1 ring-orange-400";
 
-// Nama field draft yang sedang difokus pada baris yang diedit.
+// Field draft yang sedang difokus pada baris yang diedit.
 const fokusEdit = ref(null);
 
-// 'fokus' | 'dampak' | 'redup' | null untuk satu sel di baris pegawai p.
+// 'fokus' | 'dampak' | 'redup' | null untuk satu sel di baris p.
 const statusDampak = (p, key) => {
     if (!isEditing(p) || !fokusEdit.value) return null;
     if (key === fokusEdit.value) return "fokus";
     return dampakEdit(p, fokusEdit.value).includes(key) ? "dampak" : "redup";
 };
 
-// Lacak kotak input yang sedang difokus (tabel & kartu HP memakai atribut
-// data-edit-field yang sama).
-// Setiap kali kotak input berpindah fokus (klik atau Tab), seleksi lama
-// DITUTUP dan hanya kotak baru yang aktif: sorotan dampak pindah ke kotak
-// yang baru difokus, sorotan rumus sebelumnya ditutup.
+// Lacak kotak input yang difokus (tabel & kartu pakai data-edit-field).
+// Pindah fokus = sorotan dampak pindah, sorotan rumus ditutup.
 const lacakFokusEdit = (e) => {
     if (editingId.value === null) return;
     const field = e.target?.getAttribute?.("data-edit-field");
@@ -721,13 +608,13 @@ const lacakFokusEdit = (e) => {
     rumusAktif.value = null;
 };
 
-// Keluar dari mode edit = sorotan dampak ikut hilang.
+// Keluar dari mode edit = sorotan dampak hilang.
 watch(editingId, (id) => {
     if (id === null) fokusEdit.value = null;
 });
 // ================= END FITUR SOROT DAMPAK EDIT =================
 
-// 'pilih' | 'sumber' | 'redup' | null untuk satu sel di baris pegawai p.
+// 'pilih' | 'sumber' | 'redup' | null untuk satu sel di baris p.
 const statusSel = (p, key) => {
     const a = rumusAktif.value;
     if (!a || a.id !== p.id) return null;
@@ -736,9 +623,8 @@ const statusSel = (p, key) => {
     return "redup";
 };
 
-// Warna sel: warna target/sumber kalau sedang disorot, kalau tidak warna dasarnya.
-// Kolom yang terdampak edit (dan tidak sedang menjadi target/sumber rumus)
-// diberi cincin oranye.
+// Warna sel: target/sumber bila disorot, cincin oranye bila terdampak edit,
+// selain itu warna dasar.
 const kelasSel = (p, key, dasar) => {
     const s = statusSel(p, key);
     const a = rumusAktif.value;
@@ -748,8 +634,7 @@ const kelasSel = (p, key, dasar) => {
     return dasar;
 };
 
-// Hanya warna sorotan (tanpa warna dasar). Dipakai kotak INPUT yang sedang
-// diedit supaya warna sumber/target tetap terlihat. Kosong kalau tidak disorot.
+// Hanya warna sorotan (tanpa warna dasar), untuk kotak INPUT yang diedit.
 const kelasSorot = (p, key) => {
     const s = statusSel(p, key);
     const a = rumusAktif.value;
@@ -759,9 +644,8 @@ const kelasSorot = (p, key) => {
     return "";
 };
 
-// Sel yang tidak ikut rumus meredup. Sel yang terdampak edit (atau yang
-// sedang difokus) tidak diredupkan; sel di luar dampak edit meredup lebih
-// ringan supaya tetap bisa diklik.
+// Sel di luar rumus meredup; sel terdampak/difokus tidak diredupkan, sel di
+// luar dampak edit meredup lebih ringan.
 const kelasRedup = (p, key) => {
     const r = statusSel(p, key);
     const d = statusDampak(p, key);
@@ -772,11 +656,9 @@ const kelasRedup = (p, key) => {
     return "";
 };
 
-// Header kolom ikut berwarna (sama untuk semua baris). Selalu mengembalikan
-// background PENUH (tanpa opacity) karena header menempel (sticky) di atas
-// isi tabel; kalau transparan, isi baris akan tembus ke header.
-// Urutan: warna rumus (target/sumber) -> warna dampak edit (kotak difokus
-// hijau, kolom terdampak oranye) -> redup bila ada sorotan lain.
+// Header kolom ikut berwarna. Selalu background PENUH (tanpa opacity)
+// karena header sticky; kalau transparan, isi baris tembus ke header.
+// Urutan: warna rumus -> warna dampak edit -> redup bila ada sorotan lain.
 const kelasHeader = (key) => {
     const a = rumusAktif.value;
     if (a) {
@@ -805,10 +687,9 @@ const lencanaOp = (p, key) => {
     return OPERATOR_SUMBER[a.kolom]?.[key] ?? null;
 };
 
-// Bulatan kecil di atas kolom: tanda +/− untuk kolom sumber rumus, atau
-// "Δ" oranye untuk kolom yang ikut berubah saat kotak input diedit.
-// Taruh di dalam elemen 'relative' (<td class="relative"> atau pembungkus
-// kartu). 'atas' = posisi vertikal.
+// Bulatan di atas kolom: +/− untuk kolom sumber rumus, "Δ" oranye untuk
+// kolom yang ikut berubah saat edit. Taruh di elemen 'relative'; 'atas' =
+// posisi vertikal.
 const LencanaOp = (propsLencana) => {
     const posisi = `absolute left-1/2 ${propsLencana.atas || "top-0.5"} z-10 flex h-4 w-4 -translate-x-1/2 items-center justify-center rounded-full text-[11px] font-bold leading-none pointer-events-none`;
 
@@ -824,7 +705,6 @@ const LencanaOp = (propsLencana) => {
         );
     }
 
-    // Kolom yang bukan sumber rumus tapi ikut berubah karena edit.
     const s = statusSel(propsLencana.p, propsLencana.kunci);
     if (
         s !== "sumber" &&
@@ -846,7 +726,7 @@ const LencanaOp = (propsLencana) => {
 };
 LencanaOp.props = ["p", "kunci", "atas"];
 
-// Kartu HP: kunci stat memakai '-' (mis. 'sisa-n2'), kunci rumus memakai '_'.
+// Kartu HP: kunci stat memakai '-', kunci rumus memakai '_'.
 const kunciRumus = (key) => key.replace(/-/g, "_");
 
 // Kartu HP: stat hasil hitungan yang bisa diklik -> kolom rumusnya.
@@ -857,10 +737,9 @@ const KOLOM_RUMUS_KARTU = {
     terpakai: "terpakai",
 };
 
-// Klik di luar area rumus (angka hasil / kapsul & input di baris) menutup
-// sorotan. Memakai composedPath() karena saat kapsul diklik ia langsung
-// berganti jadi <input>; elemen lamanya sudah lepas dari DOM sehingga
-// closest() akan keliru menganggapnya "di luar".
+// Klik di luar area rumus menutup sorotan. Pakai composedPath() karena
+// kapsul yang diklik langsung berganti jadi <input> (elemen lama lepas dari
+// DOM, closest() akan keliru menganggapnya "di luar").
 const tutupRumusSaatKlikLuar = (e) => {
     if (!rumusAktif.value) return;
     const didalamArea = e
@@ -870,8 +749,7 @@ const tutupRumusSaatKlikLuar = (e) => {
 };
 // ================= END FITUR SOROT RUMUS =================
 
-// Isi draft dari data pegawai, lalu simpan kondisinya sebagai baseline
-// (isDirty = false sampai admin benar-benar mengubah isian).
+// Isi draft dari data pegawai dan simpan sebagai baseline (isDirty = false).
 const isiDraftDariPegawai = (p) => {
     saldoForm.clearErrors();
     sisaN1Manual.value = false;
@@ -886,28 +764,13 @@ const isiDraftDariPegawai = (p) => {
     snapshotDraft.value = JSON.stringify(draft);
 };
 
-// Ubah satu isian draft.
 const ubahDraft = (field, nilai) => {
     if (field === "sisa_n1") sisaN1Manual.value = true;
     draft[field] = nilai;
 };
 
-// [OTOMATIS] Ubah Tgh tahun lalu -> Sisa tahun lalu langsung ikut berubah di
-// kotaknya (tanpa Enter), selama dompet tahun lalu asli dan Sisa tahun lalu
-// tidak diketik manual. Sama dengan logika backend updateSaldo.
-watch(
-    () => draft.tgh_n1,
-    () => {
-        if (editingId.value === null || sisaN1Manual.value) return;
-        const p = pegawaiEdit.value;
-        if (!p || !p.dompet_tahun_lalu_asli) return;
-        const selisih = angka(draft.tgh_n1) - getSisaDitangguhkanN1(p);
-        draft.sisa_n1 = Math.max(0, getSisaTahunLalu(p) - selisih);
-    },
-);
-
-// Fokus ke kotak yang sedang terlihat (tabel & kartu sama-sama ada di DOM,
-// salah satunya disembunyikan CSS, jadi pilih yang offsetParent-nya ada).
+// Fokus ke kotak yang terlihat (tabel & kartu sama-sama ada di DOM, satu
+// disembunyikan CSS, jadi pilih yang offsetParent-nya ada).
 const fokuskan = async (field) => {
     await nextTick();
     const el = [
@@ -916,14 +779,11 @@ const fokuskan = async (field) => {
     el?.focus();
 };
 
-// Masuk mode edit untuk satu baris. Kalau ada baris lain yang sedang
-// diedit, perubahannya dibuang (hanya satu baris aktif). Kalau baris ini
-// sudah diedit, hanya pindah fokus.
-// Kotak yang diklik langsung menjadi fokus sorotan dampak edit (menggantikan
-// seleksi kotak sebelumnya).
+// Masuk mode edit satu baris. Baris lain yang sedang diedit dibuang
+// perubahannya; bila baris ini sudah diedit, hanya pindah fokus. Kotak yang
+// diklik jadi fokus sorotan dampak.
 const mulaiEdit = (pegawai, field = "hak") => {
     if (isSavingSaldo.value) return;
-    // Klik kotak baru = sorotan rumus sebelumnya ditutup.
     rumusAktif.value = null;
     if (!isEditing(pegawai)) {
         editingId.value = pegawai.id;
@@ -935,7 +795,7 @@ const mulaiEdit = (pegawai, field = "hak") => {
     fokuskan(field);
 };
 
-// Keluar dari mode edit tanpa menyimpan (sorotan ikut ditutup).
+// Keluar mode edit tanpa menyimpan (sorotan ikut ditutup).
 const batalEdit = () => {
     if (isSavingSaldo.value) return;
     editingId.value = null;
@@ -944,9 +804,8 @@ const batalEdit = () => {
     saldoForm.clearErrors();
 };
 
-// Setelah simpan, baris kembali ke mode tampil. Data terbaru datang dari
-// props (diperbarui Inertia), sehingga angka di baris ikut berubah.
-// [TERPAKAI DIKUNCI] 'koreksi_saldo' & 'pakai_sistem' tidak dikirim lagi.
+// Setelah simpan, baris kembali ke mode tampil; data baru datang dari props
+// (Inertia). [TERPAKAI DIKUNCI] 'koreksi_saldo' & 'pakai_sistem' tidak dikirim.
 const simpanSaldo = (pegawai) => {
     if (!pegawai || !isEditing(pegawai) || isSavingSaldo.value) return;
     if (!isDirty.value) return;
@@ -958,7 +817,7 @@ const simpanSaldo = (pegawai) => {
         .transform(() => ({
             hak_tahun_ini: angka(draft.hak),
             // Bila tidak diketik manual, kirim nilai tersimpan supaya backend
-            // yang menghitung otomatis (log "Otomatis" tetap jalan).
+            // menghitung otomatis (log "Otomatis" tetap jalan).
             carry_forward_normal: sisaN1Manual.value
                 ? angka(draft.sisa_n1)
                 : getSisaTahunLalu(pegawai),
@@ -976,7 +835,6 @@ const simpanSaldo = (pegawai) => {
                 if (editingId.value === idAktif) {
                     editingId.value = null;
                 }
-                // Simpan berhasil: sorotan rumus & dampak ikut ditutup.
                 rumusAktif.value = null;
                 fokusEdit.value = null;
                 saldoForm.clearErrors();
@@ -990,8 +848,7 @@ const simpanSaldo = (pegawai) => {
         });
 };
 
-// Tahun berganti / halaman atau hasil filter berganti: baris yang sedang
-// diedit mungkin sudah tidak ada, jadi mode edit dibatalkan.
+// Tahun/halaman/filter berganti: baris yang diedit mungkin hilang, batalkan.
 watch(filterTahun, () => {
     editingId.value = null;
     rumusAktif.value = null;
@@ -1019,19 +876,11 @@ watch(
 // ================= END FITUR EDIT SALDO INLINE =================
 
 // ================================================================
-// KARTU PEGAWAI (TAMPILAN MOBILE / TABLET)
-// Di layar di bawah breakpoint 'lg' (1024px), tabel 14 kolom diganti kartu per
-// pegawai supaya tidak perlu geser horizontal. Angkanya TETAP memakai
-// helper yang sama dengan tabel (satu sumber logika).
-// 'field' = nama field draft bila kotak itu bisa diedit inline.
-// 'kunci' = kotak dikunci (hanya tampil), yaitu Terpakai.
-//
-// URUTAN SAMA DENGAN TABEL: Sisa tahun ini (hitungan otomatis) dan Tgh tahun
-// ini (bagian dari Terpakai) diletakkan tepat di samping Tgh tahun lalu,
-// sebelum Bawaan.
-//
-// WARNA: kolom input (Sisa N-2, Sisa N-1, Tgh, Hak) putih netral, dan kolom
-// hasil hitungan memakai warna dari WARNA_HASIL (sama dengan tabel).
+// KARTU PEGAWAI (MOBILE / TABLET, di bawah breakpoint 'lg')
+// Pengganti tabel 14 kolom; memakai helper yang sama dengan tabel.
+// 'field' = nama field draft bila bisa diedit; 'kunci' = hanya tampil
+// (Terpakai). Urutan sama dengan tabel. Kolom input putih netral, kolom
+// hasil memakai WARNA_HASIL.
 // ================================================================
 const getStatKartu = (pegawai) => {
     const t = tahunAktif.value;
@@ -1076,8 +925,8 @@ const getStatKartu = (pegawai) => {
             title: KETERANGAN_TGH_N1,
         },
         {
-            // Hitungan otomatis (Hak - Terpakai), tanpa 'field' = tidak bisa
-            // diedit. Bisa diklik untuk menyorot rumusnya.
+            // Hitungan otomatis (Hak - Terpakai), tanpa 'field'; bisa diklik
+            // untuk menyorot rumus.
             key: "sisa-n0",
             label: `Sisa ${t}`,
             nilai: nilaiSisaTahunIni(pegawai),
@@ -1119,8 +968,7 @@ const getStatKartu = (pegawai) => {
             labelKelas: "text-slate-500",
         },
         {
-            // [TERPAKAI DIKUNCI] tanpa 'field': hanya tampil. Diketuk untuk
-            // menyorot sumbernya (Tgh tahun ini).
+            // [TERPAKAI DIKUNCI] tanpa 'field'; diketuk menyorot Tgh tahun ini.
             key: "terpakai",
             label: `Terpakai ${t}`,
             nilai: nilaiTerpakai(pegawai),
@@ -1133,18 +981,17 @@ const getStatKartu = (pegawai) => {
     ];
 };
 
-// State untuk Modal Rincian & Riwayat Cuti (hanya-baca, tanpa form edit)
+// State Modal Rincian & Riwayat Cuti (hanya-baca)
 const showModal = ref(false);
 const selectedPegawai = ref(null);
 
-// Menyimpan ID riwayat cuti yang sedang di-expand (dibuka rinciannya)
+// ID riwayat cuti yang sedang di-expand
 const expandedRiwayatId = ref(null);
 
 // ================================================================
-// HELPER DURASI (dipakai filter riwayat & kartu riwayat)
+// HELPER DURASI
 // ================================================================
-// Hitung durasi hari otomatis dari tanggal (fallback), dipakai kalau
-// field 'jumlah_hari' kosong/tidak terisi di suatu pengajuan.
+// Durasi hari dari tanggal (fallback bila 'jumlah_hari' kosong).
 const hitungDurasi = (mulai, selesai) => {
     if (!mulai || !selesai) return 1;
     const tglMulai = new Date(mulai);
@@ -1163,17 +1010,14 @@ const getDurasi = (item) => {
 
 // ================================================================
 // FILTER RIWAYAT DI MODAL RINCIAN
-// Membantu Admin HR memverifikasi angka Terpakai sebelum mengoreksi
-// (koreksi dilakukan per bulan di Rekap Laporan):
-//   - Chip status (default: Disetujui, yang menjadi dasar hitungan Terpakai)
+// Membantu Admin HR memverifikasi Terpakai sebelum koreksi di Rekap Laporan:
+//   - Chip status (default Disetujui, dasar hitungan Terpakai)
 //   - "Hanya Cuti Tahunan" (default aktif; jenis lain tidak mengurangi kuota)
-//   - Ringkasan total hari Cuti Tahunan disetujui di tahun aktif, dibanding
-//     angka sistem. Hari lintas tahun memakai 'hari_di_tahun_ini' dari backend.
-//
-// 'Ditangguhkan' (dibatalkan_ditangguhkan: dilakukan atasan, masuk Tgh) dan
-// 'Dibatalkan' (dibatalkan_reguler: dilakukan pemohon, hari dikembalikan)
-// adalah DUA chip terpisah. Key chip = nilai status asli, jadi
-// cocokStatusRiwayat cukup membandingkan langsung.
+//   - Ringkasan total hari Cuti Tahunan disetujui di tahun aktif vs angka
+//     sistem (lintas tahun memakai 'hari_di_tahun_ini' dari backend)
+// 'Ditangguhkan' (dibatalkan_ditangguhkan, oleh atasan, masuk Tgh) dan
+// 'Dibatalkan' (dibatalkan_reguler, oleh pemohon) adalah dua chip terpisah;
+// key chip = nilai status asli.
 // ================================================================
 const filterStatusRiwayat = ref("disetujui");
 const hanyaCutiTahunan = ref(true);
@@ -1193,7 +1037,7 @@ const cocokStatusRiwayat = (riwayat, key) => {
     return riwayat.status === key;
 };
 
-// Riwayat setelah filter jenis cuti (dasar untuk hitungan jumlah per chip).
+// Riwayat setelah filter jenis cuti (dasar hitungan jumlah per chip).
 const riwayatSesuaiJenis = computed(() => {
     const semua = selectedPegawai.value?.pengajuan_cuti || [];
     return hanyaCutiTahunan.value
@@ -1217,9 +1061,8 @@ const riwayatTersaring = computed(() =>
     ),
 );
 
-// Total hari Cuti Tahunan disetujui yang jatuh di tahun aktif (hitungan
-// manual dari riwayat), dibandingkan dengan angka sistem dari backend.
-// (Angka sistem di sini = cuti disetujui saja, belum termasuk Tgh.)
+// Total hari Cuti Tahunan disetujui di tahun aktif (dari riwayat) vs angka
+// sistem backend (cuti disetujui saja, tanpa Tgh).
 const ringkasanDisetujui = computed(() => {
     const semua = selectedPegawai.value?.pengajuan_cuti || [];
     const disetujui = semua.filter(
@@ -1236,15 +1079,14 @@ const ringkasanDisetujui = computed(() => {
     return { jumlahPengajuan: disetujui.length, total, sistem };
 });
 
-// Cuti lintas tahun: kapsul kecil "dihitung di {tahun}: n hari" hanya muncul
-// kalau hari yang dihitung berbeda dari durasi penuh pengajuan.
+// Cuti lintas tahun: kapsul "dihitung di {tahun}: n hari" muncul bila hari
+// yang dihitung berbeda dari durasi penuh.
 const hariDihitungBeda = (riwayat) => {
     const hitung = Number(riwayat?.hari_di_tahun_ini);
     return Number.isFinite(hitung) && hitung !== Number(getDurasi(riwayat));
 };
 
-// Kelas warna kartu & badge per status (satu sumber supaya tidak berulang).
-// Ditangguhkan = oranye, Dibatalkan = abu-abu.
+// Kelas warna kartu & badge per status. Ditangguhkan = oranye, Dibatalkan = abu-abu.
 const kelasGarisStatus = (status) => {
     if (status === "disetujui")
         return "border-l-4 border-l-emerald-500 hover:bg-emerald-100";
@@ -1273,7 +1115,7 @@ const kelasBadgeStatus = (status) => {
 
 const openDetailModal = (pegawai) => {
     selectedPegawai.value = pegawai;
-    expandedRiwayatId.value = null; // Reset saat buka pegawai baru
+    expandedRiwayatId.value = null;
     filterStatusRiwayat.value = "disetujui";
     hanyaCutiTahunan.value = true;
     showModal.value = true;
@@ -1297,12 +1139,11 @@ const selesaiGeserSheet = (event) => {
     sheetStartY = null;
 };
 
-// Toggle buka/tutup rincian kartu riwayat
 const toggleExpand = (id) => {
     expandedRiwayatId.value = expandedRiwayatId.value === id ? null : id;
 };
 
-// Kamus label status, konsisten dengan halaman Approval
+// Label status, konsisten dengan halaman Approval
 const statusLabels = {
     menunggu_l1: "Menunggu Ketua Tim Kerja (L1)",
     menunggu_l2: "Menunggu Ketua Kelompok Substansi (L2)",
@@ -1319,8 +1160,7 @@ const getStatusLabel = (st) => {
     return statusLabels[st] || st?.replace(/_/g, " ").toUpperCase();
 };
 
-// Label & warna untuk tiap langkah approval_chain — status per level
-// L1-L4: Setuju / Tolak / Menunggu / Belum Giliran / Ditangguhkan.
+// Label & warna langkah approval_chain (L1-L4).
 const approvalStepLabel = (status) => {
     switch (status) {
         case "setuju":
@@ -1356,8 +1196,8 @@ const approvalStepClass = (status) => {
 };
 
 // ================= APPROVAL CHAIN (filter tampilan) =================
-// Samakan dengan RekapKuotaPegawai / MonitoringCuti:
-// Kepala Biro (role 6) tidak punya rantai L1–L3.
+// Sama dengan RekapKuotaPegawai / MonitoringCuti: Kepala Biro (role 6) tidak
+// punya rantai L1–L3.
 const urutkanChain = (chain) => {
     const berlevel = chain
         .filter((step) => step?.level)
@@ -1394,7 +1234,7 @@ const getVisibleApprovalChain = (chainAsli, pegawai = null) => {
 };
 // ================= END APPROVAL CHAIN =================
 
-// Helper pembersih kalimat keterangan (konsisten dengan AntreanApproval.vue)
+// Pembersih kalimat keterangan (konsisten dengan AntreanApproval.vue)
 const formatKeteranganRapi = (text) => {
     if (!text || text === "-") return "-";
 
@@ -1425,10 +1265,8 @@ function debounce(fn, delay = 300) {
     };
 }
 
-// Auto-search saat mengetik / mengganti filter. Ikut memantau
-// 'filterTahun' dan mengirim parameter 'tahun' ke backend, sehingga
-// tabel, KPI, dan Export selalu mengacu ke tahun yang dipilih. Halaman
-// paginasi otomatis kembali ke halaman 1 karena 'page' tidak dikirim.
+// Auto-search saat mengetik / ganti filter (termasuk 'tahun'). Halaman
+// paginasi kembali ke 1 karena 'page' tidak dikirim.
 watch(
     [search, filterKelompok, filterTahun],
     debounce(function () {
@@ -1446,13 +1284,10 @@ watch(
 
 // ================================================================
 // TOOLBAR SEARCH + FILTER (disamakan dengan Rekap Laporan)
-// - Dropdown filter KUSTOM (Kelompok Substansi & Tahun) menggantikan
-//   <select> bawaan browser: selalu terbuka ke bawah, selebar kotaknya,
-//   tinggi dibatasi (bisa di-scroll), teks panjang membungkus.
-// - Hanya satu dropdown terbuka sekaligus; menutup saat klik di luar
-//   atau menekan Esc.
-// - Chip "Filter aktif" + tombol "Hapus semua" untuk search & kelompok
-//   (tahun tidak dihitung filter aktif karena selalu punya nilai).
+// Dropdown kustom (Kelompok Substansi & Tahun): terbuka ke bawah, selebar
+// kotaknya, bisa di-scroll. Hanya satu terbuka sekaligus; tutup saat klik
+// di luar atau Esc. Chip "Filter aktif" untuk search & kelompok (tahun tidak
+// dihitung).
 // ================================================================
 const toolbarRef = ref(null);
 const dropdownTerbuka = ref(null); // 'kelompok' | 'tahun' | null
@@ -1471,8 +1306,7 @@ const pilihTahun = (nilai) => {
     dropdownTerbuka.value = null;
 };
 
-// Nilai "-" dari backend (pegawai tanpa kelompok) ditampilkan sebagai
-// "Tanpa kelompok"; nilai yang dikirim ke backend tetap "-".
+// "-" dari backend tampil sebagai "Tanpa kelompok" (nilai kirim tetap "-").
 const tampilKelompok = (k) => (k === "-" ? "Tanpa kelompok" : k);
 
 const labelKelompok = computed(() =>
@@ -1487,10 +1321,8 @@ const tutupDropdownSaatKlikLuar = (event) => {
     }
 };
 
-// Tombol Esc menutup modal yang sedang terbuka (paling atas dulu).
-// Kalau tidak ada modal: Esc membatalkan mode edit inline (sekaligus
-// menutup sorotan rumus & dampak); kalau tidak sedang edit, Esc menutup
-// sorotan.
+// Esc menutup modal paling atas dulu. Tanpa modal: batalkan mode edit
+// (sekaligus sorotan); bila tidak sedang edit, tutup sorotan rumus.
 const tutupModalSaatEsc = (event) => {
     if (event.key !== "Escape") return;
     if (isGenerateSaldoModalOpen.value) closeGenerateSaldoModal();
@@ -1544,15 +1376,13 @@ const activeFilterChips = computed(() => {
     return chips;
 });
 
-// Reset search & kelompok (tahun dibiarkan). Pengambilan data ulang
-// dilakukan otomatis oleh watch([search, filterKelompok, filterTahun]).
+// Reset search & kelompok (tahun dibiarkan); data dimuat ulang oleh watch.
 const resetFilters = () => {
     search.value = "";
     filterKelompok.value = "";
 };
 
-// Ada baris di halaman ini yang angka Terpakai-nya dikoreksi Admin HR?
-// (dipakai untuk catatan kaki di bawah tabel)
+// Ada baris yang Terpakai-nya dikoreksi Admin HR? (catatan kaki tabel)
 const adaItemDikoreksi = computed(() =>
     daftarPegawaiHalamanIni.value.some(adaKoreksi),
 );
@@ -1563,8 +1393,8 @@ const goToPage = (url) => {
     router.get(url, {}, { preserveState: true, preserveScroll: true });
 };
 
-// Paginasi ringkas untuk HP: hanya Sebelumnya / Berikutnya. Link pertama
-// dan terakhir dari paginator Laravel selalu "Previous" dan "Next".
+// Paginasi ringkas HP: link pertama/terakhir paginator Laravel selalu
+// "Previous" dan "Next".
 const linkSebelumnya = computed(() => props.dataPegawai?.links?.[0] ?? null);
 const linkBerikutnya = computed(() => {
     const links = props.dataPegawai?.links;
@@ -1574,8 +1404,7 @@ const linkBerikutnya = computed(() => {
 // ========================================== //
 // ---> FITUR: IMPOR KUOTA CUTI <---
 // ========================================== //
-// Modal terpisah dari modal Rincian Riwayat, dengan useForm terpisah
-// karena payload-nya berupa file upload.
+// Modal terpisah dengan useForm sendiri (payload file upload).
 const isImportModalOpen = ref(false);
 
 const importForm = useForm({
@@ -1584,8 +1413,7 @@ const importForm = useForm({
 
 const importFileInput = ref(null);
 
-// Banner ringkasan hasil impor (flash 'success' dari backend). Ditampilkan
-// di halaman ini karena MainLayout tidak menampilkan flash.
+// Banner hasil impor (flash 'success'); MainLayout tidak menampilkan flash.
 const pesanImpor = ref("");
 let timerPesanImpor = null;
 
@@ -1608,7 +1436,7 @@ const handleImportFileChange = (event) => {
     importForm.file = event.target.files[0] ?? null;
 };
 
-// Route admin.monitoring.import sudah tersedia (RekapKuotaDetailController::importKuota).
+// Route: admin.monitoring.import (RekapKuotaDetailController::importKuota).
 const submitImportForm = () => {
     if (!importForm.file) return;
 
@@ -1634,56 +1462,39 @@ const submitImportForm = () => {
 // ---> FITUR: GENERATE SALDO TAHUN BARU (MANUAL) <---
 // ========================================== //
 // Memanggil route 'admin.saldo.generate' (AdminController::
-// generateSaldoManual), yang menjalankan Artisan Command
-// 'saldo-cuti:generate-tahun-baru'. Tidak ada jadwal otomatis;
-// dompet tahun baru hanya dibuat lewat tombol ini.
-//
-// Memakai modal DUA LANGKAH karena ini aksi massal untuk SEMUA pegawai:
-//   Langkah 1 : pilih tahun + penjelasan logika
-//   Langkah 2 : dialog konfirmasi akhir ("Ya, Generate Saldo {tahun}")
-// Request baru dikirim setelah langkah 2 dikonfirmasi.
-//
-// TAHUN TUJUAN DINAMIS: mengikuti tahun yang sedang dilihat di Filter
-// Tahun, yaitu 'tahunAktif + 1'.
-//   - Lihat 2026 -> tombol "Generate Saldo 2027"
-//   - Lihat 2027 -> tombol "Generate Saldo 2028"
-// Tombol HANYA aktif kalau tahun tujuan sama dengan tahun kalender depan
-// (currentYear + 1) — batas yang sama dengan validasi backend. Jadi saat
-// admin melihat 2027 (tujuan 2028), tombol tetap tampil dengan label yang
-// benar tetapi terkunci, dengan alasan yang dijelaskan di bawah judul.
+// generateSaldoManual) yang menjalankan command
+// 'saldo-cuti:generate-tahun-baru'. Tidak ada jadwal otomatis.
+// Modal DUA LANGKAH (aksi massal): (1) pilih tahun + penjelasan,
+// (2) konfirmasi akhir; request dikirim setelah langkah 2.
+// Tahun tujuan dinamis = tahunAktif + 1. Tombol hanya aktif bila tujuan =
+// tahun kalender depan (currentYear + 1), sama dengan validasi backend;
+// selain itu tombol tampil terkunci dengan alasannya.
 const isGenerateSaldoModalOpen = ref(false);
 // false = langkah 1 (pilih tahun), true = langkah 2 (konfirmasi akhir)
 const langkahKonfirmasiGenerate = ref(false);
 
-// Tahun yang akan digenerate = tahun yang sedang dilihat + 1.
 const tahunTujuanGenerate = computed(() => tahunAktif.value + 1);
 
-// Satu-satunya tahun yang diizinkan digenerate: tahun kalender depan.
-// Batas sebenarnya tetap divalidasi di backend.
+// Satu-satunya tahun yang boleh digenerate (tetap divalidasi di backend).
 const TAHUN_GENERATE_DIIZINKAN = currentYear + 1;
 
 const generateSaldoForm = useForm({
     tahun: TAHUN_GENERATE_DIIZINKAN,
 });
 
-// Opsi dropdown di modal (dibaca template lewat v-for). Hanya berisi tahun
-// tujuan yang sedang aktif. Kalau suatu saat tahun berjalan perlu dibuka,
-// tambahkan currentYear ke daftar ini dan ke aturan 'tahunTujuanDiizinkan'
-// (peringatan di modal akan muncul otomatis).
+// Opsi dropdown modal: hanya tahun tujuan aktif. Bila tahun berjalan perlu
+// dibuka, tambahkan currentYear di sini dan di 'tahunTujuanDiizinkan'.
 const pilihanTahunGenerate = computed(() => [tahunTujuanGenerate.value]);
 
-// Tahun tujuan sesuai tahun yang boleh digenerate?
 const tahunTujuanDiizinkan = computed(
     () => tahunTujuanGenerate.value === TAHUN_GENERATE_DIIZINKAN,
 );
 
 // ---- Waktu yang diizinkan ----
-// Generate tahun depan baru dibuka mulai bulan ini (1 = Januari ...
-// 12 = Desember). Ubah angka ini bila aturan biro berbeda (mis. 12 kalau
-// hanya boleh pada Desember). Batas yang sama HARUS ada juga di backend
-// (AdminController::generateSaldoManual), karena jam browser bisa diubah
-// pengguna; pengecekan di sini hanya pengaman tampilan.
-const BULAN_BUKA_GENERATE = 12;
+// Generate dibuka mulai bulan ini (1 = Januari ... 12 = Desember). Batas yang
+// sama HARUS ada di backend (AdminController::generateSaldoManual) karena jam
+// browser bisa diubah; di sini hanya pengaman tampilan.
+const BULAN_BUKA_GENERATE = 11;
 const NAMA_BULAN_PANJANG = [
     "Januari",
     "Februari",
@@ -1699,13 +1510,10 @@ const NAMA_BULAN_PANJANG = [
     "Desember",
 ];
 
-// Periode generate (pengaman tampilan; server juga mengecek).
 const dalamPeriodeGenerate = new Date().getMonth() + 1 >= BULAN_BUKA_GENERATE;
 
-// Tombol aktif kalau:
-//   1) tahun tujuan = tahun kalender depan,
-//   2) periodenya sudah dibuka, DAN
-//   3) masih ada pegawai aktif yang belum punya dompet tahun depan.
+// Tombol aktif bila: tujuan = tahun kalender depan, periode sudah dibuka,
+// dan masih ada pegawai aktif tanpa dompet tahun depan.
 const generateDibuka = computed(
     () =>
         tahunTujuanDiizinkan.value &&
@@ -1716,12 +1524,12 @@ const generateDibuka = computed(
 const alasanGenerateTutup = computed(() => {
     const tujuan = tahunTujuanGenerate.value;
 
-    // Tahun yang dilihat terlalu jauh ke depan (mis. lihat 2027, tujuan 2028)
+    // Terlalu jauh ke depan
     if (tujuan > TAHUN_GENERATE_DIIZINKAN) {
         return `Saldo ${tujuan} belum bisa digenerate. Baru dibuka mulai 1 ${NAMA_BULAN_PANJANG[BULAN_BUKA_GENERATE - 1]} ${tujuan - 1}.`;
     }
 
-    // Tahun yang dilihat sudah lewat (tujuan sudah berlalu)
+    // Sudah lewat
     if (tujuan < TAHUN_GENERATE_DIIZINKAN) {
         return `Saldo ${tujuan} sudah melewati periode generate. Generate hanya untuk tahun ${TAHUN_GENERATE_DIIZINKAN}.`;
     }
@@ -1754,13 +1562,13 @@ const lanjutKonfirmasiGenerate = () => {
 const submitGenerateSaldo = () => {
     if (!generateDibuka.value || generateSaldoForm.processing) return;
 
-    // Pastikan tahun yang dikirim selalu sama dengan label tombol.
+    // Tahun yang dikirim selalu sama dengan label tombol.
     generateSaldoForm.tahun = tahunTujuanGenerate.value;
 
     generateSaldoForm.post(route("admin.saldo.generate"), {
         preserveScroll: true,
         onSuccess: () => closeGenerateSaldoModal(),
-        // Error tahun tampil di langkah 1, jadi kembalikan ke sana
+        // Error tahun tampil di langkah 1, kembalikan ke sana
         onError: () => {
             langkahKonfirmasiGenerate.value = false;
         },
@@ -1770,8 +1578,7 @@ const submitGenerateSaldo = () => {
 
 // ================================================================
 // KUNCI SCROLL HALAMAN SAAT MODAL TERBUKA (penting di HP)
-// Tanpa ini, menggeser jari di dalam modal ikut menggulir halaman di
-// belakangnya. Dipasang paling bawah karena membaca ketiga state modal.
+// Dipasang paling bawah karena membaca ketiga state modal.
 // ================================================================
 const adaModalTerbuka = computed(
     () =>
@@ -1790,13 +1597,11 @@ watch(adaModalTerbuka, (terbuka) => {
 
     <MainLayout>
         <div class="relative w-full h-full">
-            <!-- Div pembungkus tunggal: MainLayout hanya boleh punya SATU
-                 elemen anak langsung agar transisi halaman Inertia/Vue tidak
-                 error. Komentar ini sengaja diletakkan DI DALAM div (bukan
-                 sejajar di luarnya), supaya root slot tetap satu elemen. -->
+            <!-- Div pembungkus tunggal: MainLayout hanya boleh punya SATU elemen
+                 anak langsung (transisi Inertia/Vue). -->
             <div class="p-3 sm:p-6 bg-white rounded-xl shadow-sm">
-                <!-- Banner sukses Simpan Saldo inline. Hilang sendiri setelah
-                     5 detik dan bisa ditutup manual. -->
+                <!-- Banner sukses Simpan Saldo inline (hilang setelah 5 detik,
+                     bisa ditutup manual). -->
                 <div
                     v-if="pesanSukses"
                     role="status"
@@ -1813,8 +1618,8 @@ watch(adaModalTerbuka, (terbuka) => {
                     </button>
                 </div>
 
-                <!-- Banner hasil impor (flash 'success'). Bisa ditutup manual
-                     dan hilang sendiri setelah 15 detik. -->
+                <!-- Banner hasil impor (flash 'success'; hilang setelah 15 detik,
+                     bisa ditutup manual). -->
                 <div
                     v-if="pesanImpor"
                     role="status"
@@ -1831,18 +1636,10 @@ watch(adaModalTerbuka, (terbuka) => {
                     </button>
                 </div>
 
-                <!-- Baris judul: judul + subjudul di kiri, tombol aksi
-                 (Impor, Generate Saldo, Export) di kanan pada layar >= lg
-                 (1024px), konsisten di semua tingkat zoom. Subjudul boleh
-                 membungkus; kalau ruang sangat sempit, tombol turun ke
-                 baris kedua tapi tetap rata kanan. Di HP / tablet kecil
-                 tombol berada di bawah judul.
-
-
-                 Skema warna tombol per jenis aksi:
-                   - Impor           -> Blue
-                   - Generate Saldo  -> Emerald
-                   - Export          -> Hijau tua (green-700) -->
+                <!-- Baris judul: judul di kiri, tombol aksi di kanan pada layar
+                     >= lg, di bawah judul pada layar kecil.
+                     Warna tombol: Impor = blue, Generate Saldo = emerald,
+                     Export = green-700. -->
                 <div
                     class="flex flex-col gap-3 sm:gap-4 mb-4 sm:mb-5 lg:flex-row lg:items-center lg:justify-between"
                 >
@@ -1861,8 +1658,8 @@ watch(adaModalTerbuka, (terbuka) => {
                     </div>
 
                     <!-- HP: grid 2 kolom (Impor & Generate sejajar, Export
-                         selebar penuh di bawahnya). sm: satu baris rata
-                         kiri. >= lg: rata kanan di sebelah judul. -->
+                         selebar penuh). sm: satu baris rata kiri. >= lg: rata
+                         kanan di sebelah judul. -->
                     <div
                         class="grid grid-cols-2 gap-2 w-full sm:flex sm:flex-wrap sm:items-center lg:w-auto lg:justify-end"
                     >
@@ -1888,12 +1685,10 @@ watch(adaModalTerbuka, (terbuka) => {
                             Impor Kuota
                         </button>
 
-                        <!-- Tombol Generate Saldo Tahun Baru (Manual).
-                             Label memuat TAHUN TUJUAN yang DINAMIS (tahun
-                             yang sedang dilihat + 1). Nonaktif kalau tahun
-                             tujuan bukan tahun kalender depan, di luar waktu
-                             yang diizinkan, atau kalau semua pegawai aktif
-                             sudah punya saldo tahun depan; alasannya tampil
+                        <!-- Tombol Generate Saldo Tahun Baru (manual). Label
+                             memuat tahun tujuan dinamis. Nonaktif bila tujuan
+                             bukan tahun kalender depan, di luar periode, atau
+                             semua pegawai sudah punya saldo; alasannya tampil
                              di bawah judul dan sebagai tooltip. -->
                         <button
                             type="button"
@@ -1927,8 +1722,8 @@ watch(adaModalTerbuka, (terbuka) => {
                             Generate Saldo {{ tahunTujuanGenerate }}
                         </button>
 
-                        <!-- Tombol Export — href memakai 'exportUrl' sehingga file
-                             yang diunduh mengikuti tahun (& filter) aktif. -->
+                        <!-- Tombol Export: href memakai 'exportUrl' sehingga file
+                             mengikuti tahun & filter aktif. -->
                         <a
                             :href="exportUrl"
                             class="col-span-2 sm:col-span-1 sm:flex-none min-h-[44px] sm:min-h-0 sm:whitespace-nowrap bg-green-700 hover:bg-green-800 text-white px-3 sm:px-4 xl:px-5 py-2.5 rounded-full text-xs sm:text-sm font-semibold transition inline-flex items-center justify-center gap-2"
@@ -1952,10 +1747,9 @@ watch(adaModalTerbuka, (terbuka) => {
                     </div>
                 </div>
 
-                <!-- Alasan tombol Generate nonaktif. Tampil kalau tahun
-                     tujuan tidak diizinkan, di luar waktu yang diizinkan,
-                     DAN saat semua pegawai aktif sudah punya saldo tahun
-                     depan. -->
+                <!-- Alasan tombol Generate nonaktif (tahun tujuan tidak
+                     diizinkan, di luar periode, atau semua pegawai sudah punya
+                     saldo tahun depan). -->
                 <p
                     v-if="!generateDibuka"
                     id="ket-generate-tutup"
@@ -1964,8 +1758,8 @@ watch(adaModalTerbuka, (terbuka) => {
                     {{ alasanGenerateTutup }}
                 </p>
 
-                <!-- KPI Cards (versi putih). Angka diambil dari prop 'kpi'
-                 backend, dihitung dari SELURUH data hasil filter. -->
+                <!-- KPI Cards: angka dari prop 'kpi' backend (seluruh data
+                     hasil filter). -->
                 <div
                     class="grid grid-cols-2 md:grid-cols-4 gap-2.5 sm:gap-4 mb-4 sm:mb-6"
                 >
@@ -2049,20 +1843,17 @@ watch(adaModalTerbuka, (terbuka) => {
 
                 <!-- ===================== TOOLBAR: SEARCH + FILTER =====================
                      HP / tablet: baris 1 = Cari + Tahun (di HP hanya angka
-                     tahun supaya ringkas), baris 2 = Kelompok Substansi
-                     selebar penuh. Layar >= lg: satu baris saja:
-                     Cari (melebar) | Kelompok Substansi | Tahun.
-                     Urutan visual diatur dengan 'order' sehingga urutan tab
-                     keyboard tetap: Cari -> Tahun -> Kelompok di HP.
-                     Filter memakai dropdown KUSTOM (selalu terbuka ke bawah,
-                     bisa di-scroll). Filter yang sedang dipakai diberi
-                     border hijau supaya mudah dikenali. -->
+                     tahun), baris 2 = Kelompok Substansi selebar penuh.
+                     >= lg: satu baris: Cari | Kelompok Substansi | Tahun.
+                     Urutan visual lewat 'order'; urutan tab keyboard di HP:
+                     Cari -> Tahun -> Kelompok. Filter yang dipakai diberi
+                     border hijau. -->
                 <div
                     ref="toolbarRef"
                     @keydown.esc="dropdownTerbuka = null"
                     class="grid grid-cols-[minmax(0,1fr)_auto] gap-2 mb-3 lg:flex lg:items-center"
                 >
-                    <!-- Search (dengan tombol hapus saat ada isi) -->
+                    <!-- Search (tombol hapus muncul saat ada isi) -->
                     <div
                         class="relative order-1 min-w-0 lg:min-w-[12rem] lg:flex-1"
                     >
@@ -2120,9 +1911,9 @@ watch(adaModalTerbuka, (terbuka) => {
                         </button>
                     </div>
 
-                    <!-- Filter Tahun (ikon kalender). Default = tahun
-                         berjalan. Opsi dari daftarTahunPilihan. Di HP
-                         labelnya hanya angka tahun. -->
+                    <!-- Filter Tahun (ikon kalender). Default = tahun berjalan;
+                         opsi dari daftarTahunPilihan; di HP labelnya hanya
+                         angka tahun. -->
                     <div
                         class="relative order-2 w-32 sm:w-40 lg:order-3 lg:flex-none"
                     >
@@ -2317,7 +2108,7 @@ watch(adaModalTerbuka, (terbuka) => {
                 </div>
 
                 <!-- ===================== CHIP FILTER AKTIF =====================
-                     Hanya dirender kalau ada filter aktif (search / kelompok). -->
+                     Dirender bila ada filter aktif (search / kelompok). -->
                 <div
                     v-if="activeFilterChips.length > 0"
                     class="flex flex-wrap items-center gap-2 mb-4 text-xs text-gray-500"
@@ -2351,7 +2142,7 @@ watch(adaModalTerbuka, (terbuka) => {
 
                 <!-- ===================== STATE KOSONG =====================
                      Satu state kosong untuk semua ukuran layar (dengan tombol
-                     reset filter). Tabel & kartu hanya dirender kalau ada data. -->
+                     reset filter). Tabel & kartu hanya dirender bila ada data. -->
                 <div
                     v-if="!punyaData"
                     class="rounded-lg border border-slate-200 bg-white px-4 sm:px-6 py-12 sm:py-14"
@@ -2404,32 +2195,20 @@ watch(adaModalTerbuka, (terbuka) => {
                     </div>
                 </div>
 
-                <!-- ===================== KARTU PEGAWAI (HP & TABLET) =====================
-                     Tampil di bawah breakpoint 'lg' (1024px). Satu kartu per pegawai:
-                     nama + Saldo Akhir di atas, angka rincian di tengah
-                     (grid 4 kolom), tombol aksi di bawah.
-                     EDIT INLINE: ketuk salah satu angka yang bisa diedit,
-                     lalu Sisa N-2, Tgh, Sisa N-1, dan Hak berubah
-                     menjadi input; Bawaan, Sisa tahun ini, Total, Terpakai, dan
-                     Saldo Akhir menampilkan pratinjau langsung.
-                     Ikon pensil di label = kotak bisa diedit (kotak yang
-                     punya 'field' di getStatKartu).
-                     [TERPAKAI DIKUNCI] Ikon gembok di label Terpakai = hanya
-                     tampil; ubah per bulan di Rekap Laporan (ada tautannya).
-                     Tanda * = Terpakai dikoreksi Admin HR.
-                     SOROT RUMUS: ketuk Sisa tahun ini, Bawaan, Total, Terpakai,
-                     atau Saldo Akhir -> kotak sumbernya terisi warna yang sama
-                     dan diberi tanda + / −, kotak lain meredup. Sorotan TETAP
-                     menyala saat kotak sumber diketuk untuk diedit.
-                     SOROT DAMPAK EDIT: saat sebuah kotak difokus untuk diedit,
-                     kotak yang ikut berubah diberi cincin oranye + tanda Δ. -->
+                <!-- KARTU PEGAWAI (HP & tablet, di bawah breakpoint 'lg').
+                     Edit inline: ketuk angka yang bisa diedit (ikon pensil),
+                     kotak editable jadi input, kotak hasil menampilkan
+                     pratinjau. Ikon gembok = Terpakai dikunci (ubah di Rekap
+                     Laporan); * = dikoreksi Admin HR.
+                     Sorot rumus: ketuk hasil hitungan, kotak sumber diberi
+                     warna + tanda + / −. Sorot dampak: kotak yang ikut berubah
+                     diberi cincin oranye + Δ. -->
                 <p
                     v-if="punyaData"
                     class="mb-2 text-[11px] leading-relaxed text-slate-500 lg:hidden"
                 >
                     <span class="font-semibold text-slate-700">Tgh</span> = cuti
-                    ditangguhkan. Tgh tahun {{ tahunAktif }} sudah termasuk
-                    dalam Terpakai.
+                    ditangguhkan. Tgh tahun {{ tahunAktif }} tidak mengurangi saldo, dibawa ke tahun berikutnya.
                     <span class="font-semibold text-amber-600">*</span> =
                     Terpakai dikoreksi Admin HR di Rekap Laporan.
                     <span class="inline-block align-middle"
@@ -2535,8 +2314,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                     atas="-top-2"
                                 />
 
-                                <!-- Label + ikon pensil (kotak yang bisa
-                                     diedit) atau ikon gembok (kotak dikunci) -->
+                                <!-- Label + ikon pensil (bisa diedit) atau
+                                     gembok (dikunci) -->
                                 <span
                                     class="inline-flex items-center justify-center gap-0.5 text-[10px] font-semibold leading-tight"
                                     :class="stat.labelKelas"
@@ -2672,7 +2451,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                 }}</span>
                             </p>
 
-                            <!-- Mode tampil: Riwayat + ubah Terpakai -->
+                            <!-- Mode tampil: Rekap Laporan + Riwayat -->
                             <div
                                 v-if="!isEditing(pegawai)"
                                 class="flex shrink-0 items-center gap-1.5"
@@ -2750,71 +2529,21 @@ watch(adaModalTerbuka, (terbuka) => {
                     </div>
                 </div>
 
-                <!--
-          TABEL MONITORING (LAYAR LEBAR, >= lg / 1024px): SATU BARIS PER PEGAWAI.
-          Semua label tahun di header DINAMIS mengikuti Filter Tahun
-          ('tahunAktif'). Setiap angka dibungkus "kapsul" warna dengan
-          min-w tetap supaya sejajar; Saldo Akhir diberi background gelap
-          sebagai fokus utama.
-
-
-          HEADER FREEZE: wadah tabel punya tinggi maksimal dan scroll
-          sendiri (overflow-auto + max-h), sehingga header 'sticky top-0'
-          tetap terlihat saat baris digulir. Kolom No & Nama menempel di
-          kiri DAN header-nya menempel di atas (z-30, di atas sel isi z-10).
-
-
-          URUTAN KOLOM: No, Nama, Sisa N-2, Tgh N-2, Sisa N-1, Tgh N-1,
-          Sisa N (hitungan otomatis), Tgh N (bagian dari Terpakai), Bawaan, Hak,
-          Total, Terpakai, Saldo Akhir, Aksi.
-
-
-          ATURAN Tgh: Tgh N (tahun yang dilihat) tetap tercatat dan SUDAH
-          TERMASUK dalam Terpakai N (Terpakai = cuti terpakai + Tgh N), jadi
-          tidak dikurangkan lagi dari Sisa N dan Saldo Akhir.
-          Tgh N-1 MENAMBAH Total Tersedia. Tgh N-2 hanya catatan Admin HR.
-
-
-          PENANDA KOLOM BISA DIEDIT: ikon pensil kecil di header kolom
-          Sisa N-2, Tgh N-2, Sisa N-1, Tgh N-1, Tgh N, dan Hak.
-          Kolom hitungan otomatis (Sisa N, Bawaan, Total, Saldo Akhir) tidak
-          diberi ikon.
-          [TERPAKAI DIKUNCI] Kolom Terpakai diberi ikon GEMBOK: hanya tampil,
-          diubah per bulan di Rekap Laporan (ikon tautan di sebelah angkanya).
-
-
-          WARNA KOLOM: kolom input (Sisa N-2, Tgh, Sisa N-1, Hak) putih
-          netral. Hanya kolom hasil yang berwarna: Sisa N (sky), Bawaan
-          (emerald), Total (indigo), Terpakai (rose), Saldo Akhir (gelap).
-
-
-          SOROT RUMUS: angka Sisa N, Bawaan, Total, Terpakai, dan Saldo Akhir
-          bisa diklik. Angka yang diklik terisi penuh, kolom sumber rumusnya
-          terisi warna yang sama dan diberi tanda + / −, kolom lain meredup,
-          dan header kolom sumber ikut berwarna. Sorotan TETAP menyala saat
-          kolom sumber (mis. Hak) diklik untuk diedit, dan ditutup oleh
-          Simpan / Batal / Esc / klik di luar. Mengklik angka hasil juga
-          melepas seleksi (sorot dampak) kotak input sebelumnya.
-
-
-          SOROT DAMPAK EDIT: saat sebuah kotak input difokus (klik atau Tab),
-          kolom yang ikut berubah diberi cincin oranye + lencana Δ, header-nya
-          berwarna oranye, dan kolom lain meredup. Berjalan bersamaan dengan
-          sorot rumus.
-
-
-          EDIT INLINE: klik salah satu kapsul yang bisa diedit (Sisa, Tgh,
-          Hak) -> semua kapsul editable di baris itu menjadi input
-          seukuran kapsul. Sisa N, Bawaan, Total, Terpakai, dan Saldo Akhir
-          menampilkan pratinjau langsung. Kolom Aksi berubah jadi Simpan
-          (centang) dan Batal (X). Enter = Simpan, Esc = Batal.
-
-
-          Tampilan disamakan dengan Rekap Laporan: kartu ber-border membulat,
-          kolom No & Nama menempel (sticky) di kiri saat tabel digeser, efek
-          hover ungu. Tabel 'w-full' dan rapat ('px-2 py-3'). Di layar kecil
-          diganti kartu di atas.
-        -->
+                <!-- TABEL MONITORING (>= lg): satu baris per pegawai, label tahun
+                     dinamis mengikuti 'tahunAktif'. Wadah punya max-h dan
+                     scroll sendiri, jadi header sticky tetap terlihat (kolom No
+                     & Nama menempel di kiri, z-30 di atas sel isi z-10).
+                     Urutan kolom: No, Nama, Sisa N-2, Tgh N-2, Sisa N-1,
+                     Tgh N-1, Sisa N, Tgh N, Bawaan, Hak, Total, Terpakai,
+                     Saldo Akhir, Aksi.
+                     Aturan Tgh: Tgh N sudah termasuk di Terpakai N; Tgh N-1
+                     menambah Total; Tgh N-2 hanya catatan.
+                     Ikon pensil = kolom bisa diedit; ikon gembok = Terpakai
+                     dikunci. Kolom input putih netral; kolom hasil berwarna
+                     (Sisa N sky, Bawaan emerald, Total indigo, Terpakai rose,
+                     Saldo Akhir gelap).
+                     Sorot rumus & sorot dampak edit: lihat komentar di script.
+                     Edit inline: Enter = Simpan, Esc = Batal. -->
                 <div
                     v-if="punyaData"
                     class="hidden lg:block overflow-auto max-h-[calc(100dvh-10rem)] rounded-lg border border-slate-200 bg-white"
@@ -2895,8 +2624,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                     </span>
                                 </th>
                                 <!-- Sisa N: hitungan otomatis (Hak - Terpakai),
-                                     TIDAK bisa diedit, jadi tanpa ikon pensil.
-                                     Angkanya bisa diklik untuk menyorot rumus. -->
+                                     tanpa ikon pensil; angkanya bisa diklik
+                                     untuk menyorot rumus. -->
                                 <th
                                     class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
                                     :class="kelasHeader('sisa_n0')"
@@ -2904,9 +2633,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                 >
                                     Sisa {{ tahunAktif }}
                                 </th>
-                                <!-- Ditangguhkan tahun ini (tetap tercatat, sudah
-                                     termasuk dalam Terpakai): tepat di samping
-                                     Sisa tahun ini (bisa diedit) -->
+                                <!-- Tgh N (bisa diedit; sudah termasuk di
+                                     Terpakai), di samping Sisa N -->
                                 <th
                                     class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
                                     :class="kelasHeader('tgh_n0')"
@@ -3031,9 +2759,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Sisa N-2 (EDITABLE, klik angka; putih netral).
-                                         Sumber rumus Bawaan. data-rumus-area =
-                                         klik di sini tidak menutup sorotan. -->
+                                    <!-- Sisa N-2 (EDITABLE, putih netral). Sumber
+                                         rumus Bawaan. data-rumus-area = klik di
+                                         sini tidak menutup sorotan. -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3082,8 +2810,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Ditangguhkan N-2 (netral, EDITABLE):
-                                         hanya catatan, tidak memengaruhi saldo -->
+                                    <!-- Tgh N-2 (EDITABLE): hanya catatan, tidak
+                                         memengaruhi saldo -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3131,7 +2859,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Sisa N-1 (EDITABLE; putih netral; sumber
+                                    <!-- Sisa N-1 (EDITABLE, putih netral; sumber
                                          rumus Bawaan) -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
@@ -3179,9 +2907,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Ditangguhkan N-1 (netral, EDITABLE):
-                                         MENAMBAH Total Tersedia (sumber rumus
-                                         Total) -->
+                                    <!-- Tgh N-1 (EDITABLE): MENAMBAH Total
+                                         Tersedia (sumber rumus Total) -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3229,11 +2956,10 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Sisa tahun ini = Hak - Terpakai
-                                         (sky, hitungan OTOMATIS, tidak bisa diedit).
-                                         Terpakai sudah termasuk Tgh tahun ini.
-                                         Saat baris diedit menampilkan pratinjau.
-                                         Klik angkanya untuk menyorot rumus. -->
+                                    <!-- Sisa N = Hak - Terpakai (sky, OTOMATIS,
+                                         tidak bisa diedit; Tgh N tidak
+                                         mengurangi). Saat edit menampilkan
+                                         pratinjau. Klik untuk menyorot rumus. -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3263,10 +2989,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </button>
                                     </td>
 
-                                    <!-- Ditangguhkan tahun ini (netral, EDITABLE):
-                                         tetap tercatat dan sudah termasuk dalam
-                                         Terpakai (sumber rumus Terpakai). Tepat di
-                                         samping Sisa tahun ini. -->
+                                    <!-- Tgh N (EDITABLE): tidak mengurangi saldo
+                                         tahun ini, dibawa ke tahun berikutnya.
+                                         Di samping Sisa N. -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3316,10 +3041,10 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Saldo Bawaan Eligible (Emerald) — otomatis;
-                                         saat edit menampilkan pratinjau. Klik
-                                         untuk menyorot sumbernya. Aturannya
-                                         (bukan penjumlahan) ada di tooltip. -->
+                                    <!-- Bawaan Eligible (emerald): otomatis, saat
+                                         edit menampilkan pratinjau. Klik untuk
+                                         menyorot sumbernya; aturannya (bukan
+                                         penjumlahan) ada di tooltip. -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3349,8 +3074,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </button>
                                     </td>
 
-                                    <!-- Hak tahun berjalan (EDITABLE, putih netral);
-                                         sumber rumus Total dan Sisa N -->
+                                    <!-- Hak tahun berjalan (EDITABLE, putih
+                                         netral); sumber rumus Total dan Sisa N -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp :p="pegawai" kunci="hak" />
                                         <div
@@ -3387,9 +3112,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Total Hak Tersedia (Indigo) — otomatis;
-                                         saat edit menampilkan pratinjau. Klik
-                                         untuk menyorot rumus. -->
+                                    <!-- Total Tersedia (indigo): otomatis, saat
+                                         edit menampilkan pratinjau. Klik untuk
+                                         menyorot rumus. -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp :p="pegawai" kunci="total" />
                                         <button
@@ -3416,15 +3141,13 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </button>
                                     </td>
 
-                                    <!-- [TERPAKAI DIKUNCI] Terpakai (Rose) — HANYA
-                                         TAMPIL. Angka TAMPIL = cuti terpakai (sudah
-                                         ikut koreksi bulanan Rekap Laporan) + Tgh
-                                         tahun ini. Tanda * kecil muncul kalau
-                                         angkanya hasil koreksi Admin HR. Klik
-                                         angkanya = menyorot sumbernya (Tgh tahun
-                                         ini). Ikon kalender di sampingnya = tautan
-                                         ke Rekap Laporan (sudah terfilter ke
-                                         pegawai ini) untuk mengubah per bulan. -->
+                                    <!-- [TERPAKAI DIKUNCI] Terpakai (rose): HANYA
+                                         TAMPIL. Angka = cuti terpakai (sudah ikut
+                                         koreksi bulanan Rekap Laporan) + Tgh N.
+                                         Tanda * muncul bila hasil koreksi Admin
+                                         HR. Klik angka = sorot sumbernya (Tgh N).
+                                         Ikon kalender = tautan ke Rekap Laporan
+                                         (terfilter ke pegawai ini). -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp
                                             :p="pegawai"
@@ -3496,11 +3219,10 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </div>
                                     </td>
 
-                                    <!-- Saldo Akhir (gelap agar paling menonjol) —
-                                         saat edit menampilkan pratinjau. Klik
-                                         untuk menyorot rumus (Total dan Terpakai
-                                         berwarna amber). 'relative' + LencanaOp
-                                         dipakai untuk lencana Δ dampak edit. -->
+                                    <!-- Saldo Akhir (gelap, paling menonjol): saat
+                                         edit menampilkan pratinjau. Klik untuk
+                                         menyorot rumus (Total dan Terpakai
+                                         berwarna amber). -->
                                     <td class="relative px-2 py-3 text-center">
                                         <LencanaOp :p="pegawai" kunci="saldo" />
                                         <button
@@ -3615,9 +3337,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                     </td>
                                 </tr>
 
-                                <!-- Baris pesan error validasi backend (hanya
-                                     muncul untuk baris yang sedang diedit).
-                                     colspan = jumlah kolom tabel (14). -->
+                                <!-- Baris error validasi backend (hanya untuk
+                                     baris yang diedit). colspan = jumlah kolom
+                                     tabel (14). -->
                                 <tr
                                     v-if="
                                         isEditing(pegawai) &&
@@ -3645,8 +3367,7 @@ watch(adaModalTerbuka, (terbuka) => {
                     </table>
                 </div>
 
-                <!-- Legenda ikon pensil & gembok (layar lebar): menjelaskan
-                     penanda di header kolom. Selalu tampil selama tabel tampil. -->
+                <!-- Legenda ikon pensil & gembok (layar lebar) -->
                 <p
                     v-if="punyaData"
                     class="mt-2 hidden lg:flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500"
@@ -3660,15 +3381,13 @@ watch(adaModalTerbuka, (terbuka) => {
                     >
                     <span class="text-slate-400">
                         Sisa {{ tahunAktif }}, Bawaan, Total, dan Saldo Akhir
-                        dihitung otomatis. Tgh {{ tahunAktif }} tetap tercatat
-                        dan sudah termasuk dalam Terpakai.
+                        dihitung otomatis. Tgh {{ tahunAktif }} tidak mengurangi saldo, dibawa ke tahun berikutnya.
                     </span>
                 </p>
 
                 <!-- Legenda warna hasil hitungan (layar lebar). Klik angka
-                     berwarna untuk menyorot kolom sumbernya, termasuk Terpakai
-                     (menyorot Tgh tahun ini). Esc atau klik di luar untuk
-                     menutup sorotan. -->
+                     berwarna untuk menyorot kolom sumbernya; Esc atau klik di
+                     luar menutup sorotan. -->
                 <p
                     v-if="punyaData"
                     class="mt-1 hidden lg:flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500"
@@ -3728,15 +3447,10 @@ watch(adaModalTerbuka, (terbuka) => {
                     disorot. Sisa {{ tahunAktif }}, Bawaan, Total, Terpakai, dan
                     Saldo Akhir dihitung otomatis. Tekan Enter untuk menyimpan
                     atau Esc untuk membatalkan.
-                    <template v-if="pegawaiEdit?.dompet_tahun_lalu_asli">
-                        Mengubah Tgh '{{ (tahunAktif - 1).toString().slice(-2) }} juga
-                        menghitung ulang Sisa {{ tahunAktif - 1 }} secara otomatis, kecuali
-                        Sisa {{ tahunAktif - 1 }} ikut kamu ketik.
-                    </template>
                 </p>
 
-                <!-- Catatan kaki: hanya tampil kalau ada minimal 1 baris yang
-                     angka Terpakai-nya dikoreksi Admin HR. -->
+                <!-- Catatan kaki: tampil bila ada baris yang Terpakai-nya
+                     dikoreksi Admin HR. -->
                 <p v-if="adaItemDikoreksi" class="mt-3 text-xs text-amber-700">
                     * Angka bertanda bintang dikoreksi Admin HR di Rekap
                     Laporan. Arahkan kursor ke angkanya untuk melihat bulan yang
@@ -3744,8 +3458,8 @@ watch(adaModalTerbuka, (terbuka) => {
                     Laporan pegawai itu.
                 </p>
 
-                <!-- Pagination (link dari Laravel paginator, gaya Rekap Laporan).
-                     HP: ringkas (Sebelumnya / Hal x dari y / Berikutnya).
+                <!-- Pagination (link dari Laravel paginator).
+                     HP: ringkas (Sebelumnya / hal x dari y / Berikutnya).
                      >= sm: deretan nomor halaman lengkap. -->
                 <div
                     v-if="dataPegawai?.links && dataPegawai.links.length > 3"
@@ -3830,25 +3544,14 @@ watch(adaModalTerbuka, (terbuka) => {
                 </div>
             </div>
 
-            <!-- Semua modal di-Teleport ke <body> supaya TIDAK terjebak di
-                 stacking context konten MainLayout (header/topbar tidak lagi
-                 menutupi bagian atas modal, backdrop menutup seluruh layar).
-                 Tetap berada di dalam div pembungkus tunggal. -->
+            <!-- Semua modal di-Teleport ke <body> supaya tidak terjebak di
+                 stacking context MainLayout (backdrop menutup seluruh layar).
+                 Tetap di dalam div pembungkus tunggal. -->
             <Teleport to="body">
-                <!-- ============================================================
-                 MODAL RINCIAN KUOTA & RIWAYAT CUTI PEGAWAI (HANYA-BACA)
-                 Form edit saldo ada di baris tabel (klik angka).
-                 Modal ini hanya menampilkan KPI, rumus Saldo Akhir, dan
-                 seluruh riwayat pengajuan.
-                 Struktur 3 bagian:
-                   1) Header  : tetap di atas (judul, pegawai, tombol X)
-                   2) Body    : SATU-SATUNYA area yang scroll
-                   3) Footer  : tetap di bawah (Tutup)
-                 HP   : bottom sheet (sudut atas membulat, handle, tinggi
-                        maks 88dvh), bisa ditutup dengan X, klik backdrop,
-                        geser ke bawah, atau Esc.
-                 >= sm: dialog di tengah, lebar 'sm:max-w-lg'.
-                 ============================================================ -->
+                <!-- MODAL RINCIAN KUOTA & RIWAYAT (hanya-baca; edit saldo lewat
+                     baris tabel). Struktur: Header tetap, Body (satu-satunya
+                     area scroll), Footer tetap. HP = bottom sheet (tutup lewat
+                     X, backdrop, geser bawah, Esc); >= sm = dialog di tengah. -->
                 <div
                     v-if="showModal"
                     @click.self="closeModal"
@@ -3927,7 +3630,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                     </div>
                                 </div>
 
-                                <!-- Tombol X (selalu terlihat, target sentuh 40px) -->
+                                <!-- Tombol X (target sentuh 40px) -->
                                 <button
                                     @click="closeModal"
                                     type="button"
@@ -3957,8 +3660,8 @@ watch(adaModalTerbuka, (terbuka) => {
                             v-if="selectedPegawai"
                             class="flex-1 min-h-0 overflow-y-auto overscroll-contain"
                         >
-                            <!-- 4 KPI ringkas (Hak → Terpakai → Sisa → Saldo Akhir).
-                             HP: 2x2. >= sm: satu baris. -->
+                            <!-- 4 KPI ringkas (Hak, Terpakai, Sisa, Saldo Akhir).
+                                 HP: 2x2. >= sm: satu baris. -->
                             <div class="px-3 sm:px-6 pt-3 pb-3 sm:pb-2.5">
                                 <div
                                     class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5"
@@ -3985,8 +3688,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </p>
                                     </div>
 
-                                    <!-- KPI 2: Terpakai (Rose) — angka tampil,
-                                         sudah termasuk Tgh tahun ini -->
+                                    <!-- KPI 2: Terpakai (rose), tanpa Tgh tahun ini -->
                                     <div
                                         class="bg-rose-50 px-2.5 py-2 rounded-xl border border-rose-100 shadow-sm text-center"
                                     >
@@ -4010,7 +3712,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </p>
                                     </div>
 
-                                    <!-- KPI 3: Sisa (Biru) -->
+                                    <!-- KPI 3: Sisa (biru) -->
                                     <div
                                         class="bg-blue-50 px-2.5 py-2 rounded-xl border border-blue-100 shadow-sm text-center"
                                     >
@@ -4034,7 +3736,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </p>
                                     </div>
 
-                                    <!-- KPI 4: Saldo Akhir (Hitam Solid) -->
+                                    <!-- KPI 4: Saldo Akhir (hitam solid) -->
                                     <div
                                         class="bg-slate-800 border border-slate-900 text-white px-2.5 py-2 rounded-xl shadow-md text-center"
                                     >
@@ -4061,15 +3763,12 @@ watch(adaModalTerbuka, (terbuka) => {
                                 class="p-3 sm:px-6 sm:py-4 space-y-3 sm:space-y-4"
                             >
                                 <!-- Kotak Cara Perhitungan Saldo Akhir:
-                                     "Saldo Akhir {tahun}: Hak X + Bawaan Y [+ Tgh
-                                     tahun lalu T] − Terpakai Z = N hari".
-                                     'Terpakai' = cuti terpakai (ikut koreksi bulanan
-                                     Rekap Laporan) + Tgh tahun ini. Kalau Tgh tahun
-                                     ini > 0, rinciannya tampil di baris kecil di
-                                     bawah rumus.
-                                     Kalau ada koreksi, catatan kecil di bawahnya
-                                     menjelaskan bahwa angka sistem tidak dipakai
-                                     dan menunjuk bulan yang dikoreksi. -->
+                                     "Hak X + Bawaan Y [+ Tgh tahun lalu T] −
+                                     Terpakai Z = N hari". Terpakai = cuti
+                                     terpakai (ikut koreksi bulanan) + Tgh N.
+                                     Bila Tgh N > 0, rinciannya tampil di baris
+                                     kecil; bila ada koreksi, catatan kecil
+                                     menjelaskan bulan yang dikoreksi. -->
                                 <div
                                     class="bg-gray-50 px-3 sm:px-4 py-2 rounded-lg text-xs text-gray-600 border border-gray-100 leading-relaxed"
                                 >
@@ -4122,29 +3821,13 @@ watch(adaModalTerbuka, (terbuka) => {
                                         hari</span
                                     >
                                     <p
-                                        v-if="
-                                            getSisaDitangguhkanTahunIni(
-                                                selectedPegawai,
-                                            ) > 0
-                                        "
+                                        v-if="getSisaDitangguhkanTahunIni(selectedPegawai) > 0"
                                         class="mt-1 text-[11px] text-gray-500"
                                     >
-                                        (Terpakai
-                                        {{ getTerpakaiTampil(selectedPegawai) }}
-                                        =
-                                        {{
-                                            getTerpakaiTampil(selectedPegawai) -
-                                            getSisaDitangguhkanTahunIni(
-                                                selectedPegawai,
-                                            )
-                                        }}
-                                        hari digunakan +
-                                        {{
-                                            getSisaDitangguhkanTahunIni(
-                                                selectedPegawai,
-                                            )
-                                        }}
-                                        hari ditangguhkan)
+                                        Tgh {{ tahunAktif }}:
+                                        {{ getSisaDitangguhkanTahunIni(selectedPegawai) }}
+                                        hari tidak mengurangi saldo dan dibawa ke
+                                        {{ tahunAktif + 1 }}.
                                     </p>
                                     <p
                                         v-if="adaKoreksi(selectedPegawai)"
@@ -4187,10 +3870,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                 </div>
                                 <!-- ================= END KOTAK PERHITUNGAN ================= -->
 
-                                <!-- Catatan Admin HR (catatan_saldo), hanya tampil
-                                     kalau ada isinya. Kotak oranye "Sisa
-                                     Ditangguhkan" sudah dihapus karena angkanya
-                                     sudah terlihat di rumus dan di kolom Tgh. -->
+                                <!-- Catatan Admin HR (catatan_saldo), tampil
+                                     bila ada isinya. -->
                                 <p
                                     v-if="selectedPegawai.catatan_saldo"
                                     class="rounded-lg border border-gray-100 bg-gray-50 px-3 sm:px-4 py-2 text-xs text-gray-600 italic break-words"
@@ -4284,8 +3965,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                         </label>
                                     </div>
 
-                                    <!-- Kosong: tidak ada riwayat sama sekali, atau
-                                         tidak ada yang cocok dengan filter -->
+                                    <!-- Kosong: tidak ada riwayat sama sekali,
+                                         atau tidak ada yang cocok dengan filter -->
                                     <div
                                         v-if="riwayatTersaring.length === 0"
                                         class="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-200 text-xs text-gray-400"
@@ -4449,8 +4130,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                                     Rincian Lengkap Pengajuan
                                                 </div>
 
-                                                <!-- Alamat & kontak selama cuti (tampil '-'
-                                             kalau field belum dikirim controller) -->
+                                                <!-- Alamat & kontak selama cuti
+                                                     ('-' bila field belum dikirim
+                                                     controller) -->
                                                 <div
                                                     class="grid grid-cols-1 md:grid-cols-2 gap-3 bg-white p-3 rounded-lg border border-green-100"
                                                 >
@@ -4537,10 +4219,10 @@ watch(adaModalTerbuka, (terbuka) => {
                                                     >
                                                 </div>
 
-                                                <!-- Jejak Approval LENGKAP: seluruh jenjang
-                                             L1-L4 sesuai rantai role pemohon, dengan
-                                             status masing-masing (Setuju / Tolak /
-                                             Menunggu / Belum Giliran / Ditangguhkan). -->
+                                                <!-- Jejak Approval LENGKAP: seluruh
+                                                     jenjang L1-L4 sesuai rantai
+                                                     role pemohon, dengan status
+                                                     masing-masing. -->
                                                 <div
                                                     v-if="
                                                         getVisibleApprovalChain(
@@ -4769,13 +4451,9 @@ watch(adaModalTerbuka, (terbuka) => {
 
                 <!-- ========================================== -->
                 <!-- MODAL GENERATE SALDO TAHUN BARU (MANUAL)   -->
-                <!-- Memanggil route 'admin.saldo.generate'     -->
-                <!-- (AdminController::generateSaldoManual) —   -->
-                <!-- Artisan Command                            -->
-                <!-- 'saldo-cuti:generate-tahun-baru'.          -->
-                <!-- Tidak dijadwalkan otomatis.                -->
-                <!-- Dua langkah: (1) pilih tahun, (2) konfirmasi. -->
-                <!-- Tahun tujuan DINAMIS (tahun dilihat + 1).  -->
+                <!-- Route 'admin.saldo.generate'. Dua langkah: -->
+                <!-- pilih tahun, lalu konfirmasi. Tahun tujuan -->
+                <!-- = tahun yang dilihat + 1.                  -->
                 <!-- ========================================== -->
                 <div
                     v-if="isGenerateSaldoModalOpen"
@@ -4829,7 +4507,7 @@ watch(adaModalTerbuka, (terbuka) => {
                                     ditangguhkan. Bawaan dari sisa saldo biasa
                                     maks. 6 hari (12 hari jika sisa N-2 dan N-1
                                     sama-sama 12). Sisa tahun lalu dihitung
-                                    sebagai Hak − Terpakai − Tgh tahun itu.
+                                    sebagai Hak − Terpakai (Tgh tidak mengurangi).
                                 </p>
 
                                 <label
@@ -4837,9 +4515,9 @@ watch(adaModalTerbuka, (terbuka) => {
                                 >
                                     Tahun yang digenerate
                                 </label>
-                                <!-- Opsi dirender dinamis dari 'pilihanTahunGenerate'
-                                 (computed: tahun yang dilihat + 1), sehingga selalu
-                                 sama dengan label tombol. -->
+                                <!-- Opsi dari 'pilihanTahunGenerate' (tahun yang
+                                     dilihat + 1), selalu sama dengan label
+                                     tombol. -->
                                 <select
                                     v-model="generateSaldoForm.tahun"
                                     class="w-full min-h-[44px] border border-gray-300 rounded-md px-3 py-2 text-base sm:text-sm mb-2 focus:ring-emerald-500 focus:border-emerald-500"
@@ -4890,7 +4568,7 @@ watch(adaModalTerbuka, (terbuka) => {
                             </template>
 
                             <!-- LANGKAH 2: konfirmasi akhir. Request baru dikirim
-                             setelah tombol "Ya, Generate Saldo" ditekan. -->
+                                 setelah "Ya, Generate Saldo" ditekan. -->
                             <template v-else>
                                 <div
                                     class="rounded-lg border border-amber-200 bg-amber-50 p-3 sm:p-4 text-amber-900"

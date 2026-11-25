@@ -2,22 +2,24 @@
 
 namespace App\Services;
 
-use App\Models\CutiDitangguhkan;
 use App\Models\SaldoCuti;
 
-// Satu-satunya tempat logika carry-over dari sisa saldo biasa.
-// Dipakai oleh Command GenerateSaldoCutiTahunBaru, AdminController (preview),
-// dan SaldoCuti::sinkronkanBawaan().
-//
-// carryDariSaldoBiasa() mengembalikan SISA MENTAH tahun lalu:
-//   Hak - Terpakai - Tgh tahun itu
-// (tanpa bawaan, tanpa dipotong 6). Tgh tahun itu WAJIB dikurangkan di sini
-// karena ia masuk ke Total Tersedia tahun berikutnya lewat "Tgh tahun lalu"
-// (lihat RekapKuotaDetailController::hitungKuota). Tanpa pengurangan, Tgh
-// terhitung dua kali: sekali di carry, sekali lagi sebagai Tgh tahun lalu.
-//
-// Aturan bawaan (maks. 6 hari, atau 12 jika sisa N-2 dan N-1 sama-sama 12)
-// diterapkan SATU KALI oleh SaldoCuti::hitungBawaan() saat ditampilkan.
+/**
+ * Satu-satunya tempat logika carry-over dari sisa saldo biasa.
+ * Dipakai oleh Command GenerateSaldoCutiTahunBaru, AdminController (preview),
+ * dan SaldoCuti::sinkronkanBawaan().
+ *
+ * carryDariSaldoBiasa() mengembalikan sisa mentah tahun lalu (Hak - Terpakai),
+ * tanpa bawaan dan tanpa dipotong 6.
+ *
+ * Cuti ditangguhkan (Tgh) TIDAK dikurangkan di sini karena harinya kembali ke
+ * saldo tahun itu. Tgh dibawa terpisah ke tahun berikutnya dan menambah Total
+ * Tersedia (lihat RekapKuotaDetailController::hitungKuota, TGH_MASUK_TOTAL).
+ * Contoh: Hak 12, terpakai 4, Tgh 2 -> sisa 8; bawaan = min(6, 8) = 6; Tgh 2 dibawa terpisah.
+ *
+ * Aturan bawaan (maks. 6 hari, atau 12 jika sisa N-2 dan N-1 sama-sama 12)
+ * diterapkan sekali oleh SaldoCuti::hitungBawaan() saat ditampilkan.
+ */
 class CarryOverSaldoService
 {
     public function ringkasanTahun(int $pegawaiId, int $tahun): ?array
@@ -36,25 +38,18 @@ class CarryOverSaldoService
         $eligible = SaldoCuti::hitungBawaan($duaTahunLalu, $carry, $hak);
         $terpakai = SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
 
-        // Tgh tahun ini memotong sisa hak (sama dengan TGH_TAHUN_INI_MENGURANGI_SISA
-        // di RekapKuotaDetailController).
-        $tghTahunIni = (int) CutiDitangguhkan::where('pegawai_id', $pegawaiId)
-            ->where('tahun_asal', $tahun)
-            ->sum('jumlah_hari');
-
         return [
             'terpakai' => $terpakai,
-            'sisa_hak' => max($hak - $terpakai - $tghTahunIni, 0),
-            // CATATAN: belum memuat Tgh (tahun lalu / tahun ini). Bukan angka
-            // yang tampil di Rekap Kuota Detail; jangan dipakai untuk tampilan.
+            // Tgh tahun ini tidak mengurangi sisa (TGH_TAHUN_INI_MENGURANGI_SISA = false).
+            'sisa_hak' => max($hak - $terpakai, 0),
+            // Belum memuat Tgh tahun lalu; bukan angka di Rekap Kuota Detail, jangan dipakai untuk tampilan.
             'saldo_akhir' => max($hak + $eligible - $terpakai, 0),
         ];
     }
 
     /**
-     * Sisa mentah tahun ($tahunBaru - 1) = Hak - Terpakai - Tgh tahun itu
-     * (tanpa bawaan, tanpa dipotong 6). Mengembalikan 0 jika dompet tahun
-     * lalu belum ada.
+     * Sisa mentah tahun ($tahunBaru - 1) = Hak - Terpakai (tanpa bawaan, tanpa
+     * dipotong 6, tanpa Tgh). Mengembalikan 0 jika dompet tahun lalu belum ada.
      */
     public function carryDariSaldoBiasa(int $pegawaiId, int $tahunBaru): int
     {

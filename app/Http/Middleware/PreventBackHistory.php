@@ -1,7 +1,7 @@
 <?php
 /**
  * =====================================================================
- * Project      : Agreleave - Portal Cuti Digital Terintegrasi
+ * Project      : Sistem Informasi Cuti ASN - Portal Cuti Digital Terintegrasi
  * Description  : Sistem Informasi Manajemen Cuti Pegawai
  * Agency       : Kementerian Pertanian Republik Indonesia
  *                (Kelompok Substansi Subbagian Tata Usaha)

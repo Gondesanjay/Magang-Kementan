@@ -3,33 +3,34 @@
 namespace App\Support;
 
 use App\Models\CutiDitangguhkan;
+use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use Carbon\Carbon;
+use Illuminate\Support\Collection;
 
 /**
- * SATU-SATUNYA tempat rumus "Rincian Sisa Cuti" untuk modal Detail Cuti
- * DAN untuk cek saldo saat Kepala Biro menyetujui (MonitoringCutiController::process).
- * Rumus sama dengan DashboardController::hitungSaldoPegawai() dan
+ * Satu-satunya tempat rumus "Rincian Sisa Cuti" untuk modal Detail Cuti
+ * dan cek saldo saat Kepala Biro menyetujui (MonitoringCutiController::process).
+ * Sama dengan DashboardController::hitungSaldoPegawai() dan
  * RekapKuotaDetailController::hitungKuota():
  *   terpakai total = SaldoCuti::terpakaiEfektif() + Tgh tahun itu
  *   sisa hak       = kuota - terpakai total
  *   total tersedia = kuota + bawaan eligible + dikembalikan - terpakai total
  *   dikembalikan   = Tgh tahun asal (tahun - 1)
+ * Aritmetikanya ditulis sekali di hitungTotal().
  *
- * Rumus aritmetika di atas kini ditulis SEKALI di hitungTotal(). CutiController,
- * DashboardController, dan hitung() di bawah memanggil method itu.
+ * Tahun tiap pengajuan: tahun filter bila cuti beririsan dengan tahun itu,
+ * selain itu tahun tanggal_mulai.
  *
- * Tahun yang dipakai untuk tiap pengajuan:
- *   - tahun filter halaman, bila cuti beririsan dengan tahun itu;
- *   - selain itu, tahun tanggal_mulai.
- *
- * [N+1] lengkapi() kini memuat SEMUA bahan hitungan dalam 4 query tetap
- * (saldo, Tgh, koreksi bulanan, cuti disetujui), berapa pun jumlah pegawainya.
- * Terpakai efektif dihitung di memori lewat SaldoCuti::terpakaiEfektifDariBahan(),
- * dengan aturan yang SAMA dengan SaldoCuti::terpakaiEfektif().
+ * [N+1] lengkapi() memuat semua bahan hitungan dalam 4 query tetap, berapa
+ * pun jumlah pegawainya. Terpakai efektif dihitung di memori lewat
+ * SaldoCuti::terpakaiEfektifDariBahan() (aturan sama dengan terpakaiEfektif()).
  */
 class RincianSaldo
 {
+    /**
+     * @param PengajuanCuti $pengajuan
+     */
     public static function tahunUntuk($pengajuan, ?int $tahunFilter = null): int
     {
         $mulai   = Carbon::parse($pengajuan->tanggal_mulai);
@@ -46,12 +47,10 @@ class RincianSaldo
 
 
     /**
-     * Rincian saldo SATU pegawai pada SATU tahun (3 query kecil).
-     * Dipakai untuk cek saldo saat persetujuan, supaya angkanya sama persis
-     * dengan yang tampil di modal Detail (lihat lengkapi()).
-     *
-     * Dipanggil sebelum pengajuan berstatus 'disetujui', jadi pengajuan yang
-     * sedang dicek belum ikut terhitung sebagai terpakai.
+     * Rincian saldo satu pegawai pada satu tahun (3 query kecil). Dipakai
+     * untuk cek saldo saat persetujuan, jadi angkanya sama dengan modal Detail.
+     * Dipanggil sebelum status 'disetujui', jadi pengajuan yang dicek belum
+     * terhitung sebagai terpakai.
      */
     public static function untukPegawaiTahun(int $pegawaiId, int $tahun): array
     {
@@ -71,17 +70,17 @@ class RincianSaldo
             ->map(fn($baris) => (int) $baris->sum('jumlah_hari'));
 
 
-        // Satu pegawai: jalur lama (terpakaiEfektif per pegawai) sudah cukup.
+        // Satu pegawai: terpakaiEfektif per pegawai sudah cukup.
         return self::hitung($pegawaiId, $tahun, $saldo, $tgh, null);
     }
 
 
     /**
      * Menempelkan rincian saldo ke $item->pegawai (dan $item->rincian_saldo).
-     * Query ter-batch: 4 query untuk seluruh daftar.
+     * Ter-batch: 4 query untuk seluruh daftar.
      *
-     * @param iterable $daftar koleksi PengajuanCuti (relasi 'pegawai' sebaiknya
-     *                         sudah di-eager load)
+     * @param iterable<PengajuanCuti> $daftar relasi 'pegawai' sebaiknya
+     *                                        sudah di-eager load
      */
     public static function lengkapi(iterable $daftar, ?int $tahunFilter = null): void
     {
@@ -119,7 +118,7 @@ class RincianSaldo
             ->map(fn($baris) => (int) $baris->sum('jumlah_hari'));
 
 
-        // [N+1] Bahan hitung Terpakai untuk SEMUA pegawai & tahun (2 query).
+        // [N+1] Bahan hitung Terpakai untuk semua pegawai & tahun (2 query).
         $bahan = SaldoCuti::muatBahanTerpakai($pegawaiIds, $tahunInti);
 
 
@@ -136,8 +135,8 @@ class RincianSaldo
             $info = $cache[$kunci];
 
 
-            // Model Pegawai bisa dipakai bersama oleh beberapa pengajuan (eager
-            // load). Di-clone supaya dua pengajuan beda tahun tidak saling timpa.
+            // Model Pegawai bisa dipakai bersama (eager load); di-clone agar
+            // dua pengajuan beda tahun tidak saling timpa.
             $pegawai = clone $item->pegawai;
 
 
@@ -162,11 +161,10 @@ class RincianSaldo
 
 
     /**
-     * SATU-SATUNYA rumus saldo murni (tanpa query ke database).
+     * Rumus saldo murni (tanpa query). Hasil tidak pernah negatif.
      *   terpakai total = terpakai efektif + Tgh tahun ini
      *   sisa hak       = kuota - terpakai total
      *   total tersedia = kuota + bawaan + dikembalikan (Tgh tahun lalu) - terpakai total
-     * Hasil tidak pernah negatif.
      */
     public static function hitungTotal(
         int $kuota,
@@ -189,8 +187,13 @@ class RincianSaldo
      * @param array|null $bahan hasil SaldoCuti::muatBahanTerpakai(); null =
      *                          pakai SaldoCuti::terpakaiEfektif() (query per pegawai).
      */
-    private static function hitung(int $pid, int $tahun, $saldo, $tgh, ?array $bahan = null): array
-    {
+    private static function hitung(
+        int $pid,
+        int $tahun,
+        Collection $saldo,
+        Collection $tgh,
+        ?array $bahan = null
+    ): array {
         $s     = $saldo->get($pid . '-' . $tahun);
         $lalu  = $saldo->get($pid . '-' . ($tahun - 1));
 

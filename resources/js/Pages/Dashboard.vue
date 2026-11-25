@@ -1802,9 +1802,9 @@ const getCatatanAtasanList = (item) => {
                                 <p
                                     v-if="statsAktif?.ada_koreksi"
                                     class="mt-1 text-[10px] md:text-[11px] font-medium leading-tight text-slate-500"
-                                    :title="`Menurut riwayat sistem: ${statsAktif.cuti_terpakai_sistem} hari digunakan. Penyesuaian ${statsAktif.selisih_koreksi > 0 ? '+' : ''}${statsAktif.selisih_koreksi} hari dari Admin SDM.`"
+                                :title="`Menurut riwayat sistem: ${statsAktif.cuti_terpakai_sistem} hari digunakan. Penyesuaian statsAktif.selisihkoreksi>0?'+':''{statsAktif.selisih_koreksi} hari dari Admin SDM.`"
                                 >
-                                    ✎ Disesuaikan Admin SDM
+                                   ✎ Disesuaikan oleh Admin SDM
                                 </p>
                             </div>
                             <div class="shrink-0">
@@ -1945,7 +1945,7 @@ const getCatatanAtasanList = (item) => {
                         </div>
                         <p
                             class="mt-2 pt-2 border-t border-slate-100 text-[10px] md:text-[11px] font-medium leading-snug text-slate-500"
-                            :title="`Total (${totalCutiTersedia}) = Sisa ${tahunKpi} (${jatahCutiBerjalan}) + Bawaan ${tahunKpi} (${saldoBawaanEligible}) + Ditangguhkan ${tahunKpi - 1} (${cutiDikembalikan})`"
+                            :title="`Total (${totalCutiTersedia}) = Sisa tahunKpi({jatahCutiBerjalan}) + Bawaan tahunKpi({saldoBawaanEligible}) + Ditangguhkan tahunKpi-1({cutiDikembalikan})`"
                         >
                             {{ jatahCutiBerjalan }} sisa +
                             {{ saldoBawaanEligible }} bawaan +
@@ -4615,12 +4615,6 @@ const getCatatanAtasanList = (item) => {
                                 {{ cutiTerpakaiTotal }} =
                                 {{ jatahTahunIniUntukSaldo }} hari.
                             </p>
-                            <p v-if="cutiDitangguhkan > 0">
-                                Cuti yang ditangguhkan tetap dihitung terpakai
-                                di
-                                {{ tahunKpi }}, lalu dikembalikan ke saldo
-                                {{ tahunKpi + 1 }}.
-                            </p>
                         </div>
                     </details>
 
@@ -5216,3 +5210,5 @@ const getCatatanAtasanList = (item) => {
         </div>
     </Teleport>
 </template>
+
+

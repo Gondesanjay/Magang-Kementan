@@ -51,12 +51,7 @@ const filterTahun = ref(
 const filterBulan = ref(props.filters.bulan ? String(props.filters.bulan) : "");
 const filterKelompok = ref(props.filters.kelompok_substansi || "");
 
-// ================================================================
-// DAFTAR TAHUN FILTER — DINAMIS (composable reusable useTahunFilter)
-// Opsi tahun otomatis relatif terhadap tahun berjalan, jadi tidak perlu
-// edit kode setiap pergantian tahun. Composable yang sama bisa dipakai
-// di halaman lain (Rekap Kuota Detail, Monitoring Cuti, dsb).
-// ================================================================
+// Opsi tahun dinamis (relatif terhadap tahun berjalan) lewat composable.
 const daftarTahunFilter = useTahunFilter();
 
 const bulanList = [
@@ -88,15 +83,13 @@ const keyBulan = [
     "des",
 ];
 
-// Nilai kelompok "-" (pegawai tanpa kelompok) ditampilkan sebagai
-// "Tanpa kelompok", sama seperti di halaman Monitoring Cuti. Nilai yang
-// dikirim ke server tetap "-", jadi filter di backend tidak berubah.
+// Kelompok "-" ditampilkan sebagai "Tanpa kelompok"; nilai ke server tetap "-".
 const tampilKelompok = (nilai) => (nilai === "-" ? "Tanpa kelompok" : nilai);
 
 // ================================================================
 // FETCH DATA
-// - `lewatiWatch` mencegah request ganda (mis. saat Reset Filter).
-// - Timer debounce pencarian dibersihkan saat halaman ditinggalkan.
+// `lewatiWatch` mencegah request ganda (mis. saat Reset Filter);
+// timer debounce dibersihkan saat halaman ditinggalkan.
 // ================================================================
 let lewatiWatch = false;
 let searchTimeout = null;
@@ -133,8 +126,8 @@ watch(searchQuery, () => {
     }, 500);
 });
 
-// Sinkronkan state lokal dengan props.filters (mis. saat tombol
-// Back/Forward browser dipakai), tanpa memicu fetch ulang.
+// Sinkronkan state lokal dengan props.filters (mis. tombol Back/Forward
+// browser), tanpa memicu fetch ulang.
 watch(
     () => props.filters,
     (f) => {
@@ -192,18 +185,17 @@ const columnsToShow = computed(() => {
     }));
 });
 
-// [FILTER BULAN] true bila filter Bulan aktif. Saat true: kolom Tgh
-// disembunyikan dan Total hanya menampilkan cuti pada bulan terpilih.
-// Saat "Semua Bulan" tampilan penuh (Jan-Des + Tgh + Total) tetap seperti biasa.
+// [FILTER BULAN] True bila filter Bulan aktif: kolom Tgh disembunyikan dan
+// Total hanya cuti pada bulan terpilih.
 const modeBulan = computed(() => Boolean(filterBulan.value));
 
-// Nilai cuti satu bulan untuk satu pegawai (dipakai tabel & kartu)
+// Nilai cuti satu bulan untuk satu pegawai (tabel & kartu)
 const nilaiBulan = (item, key) => {
     const nilai = item.cuti?.[key];
     return nilai !== undefined && nilai !== null ? nilai : 0;
 };
 
-// [KOREKSI BULANAN] Sel bulan yang dikoreksi Admin HR (kotak kuning + tanda *).
+// [KOREKSI BULANAN] Sel bulan yang dikoreksi Admin HR (kuning + tanda *).
 const bulanDiedit = (item, key) => Boolean(item.cuti_diedit?.[key]);
 
 const kelasBulanTabel = (item, key) => {
@@ -231,61 +223,39 @@ const titleBulan = (item, key) =>
 
 // ================================================================
 // TGH (CUTI DITANGGUHKAN), TANDA * & RINCIAN TOTAL
-// Semua angka & status dihitung di BACKEND (AdminController::
-// buildLaporanData()); halaman ini hanya menampilkannya, tidak
-// menebak dari selisih jumlah bulan lagi.
+// Angka & status dihitung di backend (AdminController::buildLaporanData());
+// halaman ini hanya menampilkannya.
 //
-// Field dari backend per pegawai:
-//   terpakai / terpakai_sistem / terpakai_diedit
-//   tgh      / tgh_sistem      / tgh_diedit
-//   ada_edit, total, info_terpakai_edit, info_tgh_edit
-//   cuti / cuti_sistem / cuti_diedit / cuti_basi (per bulan)
-//   tgh_tahunan, koreksi_tahunan_lama, ada_koreksi_bulanan
+// Total = Terpakai + Tgh. Tanda * muncul bila salah satu komponen
+// dikoreksi Admin HR (tidak muncul saat filter Bulan aktif, karena koreksi
+// bersifat tahunan).
 //
-// Total = Terpakai + Tgh (cuti ditangguhkan), sama dengan Terpakai
-// di Rekap Kuota Detail. Teks di layar dibuat ringkas:
-//   - tidak ada koreksi : angka saja (tanpa keterangan tambahan)
-//   - ada koreksi       : "Koreksi, semula X hari"
-//
-// Tanda * di angka Total muncul bila SALAH SATU komponen dikoreksi Admin HR.
-// Saat filter Bulan aktif, backend mengirim kedua komponen berstatus
-// "sistem" (koreksi Admin bersifat tahunan), jadi tanda * tidak muncul.
-//
-// [FILTER BULAN] Saat filter Bulan aktif, kolom Tgh tidak ditampilkan dan
-// Total = Terpakai bulan itu saja (Tgh tidak ikut dijumlahkan), supaya
-// angka di layar konsisten: kolom bulan = Total.
-//
-// CATATAN PENGGABUNGAN: logika lama dari versi sebelumnya
-// (totalDariBulan, adaKoreksi, adaItemDikoreksi, keteranganKoreksi)
-// DIHAPUS karena digantikan sepenuhnya oleh field ada_edit dari backend.
+// [FILTER BULAN] Kolom Tgh disembunyikan dan Total = Terpakai bulan itu.
 // ================================================================
 const adaEdit = (item) => Boolean(item.ada_edit);
 
 const adaItemDiedit = computed(() => props.laporan.some(adaEdit));
 
-// Tgh di kotak Tgh (selalu tampil di mode "Semua Bulan", nilai 0 pun tetap ditampilkan)
+// Tgh selalu tampil di mode "Semua Bulan", walau 0
 const nilaiTgh = (item) => Number(item.tgh) || 0;
 
-// [FILTER BULAN] Total yang ditampilkan di tabel/kartu/modal.
-//   - Semua Bulan : Total dari backend (Terpakai + Tgh)
-//   - Filter bulan: hanya Terpakai bulan itu (tanpa Tgh)
+// [FILTER BULAN] Total yang ditampilkan: Terpakai + Tgh, atau Terpakai
+// bulan itu saja saat filter bulan aktif.
 const totalTampil = (item) =>
     modeBulan.value ? Number(item.terpakai) || 0 : Number(item.total) || 0;
 
-// Nama bulan yang sedang difilter (null bila "Semua Bulan"). Memakai
-// props.filters.bulan supaya berubah bersamaan dengan data dari server.
+// Nama bulan yang difilter (null bila "Semua Bulan"), mengikuti data server.
 const namaBulanAktif = computed(() =>
     props.filters.bulan
         ? bulanList[parseInt(props.filters.bulan, 10) - 1]
         : null,
 );
 
-// Catatan koreksi: kosong bila angka sesuai sistem, supaya layar tidak
-// dipenuhi kata "sistem" untuk kondisi yang normal.
+// Catatan koreksi; kosong bila angka sesuai sistem.
 const teksStatus = (diedit, sistem) =>
     diedit ? `koreksi, semula ${Number(sistem) || 0} hari` : "";
 
-// Tooltip jejak koreksi: siapa, kapan, alasan (bila ada).
+// Tooltip jejak koreksi: siapa, kapan, alasan.
 const teksInfoEdit = (info) => {
     if (!info) return undefined;
     let teks = `Dikoreksi oleh ${info.oleh || "Admin HR"}`;
@@ -294,7 +264,7 @@ const teksInfoEdit = (info) => {
     return teks;
 };
 
-// Dua baris rincian, SELALU berurutan: Terpakai, lalu Tgh.
+// Dua baris rincian, selalu berurutan: Terpakai, lalu Tgh.
 const semuaBarisRincian = (item) => [
     {
         key: "terpakai",
@@ -316,22 +286,18 @@ const semuaBarisRincian = (item) => [
     },
 ];
 
-// [FILTER BULAN] Saat filter bulan aktif, baris Tgh tidak ditampilkan
-// (hanya Terpakai), sejalan dengan kolom Tgh yang disembunyikan.
+// [FILTER BULAN] Saat filter bulan aktif, hanya baris Terpakai.
 const barisRincian = (item) => {
     const baris = semuaBarisRincian(item);
     return modeBulan.value ? baris.slice(0, 1) : baris;
 };
 
 // ================================================================
-// MODAL RINCIAN TOTAL (tabel desktop)
-// Klik tombol (i) di kolom Aksi -> rincian muncul sebagai MODAL di
-// TENGAH layar (desktop) atau bottom sheet dari bawah (layar HP), dengan
-// latar gelap di belakangnya. Tetap terbuka sampai ditutup: klik area
-// gelap di luar kotak, tombol X, tombol "Tutup Rincian", atau tekan Esc.
-// Dirender lewat Teleport ke <body> supaya tidak terpotong overflow tabel.
-// Selama modal terbuka, scroll halaman di belakangnya dikunci. Fokus
-// pindah ke tombol X saat dibuka dan kembali ke tombol (i) saat ditutup.
+// MODAL RINCIAN TOTAL
+// Tombol (i) di kolom Aksi membuka modal (tengah layar di desktop, bottom
+// sheet di HP) lewat Teleport ke body. Ditutup lewat area gelap, tombol X,
+// "Tutup Rincian", atau Esc. Scroll halaman dikunci selama terbuka; fokus
+// pindah ke tombol X lalu kembali ke tombol (i).
 // ================================================================
 const popover = ref(null);
 const tombolTutupRef = ref(null); // tombol X di modal (menerima fokus saat dibuka)
@@ -363,7 +329,7 @@ watch(
     () => tutupPopover(),
 );
 
-// Kalimat penjelas asal angka tiap komponen (bahasa sederhana)
+// Kalimat penjelas asal angka tiap komponen
 const keteranganBaris = (baris) => {
     if (baris.diedit) {
         return `Hasil sistem ${baris.sistem} hari, dikoreksi Admin HR jadi ${baris.nilai} hari.`;
@@ -374,8 +340,6 @@ const keteranganBaris = (baris) => {
     return "Cuti disetujui yang ditangguhkan. Tetap dihitung di Total.";
 };
 
-// [PERBAIKAN] Pada file asli, template string ini rusak (backtick dan ${ }
-// hilang) sehingga judul tampil sebagai teks mentah. Sekarang sudah benar.
 const judulRincian = (item) =>
     `Rincian Total: ${totalTampil(item)} hari${
         namaBulanAktif.value ? ` (${namaBulanAktif.value})` : ""
@@ -383,15 +347,12 @@ const judulRincian = (item) =>
 
 // ================================================================
 // [KOREKSI BULANAN] MODAL EDIT KOREKSI (hanya Admin HR / bisaEdit)
-// Admin mengubah angka per bulan (Jan-Des) dan total Tgh tahun laporan
-// dalam SATU form, lalu disimpan ke route admin.rekap.koreksi.
-//
-//   - Kolom bulan dikosongkan, atau diisi sama dengan angka sistem
-//     -> koreksi bulan itu dihapus (kembali ke hitungan sistem).
-//   - Form selalu memakai angka SEPENUHNYA SETAHUN (item.cuti & item.tgh_tahunan),
-//     tidak terpengaruh filter Bulan.
-//   - Batas (Terpakai <= Total Hak Tersedia) dijaga backend; pesan
-//     galatnya ditampilkan di dalam modal.
+// Admin mengubah angka per bulan dan total Tgh tahun laporan dalam satu
+// form, disimpan ke route admin.rekap.koreksi.
+//   - Kolom kosong atau sama dengan angka sistem -> koreksi dihapus.
+//   - Form memakai angka setahun penuh, tidak terpengaruh filter Bulan.
+//   - Batas (Terpakai <= Total Hak Tersedia) dijaga backend; galatnya
+//     ditampilkan di modal.
 // ================================================================
 const editItem = ref(null);
 const formCuti = ref({});
@@ -528,14 +489,14 @@ const simpanEdit = () => {
     );
 };
 
-// Esc menutup modal yang paling atas (edit dulu, baru rincian).
+// Esc menutup modal paling atas (edit dulu, baru rincian).
 const tutupPopoverSaatEsc = (event) => {
     if (event.key !== "Escape") return;
     if (editItem.value) tutupEdit();
     else tutupPopover();
 };
 
-// Kunci scroll halaman selama salah satu modal terbuka & fokuskan tombol X.
+// Kunci scroll halaman selama modal terbuka & fokuskan tombol X.
 watch(
     () => [popover.value, editItem.value],
     ([rincian, edit]) => {
@@ -552,7 +513,7 @@ const isFilterAktif = computed(() => {
     );
 });
 
-// Chip filter aktif — hanya filter yang bukan nilai default
+// Chip filter aktif (hanya yang bukan nilai default)
 const activeFilterChips = computed(() => {
     const chips = [];
     if (searchQuery.value) {
@@ -616,11 +577,9 @@ const resetFilters = () => {
 
 // ================================================================
 // DROPDOWN FILTER KUSTOM (Kelompok Substansi, Bulan, Tahun)
-// Di semua ukuran layar (termasuk HP) daftar pilihan muncul TEPAT di
-// bawah kotak dropdown-nya, tinggi dibatasi (bisa di-scroll), teks
-// panjang membungkus. Lebar daftar selalu sama dengan lebar kotaknya.
-// Hanya satu dropdown terbuka sekaligus; menutup saat klik di luar atau
-// menekan Esc (listener di document).
+// Daftar muncul tepat di bawah kotaknya dengan lebar sama, tinggi dibatasi
+// (bisa di-scroll). Hanya satu terbuka sekaligus; menutup saat klik di luar
+// atau Esc.
 // ================================================================
 const toolbarRef = ref(null);
 const dropdownTerbuka = ref(null); // 'kelompok' | 'bulan' | 'tahun' | null
@@ -671,8 +630,7 @@ onBeforeUnmount(() => {
     document.removeEventListener("click", tutupDropdownSaatKlikLuar);
     document.removeEventListener("keydown", tutupDropdownSaatEsc);
     document.removeEventListener("keydown", tutupPopoverSaatEsc);
-    // Pastikan scroll halaman tidak terkunci bila halaman ditinggalkan
-    // saat modal masih terbuka.
+    // Jangan biarkan scroll terkunci bila halaman ditinggalkan saat modal terbuka.
     document.body.style.overflow = "";
     clearTimeout(searchTimeout);
 });
@@ -682,13 +640,12 @@ onBeforeUnmount(() => {
     <Head title="Rekap Laporan Cuti" />
 
     <MainLayout>
-        <!-- Kartu putih menjadi satu-satunya elemen anak langsung MainLayout
-             (slot MainLayout dibungkus <Transition> yang hanya boleh punya
-             SATU elemen anak). -->
+        <!-- Kartu putih harus jadi satu-satunya elemen anak MainLayout
+             (slot dibungkus Transition yang hanya menerima satu anak). -->
         <div
             class="bg-white shadow-sm sm:rounded-xl rounded-lg border border-gray-200 p-3 sm:p-4"
         >
-            <!-- ===================== JUDUL + EXPORT (baris atas) ===================== -->
+            <!-- ===================== JUDUL + EXPORT ===================== -->
             <div
                 class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-5 gap-3 sm:gap-4"
             >
@@ -738,14 +695,9 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- ===================== TOOLBAR: SEARCH + FILTER =====================
-                 Layout responsif:
-                   - HP (< 640px)     : Search 1 baris, Kelompok 1 baris,
-                                        Bulan & Tahun berdampingan
-                   - Tablet (640-1023): Search 1 baris, lalu Kelompok | Bulan | Tahun
-                                        dalam satu baris
-                   - Desktop (>= 1024): Search + 3 filter dalam SATU baris;
-                                        turun rapi ke baris kedua bila ruang
-                                        tidak cukup. -->
+                 HP: Search, Kelompok, lalu Bulan & Tahun berdampingan.
+                 Tablet: Search, lalu Kelompok | Bulan | Tahun satu baris.
+                 Desktop: semua dalam satu baris, turun bila ruang kurang. -->
             <div
                 ref="toolbarRef"
                 class="flex flex-col gap-2 mb-3 lg:flex-row lg:flex-wrap lg:items-center"
@@ -784,8 +736,7 @@ onBeforeUnmount(() => {
                     />
                 </div>
 
-                <!-- Filter group: dropdown KUSTOM (bukan <select> bawaan
-                     browser) supaya lebar & arah buka bisa dikontrol. -->
+                <!-- Filter group: dropdown kustom (bukan select bawaan browser) -->
                 <div
                     class="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_6.5rem] lg:flex lg:flex-none lg:items-center"
                 >
@@ -971,7 +922,7 @@ onBeforeUnmount(() => {
                         </ul>
                     </div>
 
-                    <!-- FILTER TAHUN — DINAMIS (composable useTahunFilter) -->
+                    <!-- Filter Tahun (dinamis, composable useTahunFilter) -->
                     <div class="relative min-w-0 lg:w-24 lg:shrink-0">
                         <button
                             id="filter-tahun-laporan"
@@ -1070,18 +1021,11 @@ onBeforeUnmount(() => {
                 </button>
             </div>
 
-            <!-- ===================== KARTU PER PEGAWAI (HP & TABLET, < 1024px) =====================
-                 Di bawah breakpoint lg tabel diganti kartu: nama, NIP, dan
-                 Total Cuti di bagian atas, lalu grid bulan (4 x 3) ditambah
-                 kotak Tgh (cuti ditangguhkan) di ujungnya, dan di bawahnya
-                 RINCIAN TOTAL dua baris (Terpakai & Tgh).
-                 Bila angka dikoreksi Admin HR, muncul catatan
-                 "koreksi, semula X hari". Warna kuning + tanda * di Total
-                 hanya bila ada komponen yang dikoreksi Admin HR.
-                 [FILTER BULAN] Grid hanya menampilkan bulan terpilih (kotak
-                 Tgh disembunyikan), Total = cuti bulan itu, rincian hanya
-                 baris Terpakai.
-                 [KOREKSI BULANAN] Admin HR mendapat tombol "Edit Koreksi". -->
+            <!-- ===================== KARTU PER PEGAWAI (HP & TABLET, di bawah 1024px) =====================
+                 Nama, NIP, Total di atas; grid bulan + kotak Tgh; lalu rincian
+                 Total (Terpakai & Tgh). Warna kuning + * hanya bila ada koreksi
+                 Admin HR. [FILTER BULAN] Grid hanya bulan terpilih tanpa kotak
+                 Tgh. [KOREKSI BULANAN] Admin HR mendapat tombol "Edit Koreksi". -->
             <div class="lg:hidden">
                 <ul v-if="laporan.length > 0" class="grid gap-3 sm:grid-cols-2">
                     <li
@@ -1126,7 +1070,7 @@ onBeforeUnmount(() => {
                             </div>
                         </div>
 
-                        <!-- Grid bulan + kotak Tgh (kotak Tgh hanya di mode "Semua Bulan") -->
+                        <!-- Grid bulan + kotak Tgh (Tgh hanya di mode "Semua Bulan") -->
                         <div
                             class="grid gap-1.5 px-3 pb-3"
                             :class="
@@ -1167,9 +1111,8 @@ onBeforeUnmount(() => {
                                 >
                             </div>
 
-                            <!-- Kotak Tgh: oranye bila ada, abu-abu bila 0.
-                                 Tanda * = Tgh dikoreksi Admin HR.
-                                 Disembunyikan saat filter Bulan aktif. -->
+                            <!-- Kotak Tgh: oranye bila ada, abu-abu bila 0;
+                                 * = dikoreksi Admin HR; sembunyi saat filter Bulan. -->
                             <div
                                 v-if="!modeBulan"
                                 :class="
@@ -1201,9 +1144,9 @@ onBeforeUnmount(() => {
                             </div>
                         </div>
 
-                        <!-- RINCIAN TOTAL: selalu tampil. Mode "Semua Bulan": dua baris
-                             (Terpakai & Tgh). Mode filter bulan: hanya Terpakai.
-                             Catatan koreksi hanya muncul bila angka diubah Admin HR. -->
+                        <!-- Rincian Total: dua baris (Terpakai & Tgh), atau hanya
+                             Terpakai saat filter bulan. Catatan koreksi hanya bila
+                             angka diubah Admin HR. -->
                         <div
                             class="mt-auto border-t px-3 py-2 text-[11px] leading-snug"
                             :class="
@@ -1308,18 +1251,11 @@ onBeforeUnmount(() => {
                 </div>
             </div>
 
-            <!-- ===================== TABEL (DESKTOP, >= 1024px) =====================
-                 Dirancang KOMPAK supaya seluruh kolom (Januari-Desember +
-                 Tgh + Total) terlihat sekaligus tanpa geser horizontal pada
-                 browser zoom 100% dengan sidebar terbuka:
-                   - header bulan disingkat, ditulis lengkap di layar 2xl
-                   - sel & kapsul angka rapat
-                   - kolom No & Nama menempel (sticky) di kiri
-                 [FILTER BULAN] Kolom Tgh disembunyikan dan Total = cuti
-                 bulan terpilih.
-                 Tiap pegawai = SATU baris. RINCIAN TOTAL muncul sebagai MODAL
-                 saat tombol (i) di kolom Aksi diklik. Admin HR juga mendapat
-                 tombol pensil untuk MODAL EDIT KOREKSI. -->
+            <!-- ===================== TABEL (DESKTOP, 1024px ke atas) =====================
+                 Kompak agar semua kolom terlihat tanpa geser horizontal: header
+                 bulan disingkat (lengkap di 2xl), kolom No & Nama sticky.
+                 [FILTER BULAN] Kolom Tgh disembunyikan. Tombol (i) di kolom Aksi
+                 membuka modal rincian; Admin HR juga dapat tombol pensil. -->
             <div
                 class="hidden lg:block overflow-x-auto rounded-lg border border-slate-200 bg-white"
             >
@@ -1428,9 +1364,8 @@ onBeforeUnmount(() => {
                                         >
                                     </span>
                                 </td>
-                                <!-- Kolom Tgh: oranye bila ada, abu-abu bila 0.
-                                     Tanda * = Tgh dikoreksi Admin HR.
-                                     Disembunyikan saat filter Bulan aktif. -->
+                                <!-- Kolom Tgh: oranye bila ada, abu-abu bila 0;
+                                     * = dikoreksi Admin HR; sembunyi saat filter Bulan. -->
                                 <td
                                     v-if="!modeBulan"
                                     class="px-1 2xl:px-2 py-3 text-center"
@@ -1461,9 +1396,8 @@ onBeforeUnmount(() => {
                                 <td
                                     class="px-2 py-3 text-center bg-slate-50/70"
                                 >
-                                    <!-- Tanda * = ada komponen (Terpakai atau
-                                         Tgh) yang dikoreksi Admin HR. Rinciannya
-                                         ada di modal kolom Aksi. -->
+                                    <!-- * = ada komponen yang dikoreksi Admin HR
+                                         (rincian ada di modal kolom Aksi). -->
                                     <span
                                         class="inline-block min-w-[36px] px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md font-bold text-xs border border-emerald-300/80"
                                     >
@@ -1606,9 +1540,8 @@ onBeforeUnmount(() => {
                 </table>
             </div>
 
-            <!-- Catatan kaki: penjelasan Tgh tampil di mode "Semua Bulan";
-                 saat filter bulan aktif diganti penjelasan Total per bulan.
-                 Catatan bintang hanya bila ada angka yang dikoreksi Admin HR. -->
+            <!-- Catatan kaki: penjelasan Tgh (mode "Semua Bulan") atau Total per
+                 bulan (filter bulan). Catatan * hanya bila ada koreksi Admin HR. -->
             <div v-if="laporan.length > 0" class="mt-3 space-y-1 text-xs">
                 <p v-if="!modeBulan" class="text-gray-500">
                     <span class="font-semibold text-orange-600">Tgh</span>
@@ -1757,14 +1690,10 @@ onBeforeUnmount(() => {
             </div>
 
             <!-- ===================== MODAL RINCIAN TOTAL & MODAL EDIT KOREKSI =====================
-                 Modal berada DI DALAM kartu (bukan elemen kedua di MainLayout)
-                 karena slot MainLayout dibungkus <Transition> yang hanya boleh
-                 punya SATU elemen anak. Teleport tetap memindahkan tampilannya
-                 ke <body>.
-                 Desktop/tablet : kotak putih di TENGAH layar dengan latar gelap.
-                 HP (< 640px)   : bottom sheet yang naik dari bawah.
-                 Ditutup lewat: klik area gelap, tombol X, tombol "Tutup /
-                 Batal", atau Esc. -->
+                 Berada di dalam kartu (MainLayout hanya menerima satu elemen
+                 anak); Teleport memindahkan tampilannya ke body. Desktop: kotak
+                 di tengah; HP: bottom sheet. Tutup lewat area gelap, tombol X,
+                 "Tutup / Batal", atau Esc. -->
             <Teleport to="body">
                 <!-- ---------- MODAL RINCIAN TOTAL ---------- -->
                 <Transition
@@ -1793,7 +1722,7 @@ onBeforeUnmount(() => {
                                 ></span>
                             </div>
 
-                            <!-- Kepala ringkas: avatar + nama + NIP + tombol tutup -->
+                            <!-- Kepala: avatar + nama + NIP + tombol tutup -->
                             <div
                                 class="flex items-center gap-3 px-4 pb-2.5 pt-2.5 sm:pt-3.5"
                             >
@@ -1839,9 +1768,7 @@ onBeforeUnmount(() => {
                                     {{ judulRincian(popover.item) }}
                                 </p>
 
-                                <!-- Terpakai & Tgh: label + keterangan di kiri,
-                                     angka + badge status di kanan.
-                                     Saat filter bulan aktif hanya baris Terpakai. -->
+                                <!-- Terpakai & Tgh (hanya Terpakai saat filter bulan) -->
                                 <div
                                     v-for="baris in barisRincian(popover.item)"
                                     :key="baris.key"
@@ -1900,7 +1827,7 @@ onBeforeUnmount(() => {
                                     </p>
                                 </div>
 
-                                <!-- Total: satu baris -->
+                                <!-- Total -->
                                 <div
                                     class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2"
                                 >
@@ -1962,7 +1889,7 @@ onBeforeUnmount(() => {
                                 </div>
                             </div>
 
-                            <!-- Kaki: tombol tutup (+ Edit Koreksi untuk Admin HR) -->
+                            <!-- Kaki: tutup (+ Edit Koreksi untuk Admin HR) -->
                             <div
                                 class="flex flex-col-reverse gap-2 border-t border-slate-100 px-4 py-2.5 sm:flex-row sm:justify-end"
                             >

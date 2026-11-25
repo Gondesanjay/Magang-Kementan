@@ -3,23 +3,17 @@ import { ref, watch, computed, onMounted, onBeforeUnmount } from "vue";
 import { router, Head } from "@inertiajs/vue3";
 import MainLayout from "@/Layouts/MainLayout.vue";
 
-// Halaman ini adalah versi ATASAN dari "Rekap Kuota Detail" milik HR Admin
-// (lihat Pages/Admin/RekapKuotaDetail.vue). Atasan hanya boleh MELIHAT rekap
-// saldo/kuota & riwayat cuti bawahannya: tanpa Impor Kuota, tanpa Generate
-// Saldo, tanpa Export, dan tanpa Edit Saldo.
+// Versi ATASAN dari "Rekap Kuota Detail" Admin HR (Pages/Admin/RekapKuotaDetail.vue).
+// Hanya-baca: tanpa Impor Kuota, Generate Saldo, Export, dan Edit Saldo.
 //
-// TAMPILAN: sengaja RINGKAS.
-// - Tabel memuat kolom inti (Hak, Terpakai, Sisa, Saldo Akhir). Kolom
-//   "Ditangguhkan" TIDAK ditampilkan lagi supaya tidak membingungkan:
-//   hari yang ditangguhkan sudah termasuk dalam Terpakai.
-// - Angka Terpakai SAMA dengan halaman Admin:
-//   Terpakai (tampil) = cuti disetujui + Tgh tahun aktif.
-// - Popup SAMA dengan popup Admin (hanya-baca): profil -> 4 KPI -> rumus
-//   Saldo Akhir -> riwayat pengajuan (kotak ringkasan hijau/kuning, chip
-//   filter status dengan hitungan, checkbox "Hanya Cuti Tahunan", badge
-//   "dihitung di {tahun}: n hari" untuk cuti lintas tahun).
-// - Status "Ditangguhkan" (dilakukan atasan, masuk Tgh) dan "Dibatalkan"
-//   (dilakukan pemohon, hari dikembalikan) DIPISAH.
+// - Tabel ringkas: Hak, Terpakai, Sisa, Saldo Akhir. Kolom "Ditangguhkan" tidak
+//   ditampilkan: hari yang ditangguhkan dikembalikan ke saldo, bukan Terpakai.
+// - Terpakai sama dengan halaman Admin (cuti disetujui saja, tanpa Tgh tahun aktif).
+// - Popup sama dengan popup Admin (hanya-baca): profil, 4 KPI, rumus Saldo Akhir,
+//   riwayat pengajuan (chip filter status, checkbox "Hanya Cuti Tahunan", badge
+//   "dihitung di {tahun}" untuk cuti lintas tahun).
+// - Status "Ditangguhkan" (oleh atasan, masuk Tgh) dan "Dibatalkan" (oleh
+//   pemohon, hari dikembalikan) dipisah.
 const props = defineProps({
     dataPegawai: Object,
     filters: Object,
@@ -39,9 +33,9 @@ const props = defineProps({
         type: Array,
         default: () => [],
     },
-    // OPSIONAL: KPI ringkasan dari backend (total_pegawai,
-    // rata_rata_terpakai, rata_rata_saldo_akhir, akumulasi_penuh). Kalau
-    // backend belum mengirim, KPI dihitung dari baris di halaman aktif.
+    // OPSIONAL: KPI dari backend (total_pegawai, rata_rata_terpakai,
+    // rata_rata_saldo_akhir, akumulasi_penuh). Bila tidak ada, KPI dihitung
+    // dari baris di halaman aktif.
     kpi: {
         type: Object,
         default: null,
@@ -57,7 +51,7 @@ const filterTahun = ref(
     Number(props.filters?.tahun) || props.tahunTerpilih || currentYear,
 );
 
-// SATU-SATUNYA sumber tahun untuk semua label di halaman ini.
+// Satu-satunya sumber tahun untuk semua label di halaman ini.
 const tahunAktif = computed(() => Number(filterTahun.value) || currentYear);
 
 const daftarTahunPilihan = computed(() => {
@@ -67,7 +61,7 @@ const daftarTahunPilihan = computed(() => {
 // ================= END FILTER TAHUN =================
 
 // ================= FILTER BERJENJANG SESUAI LEVEL ATASAN =================
-//   L1 (role_id 2)       : TANPA dropdown, badge "Menampilkan tim Anda: ..."
+//   L1 (role_id 2)       : tanpa dropdown, badge "Menampilkan tim Anda: ..."
 //   L2 (role_id 3)       : dropdown Tim Kerja (dalam kelompoknya sendiri)
 //   L3 & L4 (role_id 4/6): dropdown Kelompok/Subbagian (lintas kelompok)
 const filterMode = computed(() => {
@@ -93,9 +87,8 @@ const filterAllLabel = computed(() =>
     filterMode.value === "l2" ? "Semua Tim Kerja" : "Semua Kelompok",
 );
 
-// Pegawai tanpa kelompok/tim di database bernilai "-". Nilainya TETAP "-"
-// saat dikirim ke backend, tetapi yang ditampilkan ke pengguna adalah
-// "Tanpa Kelompok" (atau "Tanpa Tim Kerja" untuk L2).
+// Pegawai tanpa kelompok/tim bernilai "-" di database. Nilainya tetap "-" ke
+// backend, tetapi ditampilkan sebagai "Tanpa Kelompok" ("Tanpa Tim Kerja" untuk L2).
 const NILAI_KOSONG = "-";
 const labelTanpa = computed(() =>
     filterMode.value === "l2" ? "Tanpa Tim Kerja" : "Tanpa Kelompok",
@@ -103,7 +96,7 @@ const labelTanpa = computed(() =>
 const labelOpsi = (opsi) =>
     String(opsi ?? "").trim() === NILAI_KOSONG ? labelTanpa.value : opsi;
 
-// Opsi "-" diletakkan paling bawah agar daftar kelompok nyata tampil dulu.
+// Opsi "-" diletakkan paling bawah agar kelompok nyata tampil dulu.
 const filterOptions = computed(() => {
     let daftar = [];
     if (filterMode.value === "l2") daftar = props.listTimKerja || [];
@@ -120,17 +113,16 @@ const kelompok = ref(props.filters?.[filterQueryParam.value] || "");
 const daftarPegawai = computed(() => props.dataPegawai?.data ?? []);
 
 // ================= PERHITUNGAN KUOTA =================
-// Semua angka DIAMBIL dari backend
-// (RekapKuotaDetailController::hitungKuota()). Jangan hitung ulang di sini
-// supaya selalu sama dengan Dashboard & halaman Admin. Fallback di bawah
-// hanya dipakai kalau backend belum mengirim angka final.
+// Semua angka dari backend (RekapKuotaDetailController::hitungKuota()). Jangan
+// hitung ulang di sini agar selalu sama dengan Dashboard & halaman Admin.
+// Fallback hanya dipakai bila backend belum mengirim angka final.
 const toNum = (nilai) => {
     const angka = Number(nilai);
     return Number.isFinite(angka) ? angka : 0;
 };
 
-// Cuti terpakai dari backend (angka Admin bila ada koreksi, kalau tidak
-// angka sistem). TIDAK menyertakan Tgh tahun aktif.
+// Cuti terpakai dari backend (angka Admin bila ada koreksi, kalau tidak angka
+// sistem). Tidak menyertakan Tgh tahun aktif.
 const getTerpakai = (pegawai) => toNum(pegawai?.cuti_terpakai);
 
 // Hak tahun berjalan (kuota awal), bukan sisa + terpakai.
@@ -156,23 +148,18 @@ const getSaldoBawaanEligible = (pegawai) => {
     return Math.max(0, Math.min(normal, 24 - kuota));
 };
 
-// ================================================================
-// Ditangguhkan (Tgh) — dikirim backend dari cuti_ditangguhkans.
-//   - Tgh TAHUN AKTIF (N): bagian dari Terpakai N (lihat getTerpakaiTampil).
-//   - Tgh TAHUN LALU (N-1): MENAMBAH Total Tersedia (aturan A, sama dengan
-//     backend RekapKuotaDetailController::TGH_MASUK_TOTAL).
-// ================================================================
+// Ditangguhkan (Tgh), dikirim backend dari cuti_ditangguhkans:
+//   - Tgh tahun aktif (N): tidak masuk Terpakai, hanya informasi (dikembalikan ke saldo).
+//   - Tgh tahun lalu (N-1): menambah Total Tersedia (sama dengan backend TGH_MASUK_TOTAL).
 const getSisaDitangguhkanTahunIni = (pegawai) =>
     toNum(pegawai?.sisa_ditangguhkan_tahun_ini);
 
 const getSisaDitangguhkanTahunLalu = (pegawai) =>
     toNum(pegawai?.sisa_ditangguhkan_tahun_lalu);
 
-// Terpakai yang DITAMPILKAN = cuti terpakai + Tgh tahun aktif.
-// Angka ini dipakai di tabel, kartu HP, KPI modal, dan rumus, supaya sama
-// dengan halaman Admin.
-const getTerpakaiTampil = (pegawai) =>
-    getTerpakai(pegawai) + getSisaDitangguhkanTahunIni(pegawai);
+// Terpakai yang ditampilkan = cuti disetujui saja (Tgh tahun aktif tidak
+// ditambahkan). Dipakai di tabel, kartu HP, KPI modal, dan rumus.
+const getTerpakaiTampil = (pegawai) => getTerpakai(pegawai);
 
 const getTotalTersedia = (pegawai) => {
     if (pegawai?.total_cuti_tersedia != null) {
@@ -199,9 +186,8 @@ const getSaldoAkhir = (pegawai) => {
     return Math.max(0, getTotalTersedia(pegawai) - getTerpakaiTampil(pegawai));
 };
 
-// Koreksi Cuti Terpakai oleh Admin HR (angka FINAL, bukan +/-).
-// null = ikut angka sistem. 0 adalah koreksi yang SAH, jadi selalu
-// bedakan lewat `=== null`, jangan `!k`.
+// Koreksi Terpakai oleh Admin HR (angka FINAL, bukan +/-). null = ikut sistem.
+// 0 adalah koreksi yang SAH, jadi bedakan lewat `=== null`, bukan `!k`.
 const getKoreksiSaldo = (pegawai) => {
     const k = pegawai?.koreksi_saldo;
     return k === null || k === undefined ? null : Math.max(0, Number(k) || 0);
@@ -210,19 +196,16 @@ const adaKoreksi = (pegawai) => getKoreksiSaldo(pegawai) !== null;
 const getTerpakaiSistem = (pegawai) =>
     toNum(pegawai?.cuti_terpakai_sistem ?? pegawai?.cuti_terpakai_murni);
 
-// Angka sistem (tanpa koreksi Admin) dalam bentuk TAMPIL: sistem + Tgh tahun ini.
-const getTerpakaiSistemTampil = (pegawai) =>
-    getTerpakaiSistem(pegawai) + getSisaDitangguhkanTahunIni(pegawai);
+// Angka sistem (tanpa koreksi Admin) dalam bentuk tampil (tanpa Tgh).
+const getTerpakaiSistemTampil = (pegawai) => getTerpakaiSistem(pegawai);
 
 const adaItemDikoreksi = computed(() => daftarPegawai.value.some(adaKoreksi));
 // ================= END PERHITUNGAN KUOTA =================
 
 // ================= KPI CARDS =================
-// Pakai prop 'kpi' dari backend bila ada (seluruh data hasil filter).
-// Kalau tidak ada, dihitung dari baris di halaman aktif.
-// CATATAN: 'rata_rata_terpakai' dari backend dihitung dari 'cuti_terpakai'
-// (tanpa Tgh), jadi bisa berbeda dari kolom Terpakai. Perbaikan yang bersih
-// ada di backend (hitungKpi()): tambahkan 'potongan_tgh_tahun_ini'.
+// Pakai prop 'kpi' dari backend bila ada (seluruh hasil filter); bila tidak,
+// hitung dari baris di halaman aktif. 'rata_rata_terpakai' dari backend tanpa
+// Tgh, sama dengan kolom Terpakai di tabel.
 const kpiDariBackend = computed(() => !!props.kpi);
 
 const bulat1 = (n) => Math.round(n * 10) / 10;
@@ -257,7 +240,7 @@ const kpiAkumulasiPenuh = computed(() => {
     ).length;
 });
 
-// Definisi kartu KPI (dirender dengan v-for supaya markup tidak berulang)
+// Definisi kartu KPI (dirender dengan v-for agar markup tidak berulang)
 const kpiCards = computed(() => [
     {
         key: "total",
@@ -340,16 +323,11 @@ const showModal = ref(false);
 const selectedPegawai = ref(null);
 const expandedRiwayatId = ref(null);
 
-// ================================================================
-// FILTER RIWAYAT DI POPUP (SAMA dengan popup Admin)
+// Filter riwayat di popup (sama dengan popup Admin):
 //   - Chip status (default: Disetujui, dasar hitungan Terpakai)
 //   - "Hanya Cuti Tahunan" (default aktif; jenis lain tidak mengurangi kuota)
-//   - Ringkasan total hari Cuti Tahunan disetujui di tahun aktif vs angka
-//     sistem. Hari lintas tahun memakai 'hari_di_tahun_ini' dari backend.
-// 'Ditangguhkan' (dibatalkan_ditangguhkan) dan 'Dibatalkan'
-// (dibatalkan_reguler) adalah DUA chip terpisah. Key chip = nilai status
-// asli, jadi cocokStatusRiwayat cukup membandingkan langsung.
-// ================================================================
+// 'Ditangguhkan' (dibatalkan_ditangguhkan) dan 'Dibatalkan' (dibatalkan_reguler)
+// adalah dua chip terpisah; key chip = nilai status asli.
 const filterStatusRiwayat = ref("disetujui");
 const hanyaCutiTahunan = ref(true);
 
@@ -368,7 +346,7 @@ const cocokStatusRiwayat = (riwayat, key) => {
     return riwayat.status === key;
 };
 
-// Riwayat setelah filter jenis cuti (dasar untuk hitungan jumlah per chip).
+// Riwayat setelah filter jenis cuti (dasar hitungan jumlah per chip)
 const riwayatSesuaiJenis = computed(() => {
     const semua = selectedPegawai.value?.pengajuan_cuti || [];
     return hanyaCutiTahunan.value
@@ -392,9 +370,8 @@ const riwayatTersaring = computed(() =>
     ),
 );
 
-// Total hari Cuti Tahunan disetujui yang jatuh di tahun aktif (hitungan
-// manual dari riwayat), dibandingkan dengan angka sistem dari backend.
-// (Angka sistem = cuti disetujui saja, belum termasuk Tgh.)
+// Total hari Cuti Tahunan disetujui yang jatuh di tahun aktif (dari
+// 'hari_di_tahun_ini'), dibandingkan dengan angka sistem dari backend.
 const ringkasanDisetujui = computed(() => {
     const semua = selectedPegawai.value?.pengajuan_cuti || [];
     const disetujui = semua.filter(
@@ -411,15 +388,14 @@ const ringkasanDisetujui = computed(() => {
     return { jumlahPengajuan: disetujui.length, total, sistem };
 });
 
-// Cuti lintas tahun: kapsul kecil "dihitung di {tahun}: n hari" hanya muncul
-// kalau hari yang dihitung berbeda dari durasi penuh pengajuan.
+// Cuti lintas tahun: badge "dihitung di {tahun}: n hari" hanya muncul bila
+// hari yang dihitung berbeda dari durasi penuh pengajuan.
 const hariDihitungBeda = (riwayat) => {
     const hitung = Number(riwayat?.hari_di_tahun_ini);
     return Number.isFinite(hitung) && hitung !== Number(getDurasi(riwayat));
 };
 
-// Kelas warna kartu & badge per status (satu sumber supaya tidak berulang).
-// Ditangguhkan = oranye, Dibatalkan = abu-abu.
+// Kelas warna kartu & badge per status. Ditangguhkan = oranye, Dibatalkan = abu-abu.
 const kelasGarisStatus = (status) => {
     if (status === "disetujui")
         return "border-l-4 border-l-emerald-500 hover:bg-emerald-100";
@@ -481,8 +457,7 @@ watch(showModal, (terbuka) => {
     document.body.style.overflow = terbuka ? "hidden" : "";
 });
 
-// Label status generik — nama pejabat tampil di approval_chain (dari backend),
-// bukan hardcode di sini.
+// Label status generik; nama pejabat tampil di approval_chain (dari backend).
 const statusLabels = {
     menunggu_l1: "Menunggu Ketua Tim Kerja (L1)",
     menunggu_l2: "Menunggu Ketua Kelompok Substansi (L2)",
@@ -617,11 +592,10 @@ const goToPage = (url) => {
 
 // ================================================================
 // TOOLBAR SEARCH + FILTER
-// - Dropdown KUSTOM (Tim Kerja/Kelompok & Tahun) menggantikan <select>
-//   bawaan browser: selalu terbuka ke bawah, tinggi dibatasi (bisa di-scroll),
-//   teks panjang membungkus.
-// - Hanya satu dropdown terbuka sekaligus; menutup saat klik di luar / Esc.
-// - Chip "Filter aktif" + tombol "Hapus semua" untuk search & kelompok.
+// - Dropdown kustom (Kelompok & Tahun) menggantikan <select> bawaan: selalu
+//   terbuka ke bawah, tinggi dibatasi (scroll), teks panjang membungkus.
+// - Hanya satu dropdown terbuka; tutup saat klik di luar / Esc.
+// - Chip "Filter aktif" + "Hapus semua" untuk search & kelompok.
 // ================================================================
 const toolbarRef = ref(null);
 const dropdownTerbuka = ref(null); // 'kelompok' | 'tahun' | null
@@ -696,8 +670,8 @@ const activeFilterChips = computed(() => {
     return chips;
 });
 
-// Reset search & kelompok (tahun dibiarkan). Pengambilan data ulang
-// dilakukan otomatis oleh watch([search, kelompok, filterTahun]).
+// Reset search & kelompok (tahun dibiarkan). Data diambil ulang otomatis oleh
+// watch([search, kelompok, filterTahun]).
 const resetFilters = () => {
     search.value = "";
     kelompok.value = "";
@@ -723,15 +697,27 @@ const resetFilters = () => {
                         v-if="showBadgeTimL1"
                         class="inline-flex items-center gap-1.5 mt-2 px-2.5 py-1 rounded-full bg-green-50 border border-green-200 text-green-700 text-xs font-semibold"
                     >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8zm6 3c0-2.21-3.582-4-8-4s-8 1.79-8 4"></path>
+                        <svg
+                            class="w-3.5 h-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                        >
+                            <path
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="2"
+                                d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 100-8 4 4 0 000 8zm6 3c0-2.21-3.582-4-8-4s-8 1.79-8 4"
+                            ></path>
                         </svg>
                         Menampilkan tim Anda: {{ userTimKerja }}
                     </div>
                 </div>
 
                 <!-- KPI Cards: kompak. HP = 2x2 rapat, desktop = 4 kolom -->
-                <div class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-2">
+                <div
+                    class="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-2"
+                >
                     <div
                         v-for="kartu in kpiCards"
                         :key="kartu.key"
@@ -766,10 +752,9 @@ const resetFilters = () => {
                 <div v-else class="mb-3"></div>
                 <!-- ================= END KPI CARDS ================= -->
 
-                <!-- ===================== TOOLBAR: SEARCH + FILTER =====================
-                     HP : search penuh di atas; di bawahnya Kelompok (3/5, lebih lebar
-                          karena teksnya panjang) dan Tahun (2/5) berdampingan.
-                     Desktop: satu baris. -->
+                <!-- TOOLBAR: SEARCH + FILTER
+                     HP: search penuh di atas; Kelompok (3/5) dan Tahun (2/5)
+                     berdampingan di bawahnya. Desktop: satu baris. -->
                 <div
                     ref="toolbarRef"
                     @keydown.esc="dropdownTerbuka = null"
@@ -777,9 +762,21 @@ const resetFilters = () => {
                 >
                     <!-- Search -->
                     <div class="relative w-full lg:flex-1 lg:min-w-[200px]">
-                        <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        <div
+                            class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"
+                        >
+                            <svg
+                                class="w-4 h-4 text-gray-400"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                            >
+                                <path
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="2"
+                                    d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                                />
                             </svg>
                         </div>
                         <input
@@ -793,15 +790,29 @@ const resetFilters = () => {
                         />
                     </div>
 
-                    <div class="grid grid-cols-5 gap-2 lg:flex lg:flex-none lg:items-center">
-                        <!-- Filter Tim Kerja (L2) / Kelompok (L3 & L4) : KIRI -->
+                    <div
+                        class="grid grid-cols-5 gap-2 lg:flex lg:flex-none lg:items-center"
+                    >
+                        <!-- Filter Tim Kerja (L2) / Kelompok (L3 & L4): kiri -->
                         <div
                             v-if="showFilterDropdown"
                             class="relative col-span-3 min-w-0 lg:w-64"
                         >
-                            <div class="absolute inset-y-0 left-0 pl-2.5 sm:pl-3 flex items-center pointer-events-none">
-                                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                            <div
+                                class="absolute inset-y-0 left-0 pl-2.5 sm:pl-3 flex items-center pointer-events-none"
+                            >
+                                <svg
+                                    class="w-4 h-4 text-gray-400"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"
+                                    />
                                 </svg>
                             </div>
 
@@ -814,21 +825,35 @@ const resetFilters = () => {
                                 @click="toggleDropdown('kelompok')"
                                 class="w-full min-h-[40px] text-left text-[13px] sm:text-sm border border-gray-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none rounded-lg shadow-sm text-gray-600 py-1.5 pl-8 sm:pl-9 pr-6 sm:pr-7 bg-white"
                             >
-                                <span class="block truncate">{{ labelKelompok }}</span>
+                                <span class="block truncate">{{
+                                    labelKelompok
+                                }}</span>
                             </button>
 
-                            <span class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+                            <span
+                                class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                            >
                                 <svg
                                     class="w-3.5 h-3.5 text-gray-500 transition-transform"
-                                    :class="{ 'rotate-180': dropdownTerbuka === 'kelompok' }"
-                                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                    :class="{
+                                        'rotate-180':
+                                            dropdownTerbuka === 'kelompok',
+                                    }"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
                                 >
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M19 9l-7 7-7-7"
+                                    ></path>
                                 </svg>
                             </span>
 
-                            <!-- Daftar: di HP selebar satu baris filter (±166% dari
-                                 kotaknya); di desktop menyesuaikan isi (maks. 28rem). -->
+                            <!-- Daftar: di HP selebar satu baris filter; di desktop
+                                 menyesuaikan isi (maks. 28rem). -->
                             <ul
                                 v-if="dropdownTerbuka === 'kelompok'"
                                 role="listbox"
@@ -869,15 +894,29 @@ const resetFilters = () => {
                             </ul>
                         </div>
 
-                        <!-- Filter Tahun : KANAN. Default = tahun berjalan.
-                             Tanpa dropdown kelompok (L1), tahun melebar penuh di HP. -->
+                        <!-- Filter Tahun (kanan). Default = tahun berjalan. Tanpa
+                             dropdown kelompok (L1), melebar penuh di HP. -->
                         <div
                             class="relative min-w-0 lg:w-36"
-                            :class="showFilterDropdown ? 'col-span-2' : 'col-span-5'"
+                            :class="
+                                showFilterDropdown ? 'col-span-2' : 'col-span-5'
+                            "
                         >
-                            <div class="absolute inset-y-0 left-0 pl-2.5 sm:pl-3 flex items-center pointer-events-none">
-                                <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            <div
+                                class="absolute inset-y-0 left-0 pl-2.5 sm:pl-3 flex items-center pointer-events-none"
+                            >
+                                <svg
+                                    class="w-4 h-4 text-gray-400"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                    />
                                 </svg>
                             </div>
 
@@ -890,16 +929,30 @@ const resetFilters = () => {
                                 @click="toggleDropdown('tahun')"
                                 class="w-full min-h-[40px] text-left text-[13px] sm:text-sm border border-gray-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 focus:outline-none rounded-lg shadow-sm text-gray-600 py-1.5 pl-8 sm:pl-9 pr-6 sm:pr-7 bg-white"
                             >
-                                <span class="block truncate">Tahun {{ tahunAktif }}</span>
+                                <span class="block truncate"
+                                    >Tahun {{ tahunAktif }}</span
+                                >
                             </button>
 
-                            <span class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
+                            <span
+                                class="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none"
+                            >
                                 <svg
                                     class="w-3.5 h-3.5 text-gray-500 transition-transform"
-                                    :class="{ 'rotate-180': dropdownTerbuka === 'tahun' }"
-                                    fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                    :class="{
+                                        'rotate-180':
+                                            dropdownTerbuka === 'tahun',
+                                    }"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
                                 >
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M19 9l-7 7-7-7"
+                                    ></path>
                                 </svg>
                             </span>
 
@@ -908,7 +961,10 @@ const resetFilters = () => {
                                 role="listbox"
                                 class="absolute left-0 right-0 top-full z-30 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
                             >
-                                <li v-for="tahun in daftarTahunPilihan" :key="tahun">
+                                <li
+                                    v-for="tahun in daftarTahunPilihan"
+                                    :key="tahun"
+                                >
                                     <button
                                         type="button"
                                         role="option"
@@ -929,7 +985,7 @@ const resetFilters = () => {
                     </div>
                 </div>
 
-                <!-- ===================== CHIP FILTER AKTIF ===================== -->
+                <!-- CHIP FILTER AKTIF -->
                 <div
                     v-if="activeFilterChips.length > 0"
                     class="flex flex-wrap items-center gap-2 mb-3 text-xs text-gray-500"
@@ -959,14 +1015,12 @@ const resetFilters = () => {
                     </button>
                 </div>
 
-                <!--
-                  TABEL (desktop/tablet): RINGKAS, satu baris per pegawai.
-                  Kolom: No | Nama | Hak | Terpakai | Sisa | Saldo Akhir | Aksi.
-                  Terpakai sudah termasuk hari yang ditangguhkan (sama dengan
-                  halaman Admin). Di layar kecil (< md) ditampilkan sebagai
-                  kartu padat.
-                -->
-                <div class="hidden md:block rounded-lg border border-slate-200 bg-white overflow-hidden">
+                <!-- TABEL (desktop/tablet): satu baris per pegawai.
+                     Kolom: No | Nama | Hak | Terpakai | Sisa | Saldo Akhir | Aksi.
+                     Di layar kecil (< md) ditampilkan sebagai kartu padat. -->
+                <div
+                    class="hidden md:block rounded-lg border border-slate-200 bg-white overflow-hidden"
+                >
                     <table class="w-full text-left border-collapse">
                         <thead>
                             <tr
@@ -974,28 +1028,47 @@ const resetFilters = () => {
                             >
                                 <th class="w-12 px-2 py-2.5 text-center">No</th>
                                 <th class="px-3 py-2.5">Nama Pegawai</th>
-                                <th class="px-2 py-2.5 text-center">Hak {{ tahunAktif }}</th>
-                                <th class="px-2 py-2.5 text-center">Terpakai {{ tahunAktif }}</th>
-                                <th class="px-2 py-2.5 text-center">Sisa {{ tahunAktif }}</th>
-                                <th class="px-2 py-2.5 text-center text-slate-800">Saldo Akhir {{ tahunAktif }}</th>
+                                <th class="px-2 py-2.5 text-center">
+                                    Hak {{ tahunAktif }}
+                                </th>
+                                <th class="px-2 py-2.5 text-center">
+                                    Terpakai {{ tahunAktif }}
+                                </th>
+                                <th class="px-2 py-2.5 text-center">
+                                    Sisa {{ tahunAktif }}
+                                </th>
+                                <th
+                                    class="px-2 py-2.5 text-center text-slate-800"
+                                >
+                                    Saldo Akhir {{ tahunAktif }}
+                                </th>
                                 <th class="px-2 py-2.5 text-center">Aksi</th>
                             </tr>
                         </thead>
-                        <tbody v-if="daftarPegawai.length > 0" class="text-sm align-middle">
+                        <tbody
+                            v-if="daftarPegawai.length > 0"
+                            class="text-sm align-middle"
+                        >
                             <tr
                                 v-for="(pegawai, index) in daftarPegawai"
                                 :key="pegawai.id"
                                 class="group border-b border-slate-100 hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)] transition-all duration-150"
                             >
-                                <td class="w-12 px-2 py-2.5 text-center text-sm font-semibold text-slate-700">
+                                <td
+                                    class="w-12 px-2 py-2.5 text-center text-sm font-semibold text-slate-700"
+                                >
                                     {{ (dataPegawai.from ?? 1) + index }}
                                 </td>
 
                                 <td class="px-3 py-2.5">
-                                    <div class="font-bold text-slate-800 text-sm">
+                                    <div
+                                        class="font-bold text-slate-800 text-sm"
+                                    >
                                         {{ pegawai.nama }}
                                     </div>
-                                    <div class="text-[11px] text-slate-500 mt-0.5 line-clamp-1">
+                                    <div
+                                        class="text-[11px] text-slate-500 mt-0.5 line-clamp-1"
+                                    >
                                         {{
                                             pegawai.jabatan ||
                                             pegawai.kelompok_substansi ||
@@ -1007,13 +1080,15 @@ const resetFilters = () => {
 
                                 <!-- Hak tahun berjalan (Biru) -->
                                 <td class="px-2 py-2.5 text-center">
-                                    <span class="inline-block min-w-[32px] px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-bold text-xs border border-blue-300/80">
+                                    <span
+                                        class="inline-block min-w-[32px] px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-bold text-xs border border-blue-300/80"
+                                    >
                                         {{ getSisaTahunIni(pegawai) }}
                                     </span>
                                 </td>
 
-                                <!-- Terpakai (Merah) = cuti disetujui + Tgh tahun
-                                     aktif. Tanda * = dikoreksi Admin HR -->
+                                <!-- Terpakai (Merah) = cuti disetujui.
+                                     Tanda * = dikoreksi Admin HR -->
                                 <td class="px-2 py-2.5 text-center">
                                     <span
                                         class="inline-block min-w-[32px] px-2 py-1 bg-rose-100 text-rose-800 rounded-md font-bold text-xs border border-rose-300/80"
@@ -1024,20 +1099,28 @@ const resetFilters = () => {
                                         "
                                     >
                                         {{ getTerpakaiTampil(pegawai)
-                                        }}<sup v-if="adaKoreksi(pegawai)" class="text-amber-600 font-black">*</sup>
+                                        }}<sup
+                                            v-if="adaKoreksi(pegawai)"
+                                            class="text-amber-600 font-black"
+                                            >*</sup
+                                        >
                                     </span>
                                 </td>
 
                                 <!-- Sisa tahun berjalan (Biru muda) -->
                                 <td class="px-2 py-2.5 text-center">
-                                    <span class="inline-block min-w-[32px] px-2 py-1 bg-blue-50 text-blue-800 rounded-md font-bold text-xs border border-blue-200">
+                                    <span
+                                        class="inline-block min-w-[32px] px-2 py-1 bg-blue-50 text-blue-800 rounded-md font-bold text-xs border border-blue-200"
+                                    >
                                         {{ getSisaTahunBerjalan(pegawai) }}
                                     </span>
                                 </td>
 
                                 <!-- Saldo Akhir (gelap) -->
                                 <td class="px-2 py-2.5 text-center">
-                                    <span class="inline-block min-w-[36px] px-2.5 py-1 bg-slate-800 text-white rounded-md font-extrabold text-xs shadow-sm border border-slate-900">
+                                    <span
+                                        class="inline-block min-w-[36px] px-2.5 py-1 bg-slate-800 text-white rounded-md font-extrabold text-xs shadow-sm border border-slate-900"
+                                    >
                                         {{ getSaldoAkhir(pegawai) }}
                                     </span>
                                 </td>
@@ -1050,9 +1133,25 @@ const resetFilters = () => {
                                         class="inline-flex items-center gap-1.5 px-3.5 py-1 border border-gray-300 rounded-full text-xs font-medium text-gray-700 bg-white hover:bg-gray-50 hover:text-gray-900 transition shadow-sm cursor-pointer whitespace-nowrap"
                                         title="Lihat Rincian & Riwayat Cuti"
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                        <svg
+                                            xmlns="http://www.w3.org/2000/svg"
+                                            class="w-4 h-4 text-gray-500"
+                                            fill="none"
+                                            viewBox="0 0 24 24"
+                                            stroke="currentColor"
+                                        >
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                            />
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                            />
                                         </svg>
                                         Detail
                                     </button>
@@ -1064,13 +1163,29 @@ const resetFilters = () => {
                         <tbody v-else class="bg-white">
                             <tr>
                                 <td colspan="7" class="px-6 py-14">
-                                    <div class="flex flex-col items-center justify-center text-center gap-3">
-                                        <div class="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center">
-                                            <svg class="w-7 h-7 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                                    <div
+                                        class="flex flex-col items-center justify-center text-center gap-3"
+                                    >
+                                        <div
+                                            class="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center"
+                                        >
+                                            <svg
+                                                class="w-7 h-7 text-slate-400"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path
+                                                    stroke-linecap="round"
+                                                    stroke-linejoin="round"
+                                                    stroke-width="1.5"
+                                                    d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                                                ></path>
                                             </svg>
                                         </div>
-                                        <p class="text-sm font-semibold text-gray-600 max-w-sm">
+                                        <p
+                                            class="text-sm font-semibold text-gray-600 max-w-sm"
+                                        >
                                             Tidak ada data pegawai ditemukan
                                             untuk tahun {{ tahunAktif }}.
                                         </p>
@@ -1089,7 +1204,7 @@ const resetFilters = () => {
                     </table>
                 </div>
 
-                <!-- TAMPILAN KARTU (HP): padat. Nama + 4 angka dalam SATU baris.
+                <!-- TAMPILAN KARTU (HP): nama + 4 angka dalam satu baris.
                      Seluruh kartu bisa diketuk untuk membuka rincian. -->
                 <div class="space-y-2 md:hidden">
                     <article
@@ -1103,10 +1218,14 @@ const resetFilters = () => {
                     >
                         <div class="flex items-center justify-between gap-2">
                             <div class="min-w-0">
-                                <h3 class="text-sm font-bold text-slate-800 leading-snug line-clamp-1">
+                                <h3
+                                    class="text-sm font-bold text-slate-800 leading-snug line-clamp-1"
+                                >
                                     {{ pegawai.nama }}
                                 </h3>
-                                <p class="text-[11px] text-slate-500 leading-snug line-clamp-1">
+                                <p
+                                    class="text-[11px] text-slate-500 leading-snug line-clamp-1"
+                                >
                                     {{
                                         pegawai.jabatan ||
                                         pegawai.kelompok_substansi ||
@@ -1115,36 +1234,68 @@ const resetFilters = () => {
                                     }}
                                 </p>
                             </div>
-                            <span class="shrink-0 inline-flex items-center gap-0.5 text-[11px] font-semibold text-emerald-700">
+                            <span
+                                class="shrink-0 inline-flex items-center gap-0.5 text-[11px] font-semibold text-emerald-700"
+                            >
                                 Detail
-                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                                <svg
+                                    class="w-3.5 h-3.5"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                >
+                                    <path
+                                        stroke-linecap="round"
+                                        stroke-linejoin="round"
+                                        stroke-width="2"
+                                        d="M9 5l7 7-7 7"
+                                    />
                                 </svg>
                             </span>
                         </div>
 
                         <dl class="mt-2 grid grid-cols-4 gap-1 text-center">
                             <div class="rounded-md bg-slate-50 py-1">
-                                <dt class="text-[9px] font-semibold uppercase text-slate-500">Hak</dt>
+                                <dt
+                                    class="text-[9px] font-semibold uppercase text-slate-500"
+                                >
+                                    Hak
+                                </dt>
                                 <dd class="text-sm font-bold text-slate-800">
                                     {{ getSisaTahunIni(pegawai) }}
                                 </dd>
                             </div>
                             <div class="rounded-md bg-rose-50 py-1">
-                                <dt class="text-[9px] font-semibold uppercase text-rose-600">Pakai</dt>
+                                <dt
+                                    class="text-[9px] font-semibold uppercase text-rose-600"
+                                >
+                                    Pakai
+                                </dt>
                                 <dd class="text-sm font-bold text-rose-700">
                                     {{ getTerpakaiTampil(pegawai)
-                                    }}<sup v-if="adaKoreksi(pegawai)" class="text-amber-600 font-black">*</sup>
+                                    }}<sup
+                                        v-if="adaKoreksi(pegawai)"
+                                        class="text-amber-600 font-black"
+                                        >*</sup
+                                    >
                                 </dd>
                             </div>
                             <div class="rounded-md bg-blue-50 py-1">
-                                <dt class="text-[9px] font-semibold uppercase text-blue-600">Sisa</dt>
+                                <dt
+                                    class="text-[9px] font-semibold uppercase text-blue-600"
+                                >
+                                    Sisa
+                                </dt>
                                 <dd class="text-sm font-bold text-blue-700">
                                     {{ getSisaTahunBerjalan(pegawai) }}
                                 </dd>
                             </div>
                             <div class="rounded-md bg-slate-800 py-1">
-                                <dt class="text-[9px] font-semibold uppercase text-slate-300">Saldo</dt>
+                                <dt
+                                    class="text-[9px] font-semibold uppercase text-slate-300"
+                                >
+                                    Saldo
+                                </dt>
                                 <dd class="text-sm font-bold text-white">
                                     {{ getSaldoAkhir(pegawai) }}
                                 </dd>
@@ -1181,14 +1332,22 @@ const resetFilters = () => {
                 >
                     <p class="text-xs text-gray-500">
                         Menampilkan
-                        <span class="font-semibold text-gray-700">{{ dataPegawai.from ?? 0 }}</span>
+                        <span class="font-semibold text-gray-700">{{
+                            dataPegawai.from ?? 0
+                        }}</span>
                         -
-                        <span class="font-semibold text-gray-700">{{ dataPegawai.to ?? 0 }}</span>
+                        <span class="font-semibold text-gray-700">{{
+                            dataPegawai.to ?? 0
+                        }}</span>
                         dari
-                        <span class="font-semibold text-gray-700">{{ dataPegawai.total ?? 0 }}</span>
+                        <span class="font-semibold text-gray-700">{{
+                            dataPegawai.total ?? 0
+                        }}</span>
                         pegawai
                     </p>
-                    <div class="flex flex-wrap items-center justify-center gap-1">
+                    <div
+                        class="flex flex-wrap items-center justify-center gap-1"
+                    >
                         <button
                             v-for="(link, index) in dataPegawai.links"
                             :key="index"
@@ -1210,20 +1369,15 @@ const resetFilters = () => {
                 </div>
             </div>
 
-            <!-- ================================================================
-                 POPUP DETAIL (hanya-baca) — disamakan dengan popup Rekap Kuota
-                 Detail Admin: header tetap (handle + profil + tombol X), body
-                 SATU-SATUNYA area scroll, footer tetap (Tutup Rincian).
-                 - Dibungkus <Teleport to="body"> agar tidak tertutup header /
-                   menu bawah aplikasi. Teleport sengaja DI DALAM div pembungkus
-                   tunggal: MainLayout hanya boleh punya SATU elemen anak
-                   langsung, kalau tidak transisi halaman error dan tombol
-                   Detail tidak berfungsi.
-                 - HP     : bottom sheet (sudut atas membulat, handle, maks 88dvh).
-                 - >= sm  : dialog di tengah, lebar maks 'sm:max-w-lg'.
-                 - Cara menutup: tombol X, tombol "Tutup Rincian", ketuk area
-                   gelap, geser ke bawah (HP), atau tekan Esc.
-                 ================================================================ -->
+            <!-- POPUP DETAIL (hanya-baca), sama dengan popup Rekap Kuota Detail
+                 Admin: header tetap, body satu-satunya area scroll, footer tetap.
+                 - Teleport ke body agar tidak tertutup header / menu bawah.
+                   Teleport sengaja DI DALAM div pembungkus tunggal: MainLayout
+                   hanya boleh punya SATU anak langsung, kalau tidak transisi
+                   halaman error dan tombol Detail tidak berfungsi.
+                 - HP: bottom sheet (maks 88dvh). >= sm: dialog di tengah.
+                 - Tutup: tombol X / "Tutup Rincian", ketuk area gelap, geser
+                   ke bawah (HP), atau Esc. -->
             <Teleport to="body">
                 <div
                     v-if="showModal"
@@ -1244,10 +1398,14 @@ const resetFilters = () => {
                         >
                             <!-- Handle bottom sheet (HP) -->
                             <div class="sm:hidden flex justify-center pt-2">
-                                <span class="h-1.5 w-10 rounded-full bg-gray-300"></span>
+                                <span
+                                    class="h-1.5 w-10 rounded-full bg-gray-300"
+                                ></span>
                             </div>
 
-                            <div class="flex items-start justify-between gap-3 px-4 sm:px-6 pt-2 sm:pt-3.5 pb-3">
+                            <div
+                                class="flex items-start justify-between gap-3 px-4 sm:px-6 pt-2 sm:pt-3.5 pb-3"
+                            >
                                 <div class="min-w-0 flex-1">
                                     <h3
                                         id="judul-modal-rincian"
@@ -1255,7 +1413,9 @@ const resetFilters = () => {
                                     >
                                         Rincian Kuota & Riwayat Pegawai
                                     </h3>
-                                    <p class="hidden sm:block text-xs text-gray-500 mt-0.5">
+                                    <p
+                                        class="hidden sm:block text-xs text-gray-500 mt-0.5"
+                                    >
                                         Klik salah satu riwayat untuk melihat
                                         rincian lengkap
                                     </p>
@@ -1265,14 +1425,24 @@ const resetFilters = () => {
                                         v-if="selectedPegawai"
                                         class="mt-2 flex items-center gap-2.5 min-w-0"
                                     >
-                                        <div class="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm uppercase shadow-sm shrink-0">
-                                            {{ selectedPegawai.nama?.charAt(0) || "?" }}
+                                        <div
+                                            class="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-bold text-sm uppercase shadow-sm shrink-0"
+                                        >
+                                            {{
+                                                selectedPegawai.nama?.charAt(
+                                                    0,
+                                                ) || "?"
+                                            }}
                                         </div>
                                         <div class="min-w-0">
-                                            <p class="font-bold text-gray-900 text-sm leading-tight truncate">
+                                            <p
+                                                class="font-bold text-gray-900 text-sm leading-tight truncate"
+                                            >
                                                 {{ selectedPegawai.nama }}
                                             </p>
-                                            <p class="text-[11px] text-gray-500 leading-tight mt-0.5 truncate">
+                                            <p
+                                                class="text-[11px] text-gray-500 leading-tight mt-0.5 truncate"
+                                            >
                                                 NIP:
                                                 {{ selectedPegawai.nip || "-" }}
                                                 &middot;
@@ -1293,8 +1463,19 @@ const resetFilters = () => {
                                     aria-label="Tutup rincian"
                                     class="shrink-0 h-10 w-10 inline-flex items-center justify-center rounded-full text-gray-500 hover:text-red-500 bg-white border border-gray-200 hover:bg-gray-100 transition cursor-pointer"
                                 >
-                                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        class="w-5 h-5"
+                                        fill="none"
+                                        viewBox="0 0 24 24"
+                                        stroke="currentColor"
+                                    >
+                                        <path
+                                            stroke-linecap="round"
+                                            stroke-linejoin="round"
+                                            stroke-width="2"
+                                            d="M6 18L18 6M6 6l12 12"
+                                        />
                                     </svg>
                                 </button>
                             </div>
@@ -1305,112 +1486,224 @@ const resetFilters = () => {
                             v-if="selectedPegawai"
                             class="flex-1 min-h-0 overflow-y-auto overscroll-contain"
                         >
-                            <!-- 4 KPI ringkas (Hak → Terpakai → Sisa → Saldo Akhir).
-                                 HP: 2x2. >= sm: satu baris dan MENEMPEL di atas saat
+                            <!-- 4 KPI ringkas (Hak, Terpakai, Sisa, Saldo Akhir).
+                                 HP: 2x2. >= sm: satu baris dan menempel di atas saat
                                  riwayat di-scroll, supaya Saldo Akhir selalu terlihat. -->
-                            <div class="px-3 sm:px-6 pt-3 pb-3 sm:pb-2.5 sm:sticky sm:top-0 sm:z-10 sm:bg-white sm:border-b sm:border-gray-100">
-                                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
+                            <div
+                                class="px-3 sm:px-6 pt-3 pb-3 sm:pb-2.5 sm:sticky sm:top-0 sm:z-10 sm:bg-white sm:border-b sm:border-gray-100"
+                            >
+                                <div
+                                    class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5"
+                                >
                                     <!-- KPI 1: Hak -->
-                                    <div class="bg-white px-2.5 py-2 rounded-xl border border-gray-200 shadow-sm text-center">
-                                        <p class="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-tight">
+                                    <div
+                                        class="bg-white px-2.5 py-2 rounded-xl border border-gray-200 shadow-sm text-center"
+                                    >
+                                        <p
+                                            class="text-[10px] font-bold text-gray-400 uppercase tracking-wider leading-tight"
+                                        >
                                             Hak {{ tahunAktif }}
                                         </p>
-                                        <p class="text-lg sm:text-xl font-black text-gray-800 leading-tight mt-0.5">
-                                            {{ getSisaTahunIni(selectedPegawai) }}
-                                            <span class="text-[11px] font-normal">hari</span>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-gray-800 leading-tight mt-0.5"
+                                        >
+                                            {{
+                                                getSisaTahunIni(selectedPegawai)
+                                            }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
                                         </p>
                                     </div>
 
-                                    <!-- KPI 2: Terpakai (Rose) — sudah termasuk Tgh -->
-                                    <div class="bg-rose-50 px-2.5 py-2 rounded-xl border border-rose-100 shadow-sm text-center">
-                                        <p class="text-[10px] font-bold text-rose-500 uppercase tracking-wider leading-tight">
+                                    <!-- KPI 2: Terpakai (Rose), tanpa Tgh -->
+                                    <div
+                                        class="bg-rose-50 px-2.5 py-2 rounded-xl border border-rose-100 shadow-sm text-center"
+                                    >
+                                        <p
+                                            class="text-[10px] font-bold text-rose-500 uppercase tracking-wider leading-tight"
+                                        >
                                             Terpakai {{ tahunAktif }}
                                         </p>
-                                        <p class="text-lg sm:text-xl font-black text-rose-600 leading-tight mt-0.5">
-                                            {{ getTerpakaiTampil(selectedPegawai) }}
-                                            <span class="text-[11px] font-normal">hari</span>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-rose-600 leading-tight mt-0.5"
+                                        >
+                                            {{
+                                                getTerpakaiTampil(
+                                                    selectedPegawai,
+                                                )
+                                            }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
                                         </p>
                                     </div>
 
                                     <!-- KPI 3: Sisa (Biru) -->
-                                    <div class="bg-blue-50 px-2.5 py-2 rounded-xl border border-blue-100 shadow-sm text-center">
-                                        <p class="text-[10px] font-bold text-blue-500 uppercase tracking-wider leading-tight">
+                                    <div
+                                        class="bg-blue-50 px-2.5 py-2 rounded-xl border border-blue-100 shadow-sm text-center"
+                                    >
+                                        <p
+                                            class="text-[10px] font-bold text-blue-500 uppercase tracking-wider leading-tight"
+                                        >
                                             Sisa {{ tahunAktif }}
                                         </p>
-                                        <p class="text-lg sm:text-xl font-black text-blue-600 leading-tight mt-0.5">
-                                            {{ getSisaTahunBerjalan(selectedPegawai) }}
-                                            <span class="text-[11px] font-normal">hari</span>
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-blue-600 leading-tight mt-0.5"
+                                        >
+                                            {{
+                                                getSisaTahunBerjalan(
+                                                    selectedPegawai,
+                                                )
+                                            }}
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
                                         </p>
                                     </div>
 
                                     <!-- KPI 4: Saldo Akhir (Hitam Solid) -->
-                                    <div class="bg-slate-800 border border-slate-900 text-white px-2.5 py-2 rounded-xl shadow-md text-center">
-                                        <p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight">
+                                    <div
+                                        class="bg-slate-800 border border-slate-900 text-white px-2.5 py-2 rounded-xl shadow-md text-center"
+                                    >
+                                        <p
+                                            class="text-[10px] font-bold text-slate-400 uppercase tracking-wider leading-tight"
+                                        >
                                             Saldo Akhir {{ tahunAktif }}
                                         </p>
-                                        <p class="text-lg sm:text-xl font-black text-white leading-tight mt-0.5">
+                                        <p
+                                            class="text-lg sm:text-xl font-black text-white leading-tight mt-0.5"
+                                        >
                                             {{ getSaldoAkhir(selectedPegawai) }}
-                                            <span class="text-[11px] font-normal">hari</span>
+                                            <span
+                                                class="text-[11px] font-normal"
+                                                >hari</span
+                                            >
                                         </p>
                                     </div>
                                 </div>
                             </div>
                             <!-- ================= END KPI ================= -->
 
-                            <!-- ISI: rumus -> riwayat -->
-                            <div class="p-3 pt-3 sm:px-6 sm:py-4 space-y-3 sm:space-y-4">
-                                <!-- Rumus Saldo Akhir (ringkas).
+                            <!-- ISI: rumus, lalu riwayat -->
+                            <div
+                                class="p-3 pt-3 sm:px-6 sm:py-4 space-y-3 sm:space-y-4"
+                            >
+                                <!-- Rumus Saldo Akhir (ringkas):
                                      Hak + Bawaan [+ Tgh tahun lalu] - Terpakai = Saldo.
-                                     Terpakai sudah termasuk hari yang ditangguhkan. -->
-                                <div class="bg-gray-50 px-3 py-2 rounded-lg text-[11px] sm:text-xs text-gray-600 border border-gray-100">
+                                     Hari yang ditangguhkan dikembalikan, tidak dihitung Terpakai. -->
+                                <div
+                                    class="bg-gray-50 px-3 py-2 rounded-lg text-[11px] sm:text-xs text-gray-600 border border-gray-100"
+                                >
                                     Saldo Akhir {{ tahunAktif }}:
-                                    <span class="font-semibold text-gray-800">Hak {{ getSisaTahunIni(selectedPegawai) }}</span>
+                                    <span class="font-semibold text-gray-800"
+                                        >Hak
+                                        {{
+                                            getSisaTahunIni(selectedPegawai)
+                                        }}</span
+                                    >
                                     +
-                                    <span class="font-semibold text-gray-800">Bawaan {{ getSaldoBawaanEligible(selectedPegawai) }}</span>
-                                    <template v-if="getSisaDitangguhkanTahunLalu(selectedPegawai) > 0">
+                                    <span class="font-semibold text-gray-800"
+                                        >Bawaan
+                                        {{
+                                            getSaldoBawaanEligible(
+                                                selectedPegawai,
+                                            )
+                                        }}</span
+                                    >
+                                    <template
+                                        v-if="
+                                            getSisaDitangguhkanTahunLalu(
+                                                selectedPegawai,
+                                            ) > 0
+                                        "
+                                    >
                                         +
-                                        <span class="font-semibold text-gray-800"
+                                        <span
+                                            class="font-semibold text-gray-800"
                                             >Tgh {{ tahunAktif - 1 }}
-                                            {{ getSisaDitangguhkanTahunLalu(selectedPegawai) }}</span
+                                            {{
+                                                getSisaDitangguhkanTahunLalu(
+                                                    selectedPegawai,
+                                                )
+                                            }}</span
                                         >
                                     </template>
                                     −
-                                    <span class="font-semibold text-gray-800">Terpakai {{ getTerpakaiTampil(selectedPegawai) }}</span>
+                                    <span class="font-semibold text-gray-800"
+                                        >Terpakai
+                                        {{
+                                            getTerpakaiTampil(selectedPegawai)
+                                        }}</span
+                                    >
                                     =
-                                    <span class="font-bold text-green-700">{{ getSaldoAkhir(selectedPegawai) }} hari</span>
+                                    <span class="font-bold text-green-700"
+                                        >{{
+                                            getSaldoAkhir(selectedPegawai)
+                                        }}
+                                        hari</span
+                                    >
                                     <p
-                                        v-if="getSisaDitangguhkanTahunIni(selectedPegawai) > 0"
+                                        v-if="
+                                            getSisaDitangguhkanTahunIni(
+                                                selectedPegawai,
+                                            ) > 0
+                                        "
                                         class="mt-1 text-[11px] text-gray-500"
                                     >
-                                        (Terpakai {{ getTerpakaiTampil(selectedPegawai) }} =
-                                        {{ getTerpakai(selectedPegawai) }} hari digunakan +
-                                        {{ getSisaDitangguhkanTahunIni(selectedPegawai) }} hari
-                                        ditangguhkan)
+                                        ({{
+                                            getSisaDitangguhkanTahunIni(
+                                                selectedPegawai,
+                                            )
+                                        }}
+                                        hari ditangguhkan dikembalikan ke saldo,
+                                        tidak dihitung sebagai terpakai)
                                     </p>
                                     <p
                                         v-if="adaKoreksi(selectedPegawai)"
                                         class="mt-1 text-[11px] text-amber-700"
                                     >
                                         Terpakai memakai angka koreksi Admin HR
-                                        ({{
-                                            getKoreksiSaldo(selectedPegawai) +
-                                            getSisaDitangguhkanTahunIni(selectedPegawai)
-                                        }}
+                                        ({{ getKoreksiSaldo(selectedPegawai) }}
                                         hari). Angka dari sistem:
-                                        {{ getTerpakaiSistemTampil(selectedPegawai) }} hari.
+                                        {{
+                                            getTerpakaiSistemTampil(
+                                                selectedPegawai,
+                                            )
+                                        }}
+                                        hari.
                                     </p>
                                 </div>
 
                                 <!-- ============ RIWAYAT PENGAJUAN CUTI ============ -->
                                 <div>
-                                    <h5 class="font-bold text-gray-900 text-sm sm:text-base mb-2 flex items-center gap-2">
-                                        <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    <h5
+                                        class="font-bold text-gray-900 text-sm sm:text-base mb-2 flex items-center gap-2"
+                                    >
+                                        <svg
+                                            class="w-5 h-5 text-green-600"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                        >
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                            ></path>
                                         </svg>
                                         Riwayat Pengajuan Cuti
-                                        <span class="inline-block min-w-[20px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-bold text-center">{{
-                                            selectedPegawai.pengajuan_cuti?.length || 0
-                                        }}</span>
+                                        <span
+                                            class="inline-block min-w-[20px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-bold text-center"
+                                            >{{
+                                                selectedPegawai.pengajuan_cuti
+                                                    ?.length || 0
+                                            }}</span
+                                        >
                                     </h5>
 
                                     <!-- Filter: chip status + hanya Cuti Tahunan -->
@@ -1425,13 +1718,18 @@ const resetFilters = () => {
                                                 :key="opsi.key"
                                                 type="button"
                                                 @click="
-                                                    filterStatusRiwayat = opsi.key;
+                                                    filterStatusRiwayat =
+                                                        opsi.key;
                                                     expandedRiwayatId = null;
                                                 "
-                                                :aria-pressed="filterStatusRiwayat === opsi.key"
+                                                :aria-pressed="
+                                                    filterStatusRiwayat ===
+                                                    opsi.key
+                                                "
                                                 class="inline-flex min-h-[32px] cursor-pointer items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold transition"
                                                 :class="
-                                                    filterStatusRiwayat === opsi.key
+                                                    filterStatusRiwayat ===
+                                                    opsi.key
                                                         ? 'border-emerald-600 bg-emerald-600 text-white'
                                                         : 'border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
                                                 "
@@ -1440,15 +1738,22 @@ const resetFilters = () => {
                                                 <span
                                                     class="rounded-full px-1.5 text-[10px] font-bold"
                                                     :class="
-                                                        filterStatusRiwayat === opsi.key
+                                                        filterStatusRiwayat ===
+                                                        opsi.key
                                                             ? 'bg-white/25'
                                                             : 'bg-gray-100 text-gray-500'
                                                     "
-                                                    >{{ jumlahPerStatus[opsi.key] }}</span
+                                                    >{{
+                                                        jumlahPerStatus[
+                                                            opsi.key
+                                                        ]
+                                                    }}</span
                                                 >
                                             </button>
                                         </div>
-                                        <label class="flex cursor-pointer select-none items-center gap-2 text-xs text-gray-600">
+                                        <label
+                                            class="flex cursor-pointer select-none items-center gap-2 text-xs text-gray-600"
+                                        >
                                             <input
                                                 type="checkbox"
                                                 v-model="hanyaCutiTahunan"
@@ -1459,8 +1764,8 @@ const resetFilters = () => {
                                         </label>
                                     </div>
 
-                                    <!-- Kosong: tidak ada riwayat sama sekali, atau
-                                         tidak ada yang cocok dengan filter -->
+                                    <!-- Kosong: tidak ada riwayat, atau tidak ada
+                                         yang cocok dengan filter -->
                                     <div
                                         v-if="riwayatTersaring.length === 0"
                                         class="text-center py-6 bg-gray-50 rounded-xl border border-dashed border-gray-200 text-xs text-gray-400"
@@ -1468,15 +1773,17 @@ const resetFilters = () => {
                                         <template
                                             v-if="
                                                 !selectedPegawai.pengajuan_cuti ||
-                                                selectedPegawai.pengajuan_cuti.length === 0
+                                                selectedPegawai.pengajuan_cuti
+                                                    .length === 0
                                             "
                                         >
-                                            Belum ada catatan riwayat pengajuan cuti.
+                                            Belum ada catatan riwayat pengajuan
+                                            cuti.
                                         </template>
                                         <template v-else>
-                                            Tidak ada pengajuan yang cocok dengan
-                                            filter. Pilih status "Semua" atau
-                                            matikan "Hanya Cuti Tahunan".
+                                            Tidak ada pengajuan yang cocok
+                                            dengan filter. Pilih status "Semua"
+                                            atau matikan "Hanya Cuti Tahunan".
                                         </template>
                                     </div>
 
@@ -1488,48 +1795,97 @@ const resetFilters = () => {
                                             @click="toggleExpand(riwayat.id)"
                                             class="bg-white p-2.5 sm:p-4 rounded-xl border border-gray-200/80 text-sm flex flex-col gap-2 transition-colors duration-150 hover:shadow-sm cursor-pointer relative overflow-hidden group"
                                             :class="[
-                                                kelasGarisStatus(riwayat.status),
+                                                kelasGarisStatus(
+                                                    riwayat.status,
+                                                ),
                                                 expandedRiwayatId === riwayat.id
                                                     ? 'ring-2 ring-green-500/20'
                                                     : '',
                                             ]"
                                         >
                                             <!-- Baris atas: Jenis Cuti & Badge Status -->
-                                            <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1">
-                                                <span class="font-bold text-gray-900 text-sm sm:text-base group-hover:text-green-700 transition">{{
-                                                    riwayat.jenis_cuti
-                                                }}</span>
-                                                <div class="flex items-start sm:items-center justify-between sm:justify-start gap-2">
+                                            <div
+                                                class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1"
+                                            >
+                                                <span
+                                                    class="font-bold text-gray-900 text-sm sm:text-base group-hover:text-green-700 transition"
+                                                    >{{
+                                                        riwayat.jenis_cuti
+                                                    }}</span
+                                                >
+                                                <div
+                                                    class="flex items-start sm:items-center justify-between sm:justify-start gap-2"
+                                                >
                                                     <span
                                                         class="px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md font-bold text-[11px] sm:text-xs tracking-wide uppercase min-w-0 break-words"
-                                                        :class="kelasBadgeStatus(riwayat.status)"
+                                                        :class="
+                                                            kelasBadgeStatus(
+                                                                riwayat.status,
+                                                            )
+                                                        "
                                                     >
-                                                        {{ getStatusLabel(riwayat.status) }}
+                                                        {{
+                                                            getStatusLabel(
+                                                                riwayat.status,
+                                                            )
+                                                        }}
                                                     </span>
                                                     <svg
                                                         class="w-4 h-4 text-gray-400 transition-transform duration-200 shrink-0"
                                                         :class="{
                                                             'rotate-180 text-green-600':
-                                                                expandedRiwayatId === riwayat.id,
+                                                                expandedRiwayatId ===
+                                                                riwayat.id,
                                                         }"
-                                                        fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
                                                     >
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M19 9l-7 7-7-7"
+                                                        />
                                                     </svg>
                                                 </div>
                                             </div>
 
                                             <!-- Tanggal, Durasi, dan badge lintas tahun -->
-                                            <div class="text-gray-600 text-xs sm:text-sm flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium">
-                                                <span>{{ riwayat.tanggal_mulai }} s/d {{ riwayat.tanggal_selesai }}</span>
-                                                <span>&middot;</span>
-                                                <span class="font-bold text-gray-900">{{ getDurasi(riwayat) }} Hari</span>
+                                            <div
+                                                class="text-gray-600 text-xs sm:text-sm flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium"
+                                            >
                                                 <span
-                                                    v-if="hariDihitungBeda(riwayat)"
+                                                    >{{
+                                                        riwayat.tanggal_mulai
+                                                    }}
+                                                    s/d
+                                                    {{
+                                                        riwayat.tanggal_selesai
+                                                    }}</span
+                                                >
+                                                <span>&middot;</span>
+                                                <span
+                                                    class="font-bold text-gray-900"
+                                                    >{{
+                                                        getDurasi(riwayat)
+                                                    }}
+                                                    Hari</span
+                                                >
+                                                <span
+                                                    v-if="
+                                                        hariDihitungBeda(
+                                                            riwayat,
+                                                        )
+                                                    "
                                                     class="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700"
                                                     :title="`Cuti lintas tahun: hanya ${riwayat.hari_di_tahun_ini} hari yang jatuh di ${tahunAktif}`"
-                                                    >dihitung di {{ tahunAktif }}:
-                                                    {{ riwayat.hari_di_tahun_ini }} hari</span
+                                                    >dihitung di
+                                                    {{ tahunAktif }}:
+                                                    {{
+                                                        riwayat.hari_di_tahun_ini
+                                                    }}
+                                                    hari</span
                                                 >
                                             </div>
 
@@ -1538,51 +1894,111 @@ const resetFilters = () => {
                                                 v-if="riwayat.keterangan"
                                                 class="text-gray-800 bg-gray-50/80 border border-gray-200/60 px-3 py-2 rounded-lg italic text-xs sm:text-sm font-medium leading-relaxed break-words"
                                             >
-                                                "{{ formatKeteranganRapi(riwayat.keterangan) }}"
+                                                "{{
+                                                    formatKeteranganRapi(
+                                                        riwayat.keterangan,
+                                                    )
+                                                }}"
                                             </div>
 
                                             <!-- AREA RINCIAN SAAT KARTU DIKLIK -->
                                             <div
-                                                v-if="expandedRiwayatId === riwayat.id"
+                                                v-if="
+                                                    expandedRiwayatId ===
+                                                    riwayat.id
+                                                "
                                                 @click.stop
                                                 class="mt-1 pt-2.5 border-t-2 border-dashed border-green-200 bg-green-50/40 -mx-2.5 sm:-mx-4 -mb-2.5 sm:-mb-4 p-2.5 sm:p-4 rounded-b-xl space-y-2.5 text-xs cursor-default"
                                             >
-                                                <div class="font-bold text-green-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
-                                                    <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                                <div
+                                                    class="font-bold text-green-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5"
+                                                >
+                                                    <svg
+                                                        class="w-4 h-4 text-green-600"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <path
+                                                            stroke-linecap="round"
+                                                            stroke-linejoin="round"
+                                                            stroke-width="2"
+                                                            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                                        />
                                                     </svg>
                                                     Rincian Lengkap Pengajuan
                                                 </div>
 
                                                 <!-- Alamat & kontak selama cuti -->
-                                                <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5 bg-white p-2.5 rounded-lg border border-green-100">
+                                                <div
+                                                    class="grid grid-cols-1 md:grid-cols-2 gap-2.5 bg-white p-2.5 rounded-lg border border-green-100"
+                                                >
                                                     <div>
-                                                        <span class="block text-gray-400 text-[10px] uppercase font-semibold">Alamat Selama Cuti</span>
-                                                        <p class="font-medium text-gray-800 mt-0.5 break-words">
-                                                            {{ riwayat.alamat_cuti || "-" }}
+                                                        <span
+                                                            class="block text-gray-400 text-[10px] uppercase font-semibold"
+                                                            >Alamat Selama
+                                                            Cuti</span
+                                                        >
+                                                        <p
+                                                            class="font-medium text-gray-800 mt-0.5 break-words"
+                                                        >
+                                                            {{
+                                                                riwayat.alamat_cuti ||
+                                                                "-"
+                                                            }}
                                                         </p>
                                                     </div>
                                                     <div>
-                                                        <span class="block text-gray-400 text-[10px] uppercase font-semibold">Nomor Kontak / Telepon</span>
-                                                        <p class="font-medium text-gray-800 mt-0.5 break-words">
-                                                            {{ riwayat.no_telp || "-" }}
+                                                        <span
+                                                            class="block text-gray-400 text-[10px] uppercase font-semibold"
+                                                            >Nomor Kontak /
+                                                            Telepon</span
+                                                        >
+                                                        <p
+                                                            class="font-medium text-gray-800 mt-0.5 break-words"
+                                                        >
+                                                            {{
+                                                                riwayat.no_telp ||
+                                                                "-"
+                                                            }}
                                                         </p>
                                                     </div>
                                                 </div>
 
                                                 <!-- Lampiran -->
-                                                <div class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-green-100 gap-3">
-                                                    <div class="flex items-center gap-2">
-                                                        <svg class="w-5 h-5 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                                                <div
+                                                    class="flex items-center justify-between bg-white p-2.5 rounded-lg border border-green-100 gap-3"
+                                                >
+                                                    <div
+                                                        class="flex items-center gap-2"
+                                                    >
+                                                        <svg
+                                                            class="w-5 h-5 text-red-500 shrink-0"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            viewBox="0 0 24 24"
+                                                        >
+                                                            <path
+                                                                stroke-linecap="round"
+                                                                stroke-linejoin="round"
+                                                                stroke-width="2"
+                                                                d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+                                                            />
                                                         </svg>
                                                         <div>
-                                                            <span class="block text-gray-800 font-semibold">Lampiran Pendukung</span>
-                                                            <span class="text-gray-400 text-[10px]">{{
-                                                                riwayat.lampiran
-                                                                    ? "File tersedia di sistem"
-                                                                    : "Tidak ada lampiran diunggah"
-                                                            }}</span>
+                                                            <span
+                                                                class="block text-gray-800 font-semibold"
+                                                                >Lampiran
+                                                                Pendukung</span
+                                                            >
+                                                            <span
+                                                                class="text-gray-400 text-[10px]"
+                                                                >{{
+                                                                    riwayat.lampiran
+                                                                        ? "File tersedia di sistem"
+                                                                        : "Tidak ada lampiran diunggah"
+                                                                }}</span
+                                                            >
                                                         </div>
                                                     </div>
                                                     <a
@@ -1593,47 +2009,107 @@ const resetFilters = () => {
                                                     >
                                                         Unduh / Lihat
                                                     </a>
-                                                    <span v-else class="text-gray-400 italic text-[11px] shrink-0">Tanpa Lampiran</span>
+                                                    <span
+                                                        v-else
+                                                        class="text-gray-400 italic text-[11px] shrink-0"
+                                                        >Tanpa Lampiran</span
+                                                    >
                                                 </div>
 
-                                                <!-- Approval chain: SEMUA level + jaring pengaman filter L1 -->
+                                                <!-- Approval chain: semua level + jaring pengaman filter L1 -->
                                                 <div
-                                                    v-if="getVisibleApprovalChain(riwayat.approval_chain, selectedPegawai).length > 0"
+                                                    v-if="
+                                                        getVisibleApprovalChain(
+                                                            riwayat.approval_chain,
+                                                            selectedPegawai,
+                                                        ).length > 0
+                                                    "
                                                     class="bg-white p-2.5 rounded-lg border border-green-100 space-y-1"
                                                 >
                                                     <div
-                                                        v-for="(step, idx) in getVisibleApprovalChain(riwayat.approval_chain, selectedPegawai)"
-                                                        :key="step.level ?? `tangguh-${idx}`"
+                                                        v-for="(
+                                                            step, idx
+                                                        ) in getVisibleApprovalChain(
+                                                            riwayat.approval_chain,
+                                                            selectedPegawai,
+                                                        )"
+                                                        :key="
+                                                            step.level ??
+                                                            `tangguh-${idx}`
+                                                        "
                                                         class="flex items-start sm:items-center gap-1.5 text-gray-600"
                                                     >
                                                         <svg
-                                                            v-if="step.status === 'tangguh'"
+                                                            v-if="
+                                                                step.status ===
+                                                                'tangguh'
+                                                            "
                                                             class="w-3.5 h-3.5 text-orange-400 shrink-0"
-                                                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            viewBox="0 0 24 24"
                                                         >
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                                            <path
+                                                                stroke-linecap="round"
+                                                                stroke-linejoin="round"
+                                                                stroke-width="2"
+                                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                                                            />
                                                         </svg>
                                                         <svg
                                                             v-else
                                                             class="w-3.5 h-3.5 text-gray-400 shrink-0"
-                                                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                                            fill="none"
+                                                            stroke="currentColor"
+                                                            viewBox="0 0 24 24"
                                                         >
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                                            <path
+                                                                stroke-linecap="round"
+                                                                stroke-linejoin="round"
+                                                                stroke-width="2"
+                                                                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                                                            />
                                                         </svg>
-                                                        <span class="flex-1 min-w-0 break-words">
-                                                            <template v-if="step.level">
-                                                                L{{ step.level }} &middot;
+                                                        <span
+                                                            class="flex-1 min-w-0 break-words"
+                                                        >
+                                                            <template
+                                                                v-if="
+                                                                    step.level
+                                                                "
+                                                            >
+                                                                L{{
+                                                                    step.level
+                                                                }}
+                                                                &middot;
                                                             </template>
-                                                            <strong class="text-gray-800">{{ step.nama }}</strong>
-                                                            <span class="text-gray-400 text-[10px]">
-                                                                ({{ step.label }})
+                                                            <strong
+                                                                class="text-gray-800"
+                                                                >{{
+                                                                    step.nama
+                                                                }}</strong
+                                                            >
+                                                            <span
+                                                                class="text-gray-400 text-[10px]"
+                                                            >
+                                                                ({{
+                                                                    step.label
+                                                                }})
                                                             </span>
                                                         </span>
                                                         <span
                                                             class="font-bold uppercase text-[11px] shrink-0"
-                                                            :class="approvalStepClass(step.status)"
+                                                            :class="
+                                                                approvalStepClass(
+                                                                    step.status,
+                                                                )
+                                                            "
                                                         >
-                                                            {{ approvalStepLabel(step.status) }}
+                                                            {{
+                                                                approvalStepLabel(
+                                                                    step.status,
+                                                                )
+                                                            }}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -1646,7 +2122,9 @@ const resetFilters = () => {
                         </div>
 
                         <!-- ============ 3) FOOTER (tetap) ============ -->
-                        <div class="shrink-0 border-t bg-gray-50 px-3 sm:px-6 pt-2.5 sm:pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-3">
+                        <div
+                            class="shrink-0 border-t bg-gray-50 px-3 sm:px-6 pt-2.5 sm:pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-3"
+                        >
                             <button
                                 @click="closeModal"
                                 type="button"
@@ -1661,4 +2139,3 @@ const resetFilters = () => {
         </div>
     </MainLayout>
 </template>
-
