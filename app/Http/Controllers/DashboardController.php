@@ -18,8 +18,8 @@ use Carbon\Carbon;
  *
  * Ringkasan aturan:
  * - Saldo: data diambil di hitungSaldoPegawai(); rumus aritmetikanya dari
- *   RincianSaldo::hitungTotal(), satu sumber dengan Rekap Kuota Detail
- *   (Tgh tahun ini mengurangi sisa, Tgh tahun lalu dikembalikan).
+ *   RincianSaldo::hitungDenganTgh(), satu sumber dengan Rekap Kuota Detail
+ *   (Tgh mengikuti flag SaldoCuti: Tgh tahun ini hanya catatan, Tgh tahun lalu dikembalikan).
  * - Chart, kalender, dan KPI memakai cuti yang beririsan dengan tahun/bulan
  *   terpilih; cuti lintas tahun dipotong lewat potongCutiKeTahun().
  * - Anggota tim: lihat MODE_ATASAN_TERPISAH. Hanya pegawai aktif yang sudah
@@ -91,7 +91,7 @@ class DashboardController extends Controller
         // Ikut koreksi Admin HR (NULL = ikut sistem).
         $terpakai = SaldoCuti::terpakaiEfektif($pegawaiId, $tahun, $saldo);
 
-        // Tgh tahun berjalan: mengurangi Sisa & Total.
+        // Tgh tahun berjalan: catatan, dibawa ke tahun depan (lihat flag SaldoCuti).
         $tangguh = $this->hitungTangguh($pegawaiId, $tahun);
 
         // Tgh tahun lalu: dikembalikan ke saldo tahun ini.
@@ -103,12 +103,12 @@ class DashboardController extends Controller
             $kuota
         );
 
-        $hasil = RincianSaldo::hitungTotal(
+        $hasil = RincianSaldo::hitungDenganTgh(
             (int) $kuota,
             (int) $bawaanEligible,
-            (int) $dikembalikan,
+            (int) $dikembalikan, // Tgh tahun lalu
             (int) $terpakai,
-            (int) $tangguh
+            (int) $tangguh       // Tgh tahun ini
         );
 
         $terpakaiTotal     = $hasil['cuti_terpakai_total'];

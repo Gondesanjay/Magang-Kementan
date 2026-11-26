@@ -48,6 +48,7 @@ class ArsipkanCuti extends Command
         'dibatalkan_reguler',
         'dibatalkan_ditangguhkan',
         'ditangguhkan',
+        'kedaluwarsa', // data lama; fitur kedaluwarsa sudah dihapus
     ];
 
 
@@ -224,6 +225,10 @@ class ArsipkanCuti extends Command
                 }
             }
 
+
+            // 2b) Notifikasi tanpa foreign key: dibersihkan manual agar tidak
+            // menunjuk ke pengajuan yang sudah pindah ke arsip.
+            DB::table('notifikasis')->whereIn('pengajuan_id', $ids)->delete();
 
             // 3) Baru hapus dari tabel utama (anak ikut terhapus lewat CASCADE).
             $terhapus = DB::table('pengajuan_cutis')->whereIn('id', $ids)->delete();

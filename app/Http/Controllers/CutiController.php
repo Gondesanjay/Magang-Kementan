@@ -141,25 +141,28 @@ class CutiController extends Controller
 
         $menunggu = $this->hariMenungguDiTahun($pegawaiId, $tahun);
 
-        $totalTersedia = RincianSaldo::hitungTotal(
+        // Tgh diterapkan sesuai flag SaldoCuti (satu sumber dengan halaman lain).
+        $hasil = RincianSaldo::hitungDenganTgh(
             $kuota,
             (int) $bawaanEligible,
             $dikembalikan,
             $terpakai,
             $tangguh
-        )['total_cuti_tersedia'];
+        );
+        $totalTersedia = $hasil['total_cuti_tersedia'];
 
         return [
-            'kuota_tahunan'         => $kuota,
-            'carry_forward_normal'  => $sisaTahunLalu,
-            'sisa_dua_tahun_lalu'   => $sisaDuaTahunLalu,
-            'saldo_bawaan_eligible' => $bawaanEligible,
-            'cuti_dikembalikan'     => $dikembalikan,
-            'cuti_terpakai'         => $terpakai,
-            'cuti_ditangguhkan'     => $tangguh,
-            'cuti_menunggu'         => $menunggu,
-            'total_cuti_tersedia'   => $totalTersedia,
-            'sisa_cuti'             => max($totalTersedia - $menunggu, 0),
+            'kuota_tahunan'           => $kuota,
+            'carry_forward_normal'    => $sisaTahunLalu,
+            'sisa_dua_tahun_lalu'     => $sisaDuaTahunLalu,
+            'saldo_bawaan_eligible'   => $bawaanEligible,
+            'cuti_dikembalikan'       => $dikembalikan,
+            'cuti_terpakai'           => $terpakai,
+            'cuti_ditangguhkan'       => $tangguh,
+            'cuti_menunggu'           => $menunggu,
+            'sisa_hak_tahun_berjalan' => $hasil['sisa_hak_tahun_berjalan'],
+            'total_cuti_tersedia'     => $totalTersedia,
+            'sisa_cuti'               => max($totalTersedia - $menunggu, 0),
         ];
     }
 
@@ -367,19 +370,15 @@ class CutiController extends Controller
         return Pegawai::where('role_id', 2)->where('tim_kerja', $timKerja)->exists();
     }
 
-    private function cariAtasanTujuan(Pegawai $pemohon, int $targetRole): ?Pegawai
+    /**
+     * Penerima notifikasi untuk level tujuan: semua pejabat AKTIF (kecuali pemohon).
+     * L1 per tim kerja, L2 per kelompok substansi, L3/L4 semua pejabat aktif role itu.
+     */
+    private function penerimaAtasan(Pegawai $pemohon, int $targetRole): \Illuminate\Support\Collection
     {
-        if ($targetRole === 2) {
-            if (empty($pemohon->tim_kerja)) {
-                return null;
-            }
-            return Pegawai::where('role_id', 2)->where('tim_kerja', $pemohon->tim_kerja)->first();
-        }
-
-        return Pegawai::where('role_id', $targetRole)
-            ->where('kelompok_substansi', $pemohon->kelompok_substansi)
-            ->first()
-            ?? Pegawai::where('role_id', $targetRole)->first();
+        return Pegawai::penerimaApproval($targetRole, $pemohon->tim_kerja, $pemohon->kelompok_substansi)
+            ->reject(fn($p) => (int) $p->id === (int) $pemohon->id)
+            ->values();
     }
 
     private function tentukanLevelAwalCuti(Pegawai $user): array
@@ -447,14 +446,15 @@ class CutiController extends Controller
             'tanggal_keputusan' => now(),
         ]);
 
-        foreach (Pegawai::where('role_id', 5)->get() as $hr) {
+        foreach (Pegawai::penerimaApproval(5) as $hr) {
             Notifikasi::create([
-                'pegawai_id' => $hr->id,
-                'judul'      => 'Info Cuti Kepala Biro',
-                'pesan'      => $user->nama . ' (Kepala Biro) mengajukan cuti ' . $pengajuan->jenis_cuti
+                'pegawai_id'   => $hr->id,
+                'pengajuan_id' => $pengajuan->id,
+                'judul'        => 'Info Cuti Kepala Biro',
+                'pesan'        => $user->nama . ' (Kepala Biro) mengajukan cuti ' . $pengajuan->jenis_cuti
                     . ' dan disetujui otomatis. Info saja, tidak perlu tindakan.',
-                'tautan'     => route('admin.rekap'),
-                'is_read'    => false,
+                'tautan'       => route('admin.rekap'),
+                'is_read'      => false,
             ]);
         }
     }
@@ -681,14 +681,19 @@ class CutiController extends Controller
                 ->with('success', 'Pengajuan cuti Anda disetujui otomatis.');
         }
 
-        $atasanTarget = $this->cariAtasanTujuan($user, (int) $targetRoleNotifikasi);
-        if ($atasanTarget) {
+        // Susulan = cuti sudah dimulai sebelum pengajuan dibuat. Kalimat
+        // "dari {nama} yang butuh persetujuan Anda." sengaja dipertahankan.
+        $susulan = $pengajuan->isSusulan();
+        foreach ($this->penerimaAtasan($user, (int) $targetRoleNotifikasi) as $atasan) {
             Notifikasi::create([
-                'pegawai_id' => $atasanTarget->id,
-                'judul'      => 'Pengajuan Cuti Baru',
-                'pesan'      => 'Ada pengajuan cuti baru dari ' . $user->nama . ' yang butuh persetujuan Anda.',
-                'tautan'     => route('atasan.approval'),
-                'is_read'    => false,
+                'pegawai_id'   => $atasan->id,
+                'pengajuan_id' => $pengajuan->id,
+                'judul'        => 'Pengajuan Cuti Baru',
+                'pesan'        => 'Ada pengajuan cuti ' . ($susulan ? 'susulan' : 'baru')
+                    . ' dari ' . $user->nama . ' yang butuh persetujuan Anda.'
+                    . ($susulan ? ' Cuti sudah dijalani sebelum diajukan.' : ''),
+                'tautan'       => route('atasan.approval'),
+                'is_read'      => false,
             ]);
         }
 
@@ -782,10 +787,7 @@ class CutiController extends Controller
             'cuti_dikembalikan' => $saldoInfo['cuti_dikembalikan'],
             'cuti_terpakai' => $saldoInfo['cuti_terpakai'],
             'cuti_ditangguhkan' => $saldoInfo['cuti_ditangguhkan'],
-            'sisa_kuota_tahun_ini' => max(
-                $saldoInfo['kuota_tahunan'] - $saldoInfo['cuti_terpakai'] - $saldoInfo['cuti_ditangguhkan'],
-                0
-            ),
+            'sisa_kuota_tahun_ini' => $saldoInfo['sisa_hak_tahun_berjalan'],
             'total_cuti_tersedia' => $saldoInfo['total_cuti_tersedia'],
         ];
 
@@ -939,16 +941,53 @@ class CutiController extends Controller
     {
         /** @var \App\Models\Pegawai $user */
         $user = Auth::user();
-        $pengajuan = PengajuanCuti::findOrFail($id);
 
-        if ($pengajuan->pegawai_id !== $user->id) {
-            abort(403, 'Anda tidak diizinkan membatalkan pengajuan ini.');
-        }
-        if (!in_array($pengajuan->status, ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'])) {
+        $berhasil = DB::transaction(function () use ($id, $user) {
+            // lockForUpdate: mencegah bentrok dengan atasan yang menyetujui di detik yang sama.
+            $pengajuan = PengajuanCuti::lockForUpdate()->findOrFail($id);
+
+            if ((int) $pengajuan->pegawai_id !== (int) $user->id) {
+                abort(403, 'Anda tidak diizinkan membatalkan pengajuan ini.');
+            }
+
+            // Role yang sedang menunggu, dibaca SEBELUM status diubah.
+            $roleMenunggu = [
+                'menunggu_l1' => 2,
+                'menunggu_l2' => 3,
+                'menunggu_l3' => 4,
+                'menunggu_l4' => 6,
+            ][$pengajuan->status] ?? null;
+
+            if ($roleMenunggu === null) {
+                return false;
+            }
+
+            $pengajuan->update(['status' => 'dibatalkan_reguler']);
+
+            // Bersihkan notifikasi antrean di semua penerima, lalu kabari
+            // atasan yang sedang menunggu bahwa pengajuan dibatalkan.
+            Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+
+            foreach ($this->penerimaAtasan($user, $roleMenunggu) as $atasan) {
+                Notifikasi::create([
+                    'pegawai_id'   => $atasan->id,
+                    'pengajuan_id' => $pengajuan->id,
+                    'judul'        => 'Pengajuan Cuti Dibatalkan',
+                    'pesan'        => "{$user->nama} membatalkan pengajuan cuti {$pengajuan->jenis_cuti} ("
+                        . Carbon::parse($pengajuan->tanggal_mulai)->format('d/m/Y') . ' - '
+                        . Carbon::parse($pengajuan->tanggal_selesai)->format('d/m/Y') . ').',
+                    'tautan'       => route('atasan.approval'),
+                    'is_read'      => false,
+                ]);
+            }
+
+            return true;
+        });
+
+        if (!$berhasil) {
             return back()->with('error', 'Cuti ini sudah tidak dapat dibatalkan.');
         }
 
-        $pengajuan->update(['status' => 'dibatalkan_reguler']);
         return back()->with('success', 'Pengajuan cuti berhasil dibatalkan.');
     }
 

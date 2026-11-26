@@ -17,45 +17,30 @@ use Illuminate\Support\Facades\DB;
 // File ini WAJIB disimpan di app/Http/Controllers/MonitoringCutiController.php
 // dengan nama class persis "MonitoringCutiController".
 //
-// RINGKASAN FITUR / PERBAIKAN YANG SUDAH ADA:
+// RINGKASAN FITUR / PERBAIKAN:
 //   - buildFilterPropsUntukAtasan(): dropdown filter berjenjang untuk MonitoringCuti.vue.
-//   - atasan_l1_nama..atasan_l4_nama: nama asli atasan untuk Modal Detail Cuti.
+//   - atasan_l1_nama..atasan_l4_nama: nama atasan untuk Modal Detail Cuti
+//     (hanya pejabat AKTIF, id terkecil; sama dengan RekapKuotaDetailController::getApproverName()).
 //   - process(): transaksi DB + lockForUpdate, validasi alasan tolak, batasan wilayah
 //     L1 per Tim Kerja & L2 per Kelompok Substansi.
-//   - Rumus saldo disamakan dengan DashboardController::hitungSaldoPegawai()
-//     (bawaan eligible, terpakai total, dikembalikan, total tersedia). Rumus
-//     aritmetikanya kini dipanggil dari RincianSaldo::hitungTotal() (satu sumber).
-//   - Cuti lintas tahun: saldo dicek per tahun saat L4 menyetujui, kolom legacy `sisa`
-//     disesuaikan lewat SaldoCuti::sesuaikanSisaLegacy(), bawaan disinkronkan lewat
-//     SaldoCuti::sinkronkanBawaanPengajuan().
-//   - index(): dua daftar. 'menunggu' (semua menunggu_l1..l4, tanpa filter tahun & paginasi)
-//     dan 'antrean' (riwayat diproses, difilter tahun, dipaginasi). Jendela tahun: 2 ke
-//     belakang, 1 ke depan.
-//   - Rincian saldo per pengajuan dihitung lewat App\Support\RincianSaldo::lengkapi().
-//   - L3 (role 4) tidak melihat pengajuan milik sendiri maupun milik Kepala Biro.
+//   - Rumus saldo satu sumber: RincianSaldo::hitungDenganTgh() dan
+//     SaldoCuti::terpakaiEfektif() (sama dengan Rekap Kuota Detail & Rekap Laporan).
+//   - Cuti lintas tahun: saldo dicek per tahun saat L4 menyetujui; kolom legacy `sisa`
+//     lewat SaldoCuti::sesuaikanSisaLegacy(), bawaan lewat SaldoCuti::sinkronkanBawaanPengajuan().
+//   - index(): 'menunggu' (semua menunggu_l1..l4, tanpa filter tahun & paginasi) dan
+//     'antrean' (riwayat diproses, difilter tahun, dipaginasi). Jendela tahun: 2 mundur, 1 maju.
+//   - L3 (role 4) tidak melihat pengajuan sendiri maupun milik Kepala Biro.
+//   - Kepala Biro (role 6) tidak melihat riwayat cutinya sendiri di index() dan history();
+//     daftar "Menunggu Persetujuan" tidak diubah. Admin HR (role 5) tidak terpengaruh.
 //
-// PERBAIKAN (KEPALA BIRO TIDAK MELIHAT RIWAYAT CUTI SENDIRI):
-//   - index() (query $antrean) & history(): Kepala Biro (role 6) tidak melihat riwayat
-//     pengajuan miliknya sendiri. Daftar "Menunggu Persetujuan" TIDAK diubah, jadi
-//     pengajuan yang butuh persetujuannya tetap muncul. Admin HR (role 5) tidak terpengaruh.
-//
-// PERBAIKAN BARU (SATU RUMUS TERPAKAI & ATASAN AKTIF):
-//   - process() (L4 menyetujui): pengecekan saldo kini memakai
-//     SaldoCuti::terpakaiEfektif() (koreksi bulanan -> koreksi tahunan -> hitungan
-//     sistem), SATU rumus dengan Rekap Kuota Detail & Rekap Laporan. Sebelumnya hanya
-//     koreksi tahunan + terpakai murni, sehingga pegawai berkoreksi bulanan bisa dicek
-//     dengan angka yang berbeda dari yang tampil di Rekap.
-//     hitungInfoSaldo() sekarang menerima Terpakai yang SUDAH efektif.
-//   - process() (L4 menyetujui): pengecekan saldo kini memasukkan cuti ditangguhkan (Tgh)
-//     seperti Rekap Kuota Detail: Tgh tahun yang dicek MEMOTONG saldo, Tgh tahun
-//     sebelumnya MENAMBAH total tersedia. Sebelumnya Tgh diabaikan.
-//   - index(): peta nama atasan L1 (Ketua Tim) & L2 (Ketua Kelompok) hanya memakai
-//     pejabat AKTIF (status_aktif 'Aktif' / NULL), dan bila ada lebih dari satu dipilih
-//     id terkecil. Sama dengan aturan di RekapKuotaDetailController::getApproverName().
-//
-// PERBAIKAN (RUMUS SALDO SATU SUMBER):
-//   - hitungInfoSaldo(): aritmetika (terpakai total, sisa hak, total tersedia)
-//     dipanggil dari RincianSaldo::hitungTotal(). Pengambilan datanya tidak berubah.
+// PERBAIKAN NOTIFIKASI:
+//   - Setiap notifikasi terkait pengajuan diberi pengajuan_id.
+//   - Notifikasi antrean dibersihkan per pengajuan (Notifikasi::hapusAntreanPengajuan),
+//     untuk semua penerima, saat disetujui, ditolak, atau naik level.
+//   - Notifikasi ke L3 dan L4 dikirim ke SEMUA pejabat aktif (Pegawai::penerimaApproval).
+//   - Pesan diberi penanda "susulan" bila cuti sudah dijalani sebelum diajukan.
+//   - L4: penghapusan notifikasi dipindah ke setelah status menjadi 'disetujui',
+//     supaya tidak hilang saat saldo tidak cukup.
 class MonitoringCutiController extends Controller
 {
     private const STATUS_MENUNGGU = ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'];
@@ -84,8 +69,8 @@ class MonitoringCutiController extends Controller
             $kuota
         );
 
-        // Rumus aritmetika dipusatkan di RincianSaldo::hitungTotal().
-        $hasil = RincianSaldo::hitungTotal(
+        // Rumus dipusatkan di RincianSaldo; Tgh diterapkan sesuai flag SaldoCuti.
+        $hasil = RincianSaldo::hitungDenganTgh(
             $kuota,
             (int) $bawaanEligible,
             $dikembalikan,
@@ -114,6 +99,30 @@ class MonitoringCutiController extends Controller
     private function hitungTerpakaiMurni(int $pegawaiId, int $tahun): int
     {
         return SaldoCuti::terpakaiMurni($pegawaiId, $tahun);
+    }
+
+    /**
+     * Kirim "Pengajuan Cuti Baru" ke SEMUA pejabat aktif pada level tujuan (role 4 atau 6).
+     * Panggil SETELAH Notifikasi::hapusAntreanPengajuan(), karena penghapusan
+     * itu menyapu semua judul antrean milik pengajuan yang sama.
+     */
+    private function kirimNotifPengajuanBaru(PengajuanCuti $pengajuan, int $roleTujuan): void
+    {
+        $susulan = $pengajuan->isSusulan();
+        $pesan = 'Ada pengajuan cuti ' . ($susulan ? 'susulan ' : '')
+            . 'dari ' . $pengajuan->pegawai->nama . ' yang butuh persetujuan Anda.'
+            . ($susulan ? ' Cuti sudah dijalani sebelum diajukan.' : '');
+
+        foreach (Pegawai::penerimaApproval($roleTujuan) as $atasan) {
+            Notifikasi::create([
+                'pegawai_id'   => $atasan->id,
+                'pengajuan_id' => $pengajuan->id,
+                'judul'        => 'Pengajuan Cuti Baru',
+                'pesan'        => $pesan,
+                'tautan'       => route('atasan.approval'),
+                'is_read'      => false,
+            ]);
+        }
     }
 
     private function buildFilterPropsUntukAtasan(Pegawai $user): array
@@ -310,8 +319,7 @@ class MonitoringCutiController extends Controller
 
         // Hanya pejabat AKTIF (status_aktif 'Aktif' / NULL), urut id terkecil.
         // unique() mempertahankan yang PERTAMA, jadi bila ada dua pejabat di
-        // tim/kelompok yang sama, yang id-nya terkecil yang tampil (sama dengan
-        // RekapKuotaDetailController::getApproverName()).
+        // tim/kelompok yang sama, yang id-nya terkecil yang tampil.
         $hanyaAktif = fn($q) => $q->where(
             fn($s) => $s->where('status_aktif', 'Aktif')->orWhereNull('status_aktif')
         );
@@ -448,12 +456,16 @@ class MonitoringCutiController extends Controller
                     'tanggal_keputusan' => now(),
                 ]);
 
+                // Bersihkan notifikasi antrean pengajuan ini di semua penerima.
+                Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+
                 Notifikasi::create([
-                    'pegawai_id' => $targetUserId,
-                    'judul'      => 'Pengajuan Cuti Ditolak',
-                    'pesan'      => 'Pengajuan Anda ditolak oleh ' . $namaApprover . '. Alasan: ' . $alasanPenolakan,
-                    'tautan'     => route('karyawan.riwayat'),
-                    'is_read'    => false,
+                    'pegawai_id'   => $targetUserId,
+                    'pengajuan_id' => $pengajuan->id,
+                    'judul'        => 'Pengajuan Cuti Ditolak',
+                    'pesan'        => 'Pengajuan Anda ditolak oleh ' . $namaApprover . '. Alasan: ' . $alasanPenolakan,
+                    'tautan'       => route('karyawan.riwayat'),
+                    'is_read'      => false,
                 ]);
 
                 return back()->with('success', 'Pengajuan cuti berhasil ditolak.');
@@ -462,62 +474,27 @@ class MonitoringCutiController extends Controller
             $statusPesan = '';
 
             if ($statusSaatIni === 'menunggu_l1' && $user->role_id === 2) {
-                Notifikasi::where('pegawai_id', $user->id)->where('judul', 'Pengajuan Cuti Baru')->delete();
-
                 $pengajuan->update(['status' => 'menunggu_l3', 'level_saat_ini' => 3, 'atasan_l1_id' => $user->id]);
 
-                $atasanL3 = Pegawai::where('role_id', 4)->where('kelompok_substansi', $pengajuan->pegawai->kelompok_substansi)->first()
-                    ?? Pegawai::where('role_id', 4)->first();
+                Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+                $this->kirimNotifPengajuanBaru($pengajuan, 4);
 
-                if ($atasanL3) {
-                    Notifikasi::create([
-                        'pegawai_id' => $atasanL3->id,
-                        'judul'      => 'Pengajuan Cuti Baru',
-                        'pesan'      => 'Ada pengajuan cuti dari ' . $pengajuan->pegawai->nama . ' yang butuh persetujuan Anda.',
-                        'tautan'     => route('atasan.approval'),
-                        'is_read'    => false,
-                    ]);
-                }
                 $statusPesan = 'Disetujui Ketua Tim Kerja (L1) - Menunggu Kasubag TU (L3)';
             } elseif ($statusSaatIni === 'menunggu_l2' && $user->role_id === 3) {
-                Notifikasi::where('pegawai_id', $user->id)->where('judul', 'Pengajuan Cuti Baru')->delete();
-
                 $pengajuan->update(['status' => 'menunggu_l3', 'level_saat_ini' => 3]);
 
-                $atasanL3 = Pegawai::where('role_id', 4)->where('kelompok_substansi', $pengajuan->pegawai->kelompok_substansi)->first()
-                    ?? Pegawai::where('role_id', 4)->first();
+                Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+                $this->kirimNotifPengajuanBaru($pengajuan, 4);
 
-                if ($atasanL3) {
-                    Notifikasi::create([
-                        'pegawai_id' => $atasanL3->id,
-                        'judul'      => 'Pengajuan Cuti Baru',
-                        'pesan'      => 'Ada pengajuan cuti dari ' . $pengajuan->pegawai->nama . ' yang butuh persetujuan Anda.',
-                        'tautan'     => route('atasan.approval'),
-                        'is_read'    => false,
-                    ]);
-                }
                 $statusPesan = 'Disetujui Ketua Kelompok Substansi (L2) - Menunggu Kasubag TU (L3)';
             } elseif ($statusSaatIni === 'menunggu_l3' && $user->role_id === 4) {
-                Notifikasi::where('pegawai_id', $user->id)->where('judul', 'Pengajuan Cuti Baru')->delete();
-
                 $pengajuan->update(['status' => 'menunggu_l4', 'level_saat_ini' => 4, 'atasan_l3_id' => $user->id]);
 
-                $atasanL4 = Pegawai::where('role_id', 6)->where('kelompok_substansi', $pengajuan->pegawai->kelompok_substansi)->first()
-                    ?? Pegawai::where('role_id', 6)->first();
+                Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+                $this->kirimNotifPengajuanBaru($pengajuan, 6);
 
-                if ($atasanL4) {
-                    Notifikasi::create([
-                        'pegawai_id' => $atasanL4->id,
-                        'judul'      => 'Pengajuan Cuti Baru',
-                        'pesan'      => 'Ada pengajuan cuti dari ' . $pengajuan->pegawai->nama . ' yang butuh persetujuan Anda.',
-                        'tautan'     => route('atasan.approval'),
-                        'is_read'    => false,
-                    ]);
-                }
                 $statusPesan = 'Disetujui Kasubag TU (L3) - Menunggu Kepala Biro Perencanaan (L4)';
             } elseif ($statusSaatIni === 'menunggu_l4' && $user->role_id === 6) {
-                Notifikasi::where('pegawai_id', $user->id)->where('judul', 'Pengajuan Cuti Baru')->delete();
-
                 $adalahCutiTahunan = $this->isCutiTahunan($pengajuan->jenis_cuti);
 
                 if ($adalahCutiTahunan) {
@@ -547,9 +524,9 @@ class MonitoringCutiController extends Controller
                             );
                         }
 
-                        // Cuti ditangguhkan (Tgh), aturan SAMA dengan Rekap Kuota Detail:
-                        //   - Tgh tahun yang dicek   -> MEMOTONG saldo tahun itu
-                        //   - Tgh tahun sebelumnya   -> MENAMBAH total tersedia (dikembalikan)
+                        // Cuti ditangguhkan (Tgh): kedua nilai dikirim mentah, lalu
+                        // RincianSaldo::hitungDenganTgh() menerapkan flag SaldoCuti
+                        // (aturan SAMA dengan Rekap Kuota Detail).
                         $tghTahunIni = (int) CutiDitangguhkan::where('pegawai_id', $targetUserId)
                             ->where('tahun_asal', $tahunCuti)
                             ->sum('jumlah_hari');
@@ -557,8 +534,7 @@ class MonitoringCutiController extends Controller
                             ->where('tahun_asal', $tahunCuti - 1)
                             ->sum('jumlah_hari');
 
-                        // Terpakai EFEKTIF (koreksi bulanan -> koreksi tahunan -> sistem),
-                        // satu rumus dengan Rekap Kuota Detail & Rekap Laporan.
+                        // Terpakai EFEKTIF (koreksi bulanan -> koreksi tahunan -> sistem).
                         $infoSaldo = $this->hitungInfoSaldo(
                             $saldoTahun,
                             SaldoCuti::where('pegawai_id', $targetUserId)->where('tahun', $tahunCuti - 1)->first(),
@@ -584,6 +560,10 @@ class MonitoringCutiController extends Controller
                     'atasan_l4_id' => $user->id,
                 ]);
 
+                // Setelah status final (bukan di awal cabang), supaya notifikasi
+                // tidak ikut hilang bila saldo tidak cukup dan proses berhenti lebih awal.
+                Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+
                 if ($adalahCutiTahunan) {
                     SaldoCuti::sesuaikanSisaLegacy($pengajuan, -1);
                 }
@@ -604,11 +584,12 @@ class MonitoringCutiController extends Controller
                 ]);
 
                 Notifikasi::create([
-                    'pegawai_id' => $targetUserId,
-                    'judul'      => 'Status Cuti Diperbarui',
-                    'pesan'      => $statusPesan,
-                    'tautan'     => route('karyawan.riwayat'),
-                    'is_read'    => false,
+                    'pegawai_id'   => $targetUserId,
+                    'pengajuan_id' => $pengajuan->id,
+                    'judul'        => 'Status Cuti Diperbarui',
+                    'pesan'        => $statusPesan,
+                    'tautan'       => route('karyawan.riwayat'),
+                    'is_read'      => false,
                 ]);
             }
 

@@ -7,21 +7,21 @@ use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use App\Models\HistoriSaldo;
 use App\Models\HariLibur;
-use App\Models\CutiDitangguhkan; // [SINKRON RKD] sumber Tgh tahun laporan di buildLaporanData()
-use App\Models\KoreksiCutiBulanan; // [KOREKSI BULANAN] koreksi Admin HR per bulan
-use App\Models\LogPerubahanSaldo; // [KOREKSI BULANAN] jejak perubahan Terpakai & Tgh
+use App\Models\CutiDitangguhkan; // dipakai updateKoreksiLaporan() (total Tgh)
+use App\Models\KoreksiCutiBulanan; // koreksi Admin HR per bulan
+use App\Models\LogPerubahanSaldo; // jejak perubahan Terpakai & Tgh
 use App\Services\CarryOverSaldoService;
 use Carbon\Carbon;
-use Illuminate\Database\Eloquent\Builder; // type-hint closure di buildLaporanData()
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
-use Illuminate\Support\Collection; // type-hint di urutkanSesuaiHierarki()
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\DB; // [KOREKSI BULANAN] transaksi updateKoreksiLaporan()
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str; // [KOREKSI BULANAN] membatasi panjang alasan log
-use Illuminate\Validation\Rule; // validasi status_aktif & role_id (Rule::in)
-use Illuminate\Validation\ValidationException; // rapikanDanCekKelompokTim() & cekJabatanKetua()
+use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
@@ -31,25 +31,24 @@ use PhpOffice\PhpSpreadsheet\Style\Border;
 use PhpOffice\PhpSpreadsheet\Style\Fill;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
-// ================= PERUBAHAN (KOREKSI BULANAN DI REKAP LAPORAN) =================
+// ================= CATATAN REKAP LAPORAN (KOREKSI BULANAN) =================
 // Rekap Laporan adalah satu-satunya tempat mengedit "Cuti Terpakai" per bulan
 // (tabel koreksi_cuti_bulanan, model KoreksiCutiBulanan). Rekap Kuota Detail
 // hanya menampilkan totalnya.
 //
 //   - buildLaporanData()     : tiap bulan = hitungan sistem sekarang + selisih koreksi.
-//                              Field baru ke Vue: cuti_sistem, cuti_diedit, cuti_basi,
-//                              ada_koreksi_bulanan, tgh_tahunan, koreksi_tahunan_lama.
-//   - updateKoreksiLaporan() : simpan koreksi bulanan + total Tgh tahun laporan
-//                              (hanya Admin HR, role 5).
+//   - updateKoreksiLaporan() : simpan koreksi bulanan (+ total Tgh bila dikirim),
+//                              hanya Admin HR (role 5). Dipanggil dari edit
+//                              langsung di sel bulan RekapLaporan.vue.
 //   - exportExcel()          : sel bulan yang dikoreksi diberi warna kuning.
 //   - hitungSisaOtomatis()   : memakai SaldoCuti::terpakaiEfektif() (ikut koreksi).
 //
+// [TOTAL = TERPAKAI] Cuti ditangguhkan (Tgh) dikembalikan ke saldo, jadi tidak
+// dihitung di Rekap Laporan. Rumus sama dengan hitungKuota() di Rekap Kuota Detail.
+//
 // [KOREKSI = SELISIH] Koreksi disimpan sebagai selisih, bukan angka mutlak:
 //   tampil = sistem sekarang + (nilai - nilai_sistem)
-// Contoh: sistem 3, koreksi jadi 4 (selisih +1); ada cuti baru -> sistem 4,
-// tampil 5. `nilai` = angka tampil saat koreksi dibuat, `nilai_sistem` =
-// hitungan sistem saat itu.
-// ================= END PERUBAHAN =================
+// ================= END CATATAN =================
 
 class AdminController extends Controller
 {
@@ -65,11 +64,8 @@ class AdminController extends Controller
     // ================= PEMBATASAN ROLE ADMIN SDM =================
     // Role yang boleh dipilih saat menambah pegawai / mengubah role lewat form
     // Kelola Pegawai & Impor. Role Admin SDM (5) sengaja tidak ada di sini.
-    // Pengecualian: pegawai yang sudah Admin SDM tetap boleh diedit datanya
-    // (lihat updatePegawai()); KelolaPegawai.vue menyembunyikan opsi Admin SDM
-    // kecuali untuk pegawai tersebut.
+    // Pegawai yang sudah Admin SDM tetap boleh diedit datanya (updatePegawai()).
     private const ROLE_ID_BISA_DIPILIH = [1, 2, 3, 4, 6];
-    // ================= END PEMBATASAN ROLE ADMIN SDM =================
 
     // Baris per halaman untuk Rekap Laporan (server-side pagination)
     private const REKAP_PER_PAGE = 10;
@@ -83,21 +79,16 @@ class AdminController extends Controller
     private const STATUS_KEPEGAWAIAN = ['PNS', 'PPPK'];
 
     // ================= GEMBOK PENGHAPUSAN PEGAWAI (2 LAPIS) =================
-    // Hapus hanya untuk koreksi kesalahan administratif (data duplikat, salah
-    // ketik NIP, batal penempatan). Pegawai boleh dihapus bila:
-    //   1) belum punya riwayat cuti (status di STATUS_CUTI_BERRIWAYAT), dan
+    // Hapus hanya untuk koreksi kesalahan administratif. Pegawai boleh dihapus bila:
+    //   1) belum punya riwayat cuti (STATUS_CUTI_BERRIWAYAT), dan
     //   2) akunnya dibuat kurang dari BATAS_HARI_HAPUS_PEGAWAI hari lalu.
-    //
-    // Lapis 1 (UI): kelolaPegawai() mengirim flag `bisa_dihapus` per pegawai.
-    // Lapis 2 (backend): destroyPegawai() memvalidasi ulang dengan helper sama
-    //                    (akunMasihBaru() & punyaRiwayatCuti()).
-    // Bila tidak memenuhi syarat, Admin diarahkan mengubah Status Pegawai lewat
-    // EDIT. Akun Admin SDM (role 5) tidak pernah boleh dihapus lewat menu ini.
+    // Lapis 1 (UI): kelolaPegawai() mengirim flag `bisa_dihapus`.
+    // Lapis 2 (backend): destroyPegawai() memvalidasi ulang dengan helper sama.
+    // Akun Admin SDM (role 5) tidak pernah boleh dihapus lewat menu ini.
     private const BATAS_HARI_HAPUS_PEGAWAI = 7;
 
     // Status pengajuan yang dianggap "sudah ada riwayat pemakaian cuti".
     private const STATUS_CUTI_BERRIWAYAT = ['disetujui', 'dibatalkan_ditangguhkan'];
-    // ================= END GEMBOK PENGHAPUSAN PEGAWAI =================
 
     // ================= STRUKTUR ORGANISASI BIRO PERENCANAAN =================
     // Sumber: "Nama-Nama Pegawai Biro Perencanaan" (per 20 Agustus 2026).
@@ -193,9 +184,7 @@ class AdminController extends Controller
         4 => 'Kepala Subbagian Tata Usaha',
         6 => 'Kepala Biro Perencanaan',
     ];
-    // ================= END STRUKTUR ORGANISASI =================
 
-    // ================= URUTAN HIERARKI JABATAN =================
     // role_id -> urutan tampil (kecil = lebih atas): 6 Kepala Biro (L4),
     // 4 Kasubag TU (L3), 3 Ketua Kelompok (L2), 2 Ketua Tim (L1), 1 Staf.
     // role_id lain otomatis paling bawah (?? 99).
@@ -206,31 +195,23 @@ class AdminController extends Controller
         2 => 4,
         1 => 5,
     ];
-    // ================= END URUTAN HIERARKI JABATAN =================
 
     // ================= HELPER: GEMBOK DOMPET ASLI =================
     // Baris saldo_cutis dianggap "dompet ASLI" (hak tahunan hasil generate/input
     // Admin) bila kuota_tahunan > 0. Sama dengan dompetTahunAsli() di
     // RekapKuotaDetailController. Baris "bayangan" tahun-1 (kuota 0, hanya untuk
-    // carry-forward) tidak dihitung, jadi tidak memunculkan tahun lalu di Rekap
-    // Laporan. Catatan: pegawai yang haknya sengaja 0 pada suatu tahun tidak
-    // tampil di tahun itu (sangat jarang).
+    // carry-forward) tidak dihitung.
     private function dompetTahunAsli(Builder $query, int $tahun): Builder
     {
         return $query->where('tahun', $tahun)
             ->where('kuota_tahunan', '>', 0);
     }
-    // ================= END HELPER GEMBOK DOMPET ASLI =================
 
     // ================= HELPER: FILTER STATUS PEGAWAI (AKTIF / NON-AKTIF) =================
-    // Sama dengan hanyaAktifAtauPunyaCutiDiTahun() di RekapKuotaDetailController,
-    // agar kedua rekap menampilkan pegawai yang sama.
+    // Sama dengan hanyaAktifAtauPunyaCutiDiTahun() di RekapKuotaDetailController.
     //   - Pegawai aktif (atau status_aktif NULL) selalu tampil.
-    //   - Non-aktif (pensiun, mutasi keluar, dst.) hanya tampil bila pada tahun
-    //     laporan punya Cuti Tahunan yang disetujui atau ditangguhkan setelah
-    //     disetujui (arsip tahun lalu tetap utuh).
-    // Dasarnya riwayat cuti, bukan baris saldo_cutis, sehingga saldo "siluman"
-    // hasil Generate Saldo Tahun Baru untuk pegawai pensiun tidak memunculkannya.
+    //   - Non-aktif hanya tampil bila pada tahun laporan punya Cuti Tahunan yang
+    //     disetujui atau ditangguhkan setelah disetujui (arsip tetap utuh).
     private function hanyaAktifAtauPunyaCutiDiTahun(Builder $query, int $tahun): Builder
     {
         return $query->where(function ($q) use ($tahun) {
@@ -249,15 +230,12 @@ class AdminController extends Controller
                 });
         });
     }
-    // ================= END HELPER FILTER STATUS PEGAWAI =================
 
     // ================= HELPER: KELOMPOKKAN JABATAN UNTUK DROPDOWN =================
     // Mengubah daftar datar jabatan fungsional menjadi grup per rumpun untuk
     // <optgroup> / Combobox berkelompok. Rumpun = nama tanpa jenjang di akhir
-    // (Ahli Pertama/Muda/Madya/Utama, Mahir, Terampil): "Perencana Ahli Muda"
-    // -> "Perencana". Rumpun dengan 1 jabatan masuk grup "Lainnya" (paling akhir).
-    // Hasil: [ ['label' => 'Perencana', 'options' => [...]], ... ]. Daftar datar
-    // lama tetap dikirim ke frontend.
+    // (Ahli Pertama/Muda/Madya/Utama, Mahir, Terampil). Rumpun dengan 1 jabatan
+    // masuk grup "Lainnya" (paling akhir).
     private function kelompokkanJabatan(array $daftar): array
     {
         $rumpunPerJabatan = [];
@@ -294,12 +272,9 @@ class AdminController extends Controller
 
         return $hasil;
     }
-    // ================= END HELPER KELOMPOKKAN JABATAN =================
 
-    // ================= HELPER BERSAMA: URUTKAN KOLEKSI PEGAWAI SESUAI HIERARKI =================
-    // Parameter & return bertipe Collection agar Intelephense (P1132) tidak
-    // mengeluh (Eloquent\Collection turunan Support\Collection). Memakai satu
-    // comparator (jabatan dulu, lalu nama A-Z).
+    // ================= HELPER: URUTKAN KOLEKSI PEGAWAI SESUAI HIERARKI =================
+    // Satu comparator: jabatan dulu, lalu nama A-Z.
     private function urutkanSesuaiHierarki(Collection $pegawais): Collection
     {
         return $pegawais
@@ -318,11 +293,9 @@ class AdminController extends Controller
             })
             ->values();
     }
-    // ================= END HELPER URUTKAN PEGAWAI =================
 
-    // ================= HELPER BERSAMA: SYARAT BOLEH DIHAPUS =================
-    // Dipakai kelolaPegawai() (tombol Hapus) dan destroyPegawai() (gembok
-    // backend), agar aturannya satu sumber.
+    // ================= HELPER: SYARAT BOLEH DIHAPUS =================
+    // Dipakai kelolaPegawai() (tombol Hapus) dan destroyPegawai() (gembok backend).
 
     // True bila akun dibuat kurang dari BATAS_HARI_HAPUS_PEGAWAI hari lalu.
     // created_at kosong dianggap akun lama (hapus diblokir) demi keamanan.
@@ -343,12 +316,10 @@ class AdminController extends Controller
             ->whereIn('status', self::STATUS_CUTI_BERRIWAYAT)
             ->exists();
     }
-    // ================= END HELPER SYARAT BOLEH DIHAPUS =================
 
     // ================= HELPER: PERLINDUNGAN ADMIN SDM TERAKHIR =================
     // True bila masih ada Admin SDM aktif lain selain $kecualiId. Dipakai
-    // updatePegawai() agar Admin SDM terakhir tidak diturunkan role-nya atau
-    // dinonaktifkan.
+    // updatePegawai() agar Admin SDM terakhir tidak diturunkan/dinonaktifkan.
     private function adaAdminAktifLain(int $kecualiId): bool
     {
         return Pegawai::where('role_id', self::ROLE_ID_ADMIN)
@@ -359,7 +330,6 @@ class AdminController extends Controller
             })
             ->exists();
     }
-    // ================= END HELPER PERLINDUNGAN ADMIN SDM TERAKHIR =================
 
     // ================= HELPER: EKSTRAK TANGGAL MASUK DARI NIP =================
     // NIP 18 digit: tahun TMT di posisi 8-11, bulan TMT di posisi 12-13.
@@ -382,7 +352,6 @@ class AdminController extends Controller
             return null;
         }
     }
-    // ================= END HELPER EKSTRAK TANGGAL MASUK DARI NIP =================
 
     // Rapikan teks ALL CAPS jadi Title Case (saat import Excel/CSV).
     private function toTitleCase(?string $text): ?string
@@ -646,69 +615,32 @@ class AdminController extends Controller
 
         return $hasil;
     }
-    // ================= END HELPER HITUNG HARI CUTI PER BULAN =================
 
     // ================= PAGINATION SERVER-SIDE UNTUK REKAP LAPORAN =================
     // $paginate = true  -> rekapLaporan() (web): hanya hitung 10 pegawai di halaman aktif.
     // $paginate = false -> exportExcel(): semua pegawai.
     //
-    // Pegawai tampil bila:
-    //   1) punya dompet saldo_cutis ASLI (kuota_tahunan > 0, lihat
-    //      dompetTahunAsli()) pada tahun laporan, DAN
-    //   2) lolos filter status (hanyaAktifAtauPunyaCutiDiTahun()).
-    //
-    // [SINKRON HIERARKI] Memakai scope sesuaiHierarki() (model Pegawai), jadi
-    // cakupan sama dengan Dashboard; akun Admin HR (role 5) sudah disingkirkan.
+    // Pegawai tampil bila punya dompet saldo_cutis ASLI (dompetTahunAsli()) pada
+    // tahun laporan DAN lolos filter status (hanyaAktifAtauPunyaCutiDiTahun()).
+    // Scope sesuaiHierarki() (model Pegawai) menyamakan cakupan dengan Dashboard.
     //
     // [CUTI LINTAS TAHUN] Hari dihitung per hari kerja (Senin-Jumat, di luar
-    // hari_liburs); hanya hari di tahun laporan yang masuk bucket bulan. Query
-    // mengambil cuti yang beririsan dengan tahun laporan, bukan hanya yang
-    // tanggal_mulai-nya di tahun itu.
+    // hari_liburs); hanya hari di tahun laporan yang masuk bucket bulan.
     //
     // [KOREKSI BULANAN = SELISIH] Tiap bulan = hitungan sistem sekarang + selisih
     // koreksi Admin HR (nilai - nilai_sistem, tabel koreksi_cuti_bulanan).
-    // Hitungan sistem tetap dikirim lewat `cuti_sistem` untuk angka "Sistem" di
-    // form koreksi.
     //
-    // [TGH IKUT TOTAL - SINKRON RKD] Tgh tahun laporan dibaca langsung dari
-    // cuti_ditangguhkans (SUM jumlah_hari per tahun_asal), sumber sama dengan
-    // 'potongan_tgh_tahun_ini' di RekapKuotaDetailController, sehingga Tgh hasil
-    // edit manual Admin HR (baris tanpa pengajuan_asal_id) ikut terhitung. Kotak
-    // per bulan tetap hanya memuat cuti disetujui; Tgh dikirim lewat key `tgh`.
+    // [TOTAL = TERPAKAI] Tgh (cuti ditangguhkan) dikembalikan ke saldo, jadi tidak
+    // dihitung. Rumus sama dengan hitungKuota() di Rekap Kuota Detail:
+    //   - Ada koreksi bulanan  : Terpakai = jumlah 12 bulan setelah koreksi.
+    //   - Tanpa koreksi bulanan: Terpakai = koreksi_saldo tahunan lama ?? cuti disetujui.
+    //   - Filter bulan aktif   : Total = cuti bulan itu (setelah koreksi).
     //
-    // [TGH SISTEM vs EDIT ADMIN] Bagian "sistem" Tgh dihitung dari pengajuan
-    // berstatus dibatalkan_ditangguhkan (hari kerja, di luar libur), bukan dari
-    // pengajuan_asal_id, karena kolom itu menjadi NULL saat Admin HR mengedit
-    // Tgh. Selisih total tabel vs bagian sistem dianggap hasil edit Admin HR.
-    //
-    // [RUMUS TOTAL = RUMUS RKD]
-    //   Terpakai = (jumlah 12 bulan setelah koreksi) + Tgh tahun laporan
-    //   Tanpa koreksi bulanan: (koreksi_saldo tahunan lama ?? cuti disetujui) + Tgh.
-    //
-    // [TOTAL SESUAI FILTER BULAN] Kolom `total` mengikuti filter bulan:
-    //   - Kosong ("Semua Bulan"): Terpakai setahun (sama dengan RKD).
-    //   - Terisi: cuti bulan itu (setelah koreksi) + Tgh bertanggal di bulan itu.
-    //     Koreksi tahunan lama & Tgh edit manual tidak punya pembagian bulan,
-    //     jadi tidak ikut. Export Excel ikut benar karena memakai fungsi ini.
-    //
-    // [RINCIAN TOTAL] Field per pegawai (dibaca RekapLaporan.vue & exportExcel()):
-    //   'cuti'                : hari per bulan setelah koreksi
-    //   'cuti_sistem'         : hari per bulan murni hitungan sistem
-    //   'cuti_diedit'         : [key bulan => bool] sel yang dikoreksi Admin HR
-    //   'cuti_basi'           : selalu false (koreksi berupa selisih, tak pernah
-    //                           basi); dipertahankan demi kompatibilitas Vue lama
-    //   'ada_koreksi_bulanan' : true bila ada minimal 1 koreksi bulanan
-    //   'koreksi_tahunan_lama': koreksi_saldo tahunan lama (null bila tidak ada /
-    //                           sudah digantikan koreksi bulanan)
-    //   'terpakai' / 'terpakai_sistem' / 'terpakai_diedit'
-    //   'tgh'                 : komponen Tgh (filter bulan: Tgh bertanggal bulan itu)
-    //   'tgh_tahunan'         : total Tgh tahun laporan (setahun, untuk form edit)
-    //   'tgh_sistem'          : Tgh dari pengajuan dibatalkan_ditangguhkan
-    //   'tgh_diedit'          : true bila total Tgh berbeda dari bagian sistem
-    //   'ada_edit'            : terpakai_diedit ATAU tgh_diedit (tanda * & kuning)
-    //   'total' / 'total_sistem'
-    //   'info_terpakai_edit'  : {oleh, waktu, alasan} koreksi bulanan terbaru / null
-    //   'info_tgh_edit'       : null (belum tersedia)
+    // Field per pegawai (dibaca RekapLaporan.vue & exportExcel()):
+    //   'cuti' (setelah koreksi), 'cuti_sistem', 'cuti_diedit' [bulan => bool],
+    //   'cuti_basi' (selalu false), 'ada_koreksi_bulanan', 'koreksi_tahunan_lama',
+    //   'terpakai', 'terpakai_sistem', 'terpakai_diedit', 'ada_edit',
+    //   'total', 'total_sistem', 'info_terpakai_edit' {oleh, waktu, alasan} / null
     private function buildLaporanData(Request $request, bool $paginate = false): array
     {
         $tahun = $request->input('tahun', date('Y'));
@@ -716,8 +648,7 @@ class AdminController extends Controller
         $kelompok = $request->input('kelompok_substansi');
         $bulanFilter = $request->input('bulan');
 
-        // [SINKRON RKD] Sekalian muat saldo_cutis tahun laporan (eager load,
-        // tanpa N+1) untuk membaca koreksi_saldo Admin HR.
+        // Muat saldo_cutis tahun laporan (eager load, tanpa N+1) untuk koreksi_saldo.
         $query = Pegawai::sesuaiHierarki($request->user())
             ->with(['saldoCuti' => function ($q) use ($tahun) {
                 $q->where('tahun', $tahun);
@@ -728,8 +659,7 @@ class AdminController extends Controller
             $this->dompetTahunAsli($q, (int) $tahun);
         });
 
-        // [SINKRON RKD] Filter status pegawai (pensiun tanpa cuti di tahun
-        // laporan tidak tampil).
+        // Filter status pegawai (pensiun tanpa cuti di tahun laporan tidak tampil).
         $this->hanyaAktifAtauPunyaCutiDiTahun($query, (int) $tahun);
 
         $query->when($kelompok, function (Builder $q) use ($kelompok) {
@@ -770,33 +700,22 @@ class AdminController extends Controller
             );
         }
 
-        // [CUTI LINTAS TAHUN] Hari libur tahun laporan dimuat sekali di luar
-        // loop pegawai.
+        // Hari libur tahun laporan dimuat sekali di luar loop pegawai.
         $liburTahunIni = $this->ambilTanggalLibur((int) $tahun);
         $awalTahun = Carbon::create((int) $tahun, 1, 1)->toDateString();
         $akhirTahun = Carbon::create((int) $tahun, 12, 31)->toDateString();
 
-        // [SINKRON RKD] Tgh tahun laporan dari cuti_ditangguhkans, sekali untuk
-        // semua pegawai di halaman ini (tanpa N+1). Bagian "sistem" dihitung
-        // terpisah dari pengajuan (di dalam loop).
         $idPegawai = $pegawais->pluck('id');
 
-        $tghRekap = CutiDitangguhkan::where('tahun_asal', (int) $tahun)
-            ->whereIn('pegawai_id', $idPegawai)
-            ->selectRaw('pegawai_id, SUM(jumlah_hari) as total')
-            ->groupBy('pegawai_id')
-            ->get()
-            ->keyBy('pegawai_id');
-
-        // [KOREKSI BULANAN] Semua koreksi bulanan tahun laporan untuk pegawai di
-        // halaman ini, sekali query, dikelompokkan per pegawai.
+        // Semua koreksi bulanan tahun laporan untuk pegawai di halaman ini,
+        // sekali query, dikelompokkan per pegawai.
         $koreksiBulanan = KoreksiCutiBulanan::with('pengubah:id,nama')
             ->where('tahun', (int) $tahun)
             ->whereIn('pegawai_id', $idPegawai)
             ->get()
             ->groupBy('pegawai_id');
 
-        // [TOTAL SESUAI FILTER BULAN] Filter bulan dihitung sekali di luar loop.
+        // Filter bulan dihitung sekali di luar loop.
         $bulanDipilih = (int) $bulanFilter;
         $filterBulanAktif = $bulanDipilih >= 1 && $bulanDipilih <= 12;
         $keyDipilih = $filterBulanAktif ? $this->keyBulan[$bulanDipilih - 1] : null;
@@ -806,7 +725,6 @@ class AdminController extends Controller
             $liburTahunIni,
             $awalTahun,
             $akhirTahun,
-            $tghRekap,
             $koreksiBulanan,
             $filterBulanAktif,
             $keyDipilih
@@ -857,43 +775,14 @@ class AdminController extends Controller
                 ]
                 : null;
 
-            // Tgh dari PENGAJUAN (bertanggal), selalu dihitung. Dipakai untuk
-            // filter bulan dan sebagai bagian "sistem" Tgh. Tgh edit manual Admin
-            // HR tidak bertanggal, jadi tidak masuk di sini.
-            // Sengaja tanpa whereHas('cutiDitangguhkan'): relasi itu lewat
-            // pengajuan_asal_id yang menjadi NULL setelah Admin HR mengedit Tgh.
-            $tghPerBulan = array_fill_keys($this->keyBulan, 0);
-
-            $cutiTgh = PengajuanCuti::where('pegawai_id', $pegawai->id)
-                ->where('jenis_cuti', 'Cuti Tahunan')
-                ->where('status', 'dibatalkan_ditangguhkan')
-                ->where('tanggal_mulai', '<=', $akhirTahun)
-                ->where('tanggal_selesai', '>=', $awalTahun)
-                ->get();
-
-            foreach ($cutiTgh as $cuti) {
-                $perBulan = $this->hitungHariCutiPerBulan($cuti, (int) $tahun, $liburTahunIni);
-                foreach ($perBulan as $key => $hari) {
-                    $tghPerBulan[$key] += $hari;
-                }
-            }
-
-            // Tgh tahun laporan (sama dengan 'potongan_tgh_tahun_ini' di RKD),
-            // dipecah menjadi bagian sistem (dari pengajuan) & selisih edit Admin HR.
-            $rekapTgh = $tghRekap->get($pegawai->id);
-            $tghTotal = (int) ($rekapTgh->total ?? 0);
-            $tghSistem = (int) array_sum($tghPerBulan);   // dari pengajuan ditangguhkan
-            $tghAdaManual = $tghTotal !== $tghSistem;     // beda = Admin HR mengedit
-
-            // Koreksi saldo TAHUNAN lama dari Admin HR (NULL = tidak ada). Hanya
-            // dipakai bila pegawai belum punya koreksi bulanan.
+            // Koreksi saldo TAHUNAN lama (NULL = tidak ada). Hanya dipakai bila
+            // belum ada koreksi bulanan.
             $saldo = $pegawai->saldoCuti->first();
             $koreksiRaw = $saldo?->koreksi_saldo;
             $koreksiSaldo = $koreksiRaw === null ? null : max(0, (int) $koreksiRaw);
 
-            // Rumus sama dengan RKD:
-            //   Terpakai = (jumlah bulan setelah koreksi) + Tgh tahun laporan
-            //   Tanpa koreksi bulanan: (koreksi tahunan lama ?? cuti disetujui) + Tgh
+            // Total = Terpakai saja (Tgh dikembalikan ke saldo, tidak dihitung).
+            // Aturan sama dengan hitungKuota() di Rekap Kuota Detail.
             $terpakaiSistem = array_sum($rekapSistem);
             if ($adaKoreksiBulanan) {
                 $terpakai = array_sum($rekapBulan);
@@ -902,19 +791,12 @@ class AdminController extends Controller
                 $terpakai = $koreksiSaldo ?? $terpakaiSistem;
                 $terpakaiDiedit = $koreksiSaldo !== null && $koreksiSaldo !== $terpakaiSistem;
             }
-            $tgh = $tghTotal;                                         // komponen "Tgh"
-            $tghDiedit = $tghAdaManual;
 
-            // [TOTAL SESUAI FILTER BULAN] Filter bulan aktif: Total = cuti bulan
-            // itu (setelah koreksi) + Tgh bertanggal di bulan itu. Koreksi tahunan
-            // lama & Tgh manual bersifat tahunan, jadi tidak dipakai.
+            // Filter bulan aktif: Total = cuti bulan itu (setelah koreksi).
             if ($filterBulanAktif) {
                 $terpakai = $rekapBulan[$keyDipilih];
                 $terpakaiSistem = $rekapSistem[$keyDipilih];
                 $terpakaiDiedit = $cutiDiedit[$keyDipilih];
-                $tgh = $tghPerBulan[$keyDipilih];
-                $tghSistem = $tgh;
-                $tghDiedit = false;
             }
 
             return [
@@ -934,27 +816,13 @@ class AdminController extends Controller
                 'ada_koreksi_bulanan' => $adaKoreksiBulanan,
                 'koreksi_tahunan_lama' => $adaKoreksiBulanan ? null : $koreksiSaldo,
 
-                // Dua komponen Total (dibaca RekapLaporan.vue & exportExcel())
                 'terpakai' => $terpakai,
                 'terpakai_sistem' => $terpakaiSistem,
                 'terpakai_diedit' => $terpakaiDiedit,
-                'tgh' => $tgh,
-                'tgh_tahunan' => $tghTotal,
-                'tgh_sistem' => $tghSistem,
-                'tgh_diedit' => $tghDiedit,
-
-                // Tanda * di Total & kotak kuning di Vue
-                'ada_edit' => $terpakaiDiedit || $tghDiedit,
-                // Total versi sistem (tanpa edit Admin HR)
-                'total_sistem' => $terpakaiSistem + $tghSistem,
-
-                // Semua Bulan: sama dengan Terpakai di RKD; filter bulan: cuti
-                // bulan terpilih (+ Tgh bulan itu)
-                'total' => $terpakai + $tgh,
-
-                // Jejak edit untuk tooltip. null = belum tersedia (Vue aman).
+                'ada_edit' => $terpakaiDiedit,
+                'total_sistem' => $terpakaiSistem,
+                'total' => $terpakai,
                 'info_terpakai_edit' => $infoTerpakaiEdit,
-                'info_tgh_edit' => null,
             ];
         })->values();
 
@@ -965,9 +833,8 @@ class AdminController extends Controller
             'paginator' => $paginator,
         ];
     }
-    // ================= END PAGINATION SERVER-SIDE UNTUK REKAP LAPORAN =================
 
-    // ================= HELPER BERSAMA: HITUNG SISA CUTI OTOMATIS =================
+    // ================= HELPER: HITUNG SISA CUTI OTOMATIS =================
     // Memakai SaldoCuti::terpakaiEfektif() agar rumus "terpakai" satu sumber
     // dengan bagian lain aplikasi dan ikut koreksi Admin HR.
     private function hitungSisaOtomatis(int $pegawaiId, int $tahun, int $kuotaTahunan): int
@@ -976,7 +843,6 @@ class AdminController extends Controller
 
         return max(0, $kuotaTahunan - $cutiTerpakai);
     }
-    // ================= END HELPER BERSAMA =================
 
     // ================= HELPER: PREVIEW CARRY-OVER =================
     // Memakai App\Services\CarryOverSaldoService (logika sama dengan Command
@@ -993,27 +859,17 @@ class AdminController extends Controller
             'total' => $carryDariSaldoBiasa,
         ];
     }
-    // ================= END HELPER PREVIEW CARRY-OVER =================
 
     // 1. Menampilkan Daftar Pegawai
     //
     // Query sengaja tidak difilter status_aktif di server. Semua pegawai dikirim
     // ke Vue; KelolaPegawai.vue menyaringnya lewat dropdown "Status" (bawaan
     // 'Aktif'). Pegawai soft-deleted tersembunyi otomatis lewat SoftDeletes.
+    // Scope sesuaiHierarki(): akun Admin HR (role 5) tidak ditampilkan.
     //
-    // [SINKRON HIERARKI] Scope sesuaiHierarki(): akun Admin HR (role 5) tidak
-    // ditampilkan; cakupan selaras dengan Dashboard.
-    //
-    // Setiap pegawai membawa:
-    //   - `saldo_cuti` tahun berjalan (eager load, prefill form edit saldo)
-    //   - `bisa_dihapus` (boolean): pertahanan lapis 1 (pop-up dinamis)
-    //   - `tanggal_masuk_form` (Y-m-d / null): kolom TMT di form edit
-    //   - `status_kepegawaian` (PNS / PPPK / null)
-    //
-    // Props dropdown untuk KelolaPegawai.vue: daftarKelompok, daftarTimKerja,
-    // timPerKelompok, daftarKelompokTanpaTim, daftarJabatanFungsional (+Grup),
-    // daftarJabatanKetua (+Grup), jabatanKetuaDefault, jabatanTetap,
-    // daftarStatusKepegawaian.
+    // Setiap pegawai membawa: `saldo_cuti` tahun berjalan, `bisa_dihapus`
+    // (pertahanan lapis 1), `tanggal_masuk_form` (Y-m-d / null), dan
+    // `status_kepegawaian` (PNS / PPPK / null).
     public function kelolaPegawai(Request $request)
     {
         $tahun = date('Y');
@@ -1021,7 +877,7 @@ class AdminController extends Controller
         $pegawai = Pegawai::with(['saldoCuti' => function ($query) use ($tahun) {
             $query->where('tahun', $tahun);
         }])
-            ->sesuaiHierarki($request->user()) // [SINKRON HIERARKI]
+            ->sesuaiHierarki($request->user())
             ->orderBy('nama', 'asc')
             ->get();
 
@@ -1125,14 +981,11 @@ class AdminController extends Controller
 
     // ---> Menyimpan Data Pegawai Baru dari Modal <---
     //
-    // Catatan NIP milik pegawai yang sudah di-soft-delete: barisnya masih ada
-    // dan tetap terikat unique constraint kolom nip. Karena itu:
-    //   - Validasi unique hanya memeriksa pegawai yang masih aktif
-    //     (whereNull('deleted_at')).
-    //   - Sebelum create(), dicek apakah NIP itu milik pegawai terhapus
-    //     (onlyTrashed()). Bila ya, baris lama dipulihkan (restore) dan datanya
-    //     diperbarui dari form, bukan membuat baris baru. Riwayat cuti & saldo
-    //     ikut kembali.
+    // NIP milik pegawai yang sudah di-soft-delete masih terikat unique constraint,
+    // jadi: validasi unique hanya memeriksa pegawai yang masih aktif
+    // (whereNull('deleted_at')), dan sebelum create() dicek apakah NIP itu milik
+    // pegawai terhapus (onlyTrashed()). Bila ya, baris lama dipulihkan (restore)
+    // dan datanya diperbarui dari form. Riwayat cuti & saldo ikut kembali.
     //
     // [PEMBATASAN ROLE ADMIN SDM] role_id hanya boleh salah satu dari
     // ROLE_ID_BISA_DIPILIH, jadi akun Admin SDM tidak bisa dibuat lewat form.
@@ -1390,26 +1243,22 @@ class AdminController extends Controller
     //
     // Baris header dideteksi otomatis (baris pertama dalam 15 baris awal yang
     // memuat kolom "NIP"), jadi file dengan judul di baris 1-5 tetap terbaca.
-    // Header dinormalisasi (huruf kecil, spasi/baris baru ganda dirapatkan).
     //
     // Kolom "Status Kepegawaian" (PNS / PPPK) opsional: hanya ditulis bila
     // kolomnya ada & nilainya dikenali, agar impor file lama tidak menghapus
     // data yang ada.
     //
-    // Pengecekan NIP manual (bukan updateOrCreate) dengan withTrashed():
+    // Pengecekan NIP manual dengan withTrashed():
     //   - NIP sudah ada -> data umum diperbarui; nip/password/is_first_login tidak
     //     disentuh. Bila sebelumnya soft-deleted -> di-restore & status kembali
     //     'Aktif'. Tanggal masuk yang sudah terisi tidak ditimpa, kecuali terlihat
     //     placeholder (sama dengan tanggal akun dibuat) dan NIP bisa dibaca.
-    //   - NIP belum ada -> Pegawai::create() dengan `nip`, `password`, dan
-    //     `is_first_login` langsung di payload (kolom NOT NULL tanpa default).
+    //   - NIP belum ada -> Pegawai::create().
     // SaldoCuti tahun berjalan memakai firstOrCreate(): saldo yang ada tidak
     // di-reset saat re-import; bila belum ada, dibuat dengan kuota default 12 hari.
     //
-    // [PEMBATASAN ROLE ADMIN SDM]
-    //   - Baris dengan role Admin dilewati (Admin SDM tidak dibuat lewat impor).
-    //   - Baris yang NIP-nya milik akun Admin SDM yang ada juga dilewati, agar
-    //     impor tidak mengubah/menurunkan role akun Admin SDM.
+    // [PEMBATASAN ROLE ADMIN SDM] Baris dengan role Admin dilewati, begitu juga
+    // baris yang NIP-nya milik akun Admin SDM yang ada.
     public function importPegawai(Request $request)
     {
         $request->validate([
@@ -1646,8 +1495,8 @@ class AdminController extends Controller
     // Pegawai Resign / Pensiun tidak dihapus, melainkan diubah Status Pegawainya
     // lewat EDIT.
     //
-    // Pertahanan lapis 2 (gembok backend): request langsung ke endpoint ini
-    // divalidasi ulang dengan helper yang sama dengan kelolaPegawai(). Ditolak bila:
+    // Pertahanan lapis 2 (gembok backend), divalidasi ulang dengan helper yang
+    // sama dengan kelolaPegawai(). Ditolak bila:
     //   - pegawai punya riwayat cuti (STATUS_CUTI_BERRIWAYAT), ATAU
     //   - akun berusia >= BATAS_HARI_HAPUS_PEGAWAI hari, ATAU
     //   - akun adalah Admin SDM (role 5).
@@ -1760,8 +1609,7 @@ class AdminController extends Controller
     // Setiap pegawai dilengkapi `preview_carry_over` (`dari_saldo_biasa`, `total`):
     // perkiraan carry-over andai saldo digenerate lewat Command
     // GenerateSaldoCutiTahunBaru. Hanya preview untuk Admin, bukan nilai tersimpan.
-    //
-    // [SINKRON HIERARKI] Scope sesuaiHierarki(); akun Admin HR (role 5) tidak tampil.
+    // Scope sesuaiHierarki(); akun Admin HR (role 5) tidak tampil.
     public function kelolaSaldo(Request $request)
     {
         $tahun = date('Y');
@@ -1769,7 +1617,7 @@ class AdminController extends Controller
         $pegawai = Pegawai::with(['saldoCuti' => function ($query) use ($tahun) {
             $query->where('tahun', $tahun);
         }])
-            ->sesuaiHierarki($request->user()) // [SINKRON HIERARKI]
+            ->sesuaiHierarki($request->user())
             ->orderBy('nama', 'asc')
             ->get();
 
@@ -1840,10 +1688,8 @@ class AdminController extends Controller
 
     // ================= GENERATE SALDO TAHUN BARU (TOMBOL MANUAL) =================
     // Dipanggil dari tombol "Generate Saldo Tahun Baru" di Rekap Kuota Detail.
-    // Sengaja hanya memanggil Artisan Command `saldo-cuti:generate-tahun-baru`
-    // yang sama dengan scheduler tiap 1 Januari, jadi hasil manual dan otomatis
-    // identik. Berguna bila scheduler gagal jalan, atau untuk generate ulang
-    // setelah koreksi data.
+    // Hanya memanggil Artisan Command `saldo-cuti:generate-tahun-baru` yang sama
+    // dengan scheduler tiap 1 Januari, jadi hasil manual dan otomatis identik.
     //
     // Kode keluar command diperiksa. Bila command menolak (mis. tahun di luar
     // batas), pesannya dikembalikan sebagai error di field 'tahun' (tampil di
@@ -1871,7 +1717,6 @@ class AdminController extends Controller
 
         return back()->with('success', $keluaran !== '' ? $keluaran : "Saldo cuti tahun {$tahun} berhasil digenerate.");
     }
-    // ================= END GENERATE SALDO MANUAL =================
 
     // 4. Menampilkan Rekap Laporan Cuti Seluruh Pegawai (per bulan, dengan pagination)
     public function rekapLaporan(Request $request)
@@ -1901,7 +1746,7 @@ class AdminController extends Controller
             'tahun' => $data['tahun'],
             'filters' => $request->only(['search', 'tahun', 'bulan', 'kelompok_substansi']),
             'daftarKelompokSubstansi' => $daftarKelompok,
-            // [KOREKSI BULANAN] Hanya Admin HR yang boleh mengedit sel bulan & Tgh.
+            // Hanya Admin HR yang boleh mengedit angka bulan (edit langsung di sel).
             'bisaEdit' => (int) $request->user()->role_id === self::ROLE_ID_ADMIN,
             // info pagination dikirim ke frontend
             'pagination' => [
@@ -1920,19 +1765,19 @@ class AdminController extends Controller
     // Payload:
     //   tahun : tahun laporan (wajib)
     //   cuti  : objek [key bulan => angka], key = jan,feb,...,des. Hanya bulan
-    //           yang dikirim yang diproses. Angka sama dengan hitungan sistem,
-    //           atau kosong/null, berarti koreksi bulan itu dihapus.
-    //   tgh   : total Tgh tahun laporan (opsional), disimpan lewat
-    //           RekapKuotaDetailController::setTotalDitangguhkan() yang sama
-    //           dengan Rekap Kuota Detail.
+    //           yang dikirim yang diproses (edit langsung kirim satu bulan).
+    //           Angka sama dengan hitungan sistem, atau kosong/null, berarti
+    //           koreksi bulan itu dihapus.
+    //   tgh   : total Tgh tahun laporan (opsional, tidak dikirim oleh Rekap
+    //           Laporan lagi), disimpan lewat
+    //           RekapKuotaDetailController::setTotalDitangguhkan().
     //
     // [KOREKSI = SELISIH] Angka yang diketik disimpan sebagai selisih terhadap
     // hitungan sistem saat itu:
     //   `nilai`        = angka yang diketik (angka tampil saat koreksi dibuat)
     //   `nilai_sistem` = hitungan sistem saat koreksi dibuat
     //   selisih        = nilai - nilai_sistem
-    // Angka tampil seterusnya = hitungan sistem sekarang + selisih, jadi cuti
-    // baru yang disetujui di bulan itu tetap terhitung.
+    // Angka tampil seterusnya = hitungan sistem sekarang + selisih.
     //
     // Aturan:
     //   - Terpakai efektif baru tidak boleh melebihi Total Hak Tersedia
@@ -2042,7 +1887,8 @@ class AdminController extends Controller
         $tghTahunLalu = (int) CutiDitangguhkan::where('pegawai_id', $pegawaiId)
             ->where('tahun_asal', $tahun - 1)
             ->sum('jumlah_hari');
-        $maksimal = $hak + SaldoCuti::hitungBawaan($duaTahunLalu, $carry, $hak) + $tghTahunLalu;
+        $maksimal = $hak + SaldoCuti::hitungBawaan($duaTahunLalu, $carry, $hak)
+            + (SaldoCuti::TGH_MASUK_TOTAL ? $tghTahunLalu : 0);
 
         if (!empty($perubahanBulan) && $terpakaiHitung > $maksimal) {
             throw ValidationException::withMessages([
@@ -2168,29 +2014,26 @@ class AdminController extends Controller
                 'koreksi' => !empty($deltaBaru) ? $terpakaiBaru : null,
                 'terpakai' => $terpakaiBaru,
             ],
-            $terpakaiBaru
+            $terpakaiBaru,
+            ['tgh_n0' => $tghLama],
+            ['tgh_n0' => $tghBerubah ? $tghTarget : $tghLama]
         );
 
         return back()->with('success', 'Koreksi cuti ' . $pegawai->nama . ' tahun ' . $tahun . ' berhasil disimpan.');
     }
-    // ================= END KOREKSI BULANAN REKAP LAPORAN =================
 
     // 5. Export Data Rekap Cuti ke Excel
     //
-    // Kolom: No | Nama | NIP | bulan... | Tgh | Total Cuti | Keterangan
-    //   - Kolom Jabatan sengaja tidak ada di file Excel.
+    // Kolom: No | Nama | NIP | bulan... | Total Cuti | Keterangan
     //   - Bulan      : angka setelah koreksi Admin HR; sel yang dikoreksi kuning.
-    //   - Tgh        : hari cuti ditangguhkan (sudah termasuk di Total Cuti)
-    //   - Total Cuti : Terpakai + Tgh (sama dengan Rekap Kuota Detail)
-    //   - Keterangan : format tetap "Terpakai: X. Tgh: Y." Bila ada angka yang
-    //                  dikoreksi Admin HR, baris diberi "*" di depan dan warna
-    //                  kuning (tanpa teks "semula").
-    //   - Freeze pane: hanya baris header (baris 1-5). Kolom No/Nama/NIP sengaja
-    //                  tidak dibekukan agar mudah digeser.
+    //   - Total Cuti : jumlah cuti terpakai (cuti ditangguhkan dikembalikan ke
+    //                  saldo, jadi tidak dihitung). Sama dengan Rekap Kuota Detail.
+    //   - Keterangan : "Terpakai: X." Bila ada angka yang dikoreksi Admin HR,
+    //                  baris diberi "*" di depan dan warna kuning.
+    //   - Freeze pane: hanya baris header.
     public function exportExcel(Request $request)
     {
-        // Export mengambil semua data (paginate=false): file Excel harus berisi
-        // seluruh pegawai, bukan hanya halaman aktif.
+        // Export mengambil semua data (paginate=false).
         $data = $this->buildLaporanData($request);
         $laporan = $data['laporan'];
         $tahun = $data['tahun'];
@@ -2221,9 +2064,7 @@ class AdminController extends Controller
         $nBulan = count($exportLabelBulan);
         $bulanStartCol = 4; // D (setelah No, Nama, NIP)
 
-        // [FILTER BULAN] Kolom Tgh hanya ada di mode "Semua Bulan".
-        $tghCol = $filterBulanAktif ? null : $bulanStartCol + $nBulan;
-        $totalCol = $filterBulanAktif ? $bulanStartCol + $nBulan : $tghCol + 1;
+        $totalCol = $bulanStartCol + $nBulan;
         $ketCol = $totalCol + 1;              // kolom Keterangan (paling kanan)
         $lastColLetter = Coordinate::stringFromColumnIndex($ketCol);
 
@@ -2236,7 +2077,6 @@ class AdminController extends Controller
         $BLUE_BADGE = '85B7EB';
         $TOTAL_ROW_BG = 'FAEEDA';
         $ZEBRA = 'F4F8F0';
-        $ORANGE_TGH = 'FED7AA';
         $KUNING_EDIT = 'FEF3C7'; // sel bulan yang dikoreksi Admin HR
 
         // ---------- Judul ----------
@@ -2248,7 +2088,6 @@ class AdminController extends Controller
         $sheet->getRowDimension(1)->setRowHeight(26);
 
         $sheet->mergeCells("A2:{$lastColLetter}2");
-        // Sistem ini untuk Biro Perencanaan (lihat STRUKTUR_ORGANISASI).
         $sheet->setCellValue('A2', 'Kementerian Pertanian RI — Biro Perencanaan');
         $sheet->getStyle('A2')->getFont()->setName('Arial')->setSize(10)->getColor()->setRGB('04342C');
         $sheet->getStyle('A2')->getFill()->setFillType(Fill::FILL_SOLID)->getStartColor()->setRGB($GREEN_LIGHT);
@@ -2302,17 +2141,14 @@ class AdminController extends Controller
             ]);
         }
 
-        // Header kolom Tgh, Total Cuti, dan Keterangan (masing-masing digabung 2 baris)
-        $tghLetter = $tghCol !== null ? Coordinate::stringFromColumnIndex($tghCol) : null;
+        // Header kolom Total Cuti dan Keterangan (masing-masing digabung 2 baris)
         $totalLetter = Coordinate::stringFromColumnIndex($totalCol);
         $ketLetter = Coordinate::stringFromColumnIndex($ketCol);
 
-        $headerKanan = [];
-        if (!$filterBulanAktif) {
-            $headerKanan[] = [$tghLetter, 'Tgh', 'C2410C'];
-        }
-        $headerKanan[] = [$totalLetter, 'Total Cuti', $GREEN_TOTAL];
-        $headerKanan[] = [$ketLetter, 'Keterangan', '5F5E5A'];
+        $headerKanan = [
+            [$totalLetter, 'Total Cuti', $GREEN_TOTAL],
+            [$ketLetter, 'Keterangan', '5F5E5A'],
+        ];
 
         foreach ($headerKanan as [$huruf, $judul, $warna]) {
             $sheet->mergeCells("{$huruf}{$headerRow1}:{$huruf}{$headerRow2}");
@@ -2358,7 +2194,6 @@ class AdminController extends Controller
             ]);
 
             // Nama: string murni + quotePrefix (aman Formula Injection SEC-09).
-            // Dipanggil setelah applyFromArray agar quotePrefix tidak tertimpa style.
             $this->tulisTeksAman($sheet, "B{$r}", $item['nama'] ?? '');
 
             foreach ($exportKeyBulan as $j => $key) {
@@ -2367,8 +2202,7 @@ class AdminController extends Controller
                 $val = $item['cuti'][$key] ?? 0;
                 $sheet->setCellValue("{$letter}{$r}", $val);
 
-                // [KOREKSI BULANAN] Sel yang dikoreksi Admin HR: kuning, menimpa
-                // warna biru/zebra.
+                // Sel yang dikoreksi Admin HR: kuning, menimpa warna biru/zebra.
                 $diedit = (bool) ($item['cuti_diedit'][$key] ?? false);
 
                 if ($diedit) {
@@ -2391,29 +2225,8 @@ class AdminController extends Controller
                 $sheet->getStyle("{$letter}{$r}")->getBorders()->getAllBorders()->setBorderStyle(Border::BORDER_THIN)->getColor()->setRGB('B4B2A9');
             }
 
-            // [FILTER BULAN] Hanya dibuat di mode "Semua Bulan".
-            if (!$filterBulanAktif) {
-                $tghVal = (int) ($item['tgh'] ?? 0);
-                $sheet->setCellValue("{$tghLetter}{$r}", $tghVal);
-                $sheet->getStyle("{$tghLetter}{$r}")->applyFromArray([
-                    'font' => [
-                        'name' => 'Arial',
-                        'size' => 10,
-                        'bold' => $tghVal > 0,
-                        'color' => ['rgb' => $tghVal > 0 ? '7C2D12' : '888780'],
-                    ],
-                    'fill' => $tghVal > 0
-                        ? ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => $ORANGE_TGH]]
-                        : ($zebra ? ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => $zebra]] : []),
-                    'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
-                    'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B4B2A9']]],
-                ]);
-            }
-
-            // [FILTER BULAN] Total = Terpakai bulan itu saja (tanpa Tgh).
-            $totalVal = $filterBulanAktif
-                ? (int) ($item['terpakai'] ?? 0)
-                : $item['total'];
+            // Total = Terpakai (semua bulan) atau cuti bulan terpilih.
+            $totalVal = (int) $item['total'];
             $sheet->setCellValue("{$totalLetter}{$r}", $totalVal);
             $sheet->getStyle("{$totalLetter}{$r}")->applyFromArray([
                 'font' => ['name' => 'Arial', 'size' => 10, 'bold' => true, 'color' => ['rgb' => '173404']],
@@ -2422,12 +2235,9 @@ class AdminController extends Controller
                 'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B4B2A9']]],
             ]);
 
-            // Keterangan ringkas, format tetap: "Terpakai: 3. Tgh: 2." (tanpa Tgh
-            // bila filter bulan). "*" di depan (plus warna kuning) bila ada
-            // komponen yang dikoreksi Admin HR.
-            $ket = ($item['ada_edit'] ? '* ' : '')
-                . 'Terpakai: ' . (int) $item['terpakai'] . '.'
-                . ($filterBulanAktif ? '' : ' Tgh: ' . (int) $item['tgh'] . '.');
+            // Keterangan ringkas: "Terpakai: 3." "*" di depan (plus warna kuning)
+            // bila ada angka yang dikoreksi Admin HR.
+            $ket = ($item['ada_edit'] ? '* ' : '') . 'Terpakai: ' . (int) $item['terpakai'] . '.';
             $sheet->getStyle("{$ketLetter}{$r}")->applyFromArray([
                 'font' => ['name' => 'Arial', 'size' => 9, 'color' => ['rgb' => $item['ada_edit'] ? '92400E' : '5F5E5A']],
                 'fill' => $item['ada_edit']
@@ -2467,17 +2277,6 @@ class AdminController extends Controller
             ]);
         }
 
-        // Total kolom Tgh (hanya "Semua Bulan")
-        if (!$filterBulanAktif) {
-            $sheet->setCellValue("{$tghLetter}{$totalRow}", "=SUM({$tghLetter}{$dataStartRow}:{$tghLetter}{$dataEndRow})");
-            $sheet->getStyle("{$tghLetter}{$totalRow}")->applyFromArray([
-                'font' => ['name' => 'Arial', 'size' => 10, 'bold' => true, 'color' => ['rgb' => '412402']],
-                'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['rgb' => $TOTAL_ROW_BG]],
-                'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER, 'vertical' => Alignment::VERTICAL_CENTER],
-                'borders' => ['allBorders' => ['borderStyle' => Border::BORDER_THIN, 'color' => ['rgb' => 'B4B2A9']]],
-            ]);
-        }
-
         $sheet->setCellValue("{$totalLetter}{$totalRow}", "=SUM({$totalLetter}{$dataStartRow}:{$totalLetter}{$dataEndRow})");
         $sheet->getStyle("{$totalLetter}{$totalRow}")->applyFromArray([
             'font' => ['name' => 'Arial', 'size' => 11, 'bold' => true, 'color' => ['rgb' => 'FFFFFF']],
@@ -2497,11 +2296,6 @@ class AdminController extends Controller
             ['Angka bulan dikoreksi Admin HR', $KUNING_EDIT],
         ];
 
-        // [FILTER BULAN] Legenda Tgh hanya relevan saat kolom Tgh ada.
-        if (!$filterBulanAktif) {
-            $legends[] = ['Tgh = cuti yang sudah disetujui lalu ditangguhkan (sudah termasuk di Total Cuti)', $ORANGE_TGH];
-        }
-
         foreach ($legends as $i => $item) {
             [$label, $color] = $item;
             $row = $legendTitleRow + 1 + $i;
@@ -2519,7 +2313,7 @@ class AdminController extends Controller
         $catatan = [
             $filterBulanAktif
                 ? 'Total Cuti = jumlah cuti pada bulan yang dipilih.'
-                : 'Total Cuti = Terpakai + Tgh.',
+                : 'Total Cuti = jumlah cuti terpakai (cuti yang ditangguhkan dikembalikan ke saldo).',
             'Tanda * di Keterangan = ada angka yang dikoreksi Admin HR.',
         ];
 
@@ -2540,14 +2334,10 @@ class AdminController extends Controller
             // [FILTER BULAN] Satu kolom bulan dibuat lebih lebar agar "September" tidak terpotong.
             $sheet->getColumnDimension($letter)->setWidth($filterBulanAktif ? 12 : 6);
         }
-        if (!$filterBulanAktif) {
-            $sheet->getColumnDimension($tghLetter)->setWidth(8);
-        }
         $sheet->getColumnDimension($totalLetter)->setWidth(11);
         $sheet->getColumnDimension($ketLetter)->setWidth(60);
 
-        // Bekukan hanya baris header (baris 1-5). Kolom No/Nama/NIP tidak
-        // dibekukan agar tabel bebas digeser ke kiri-kanan.
+        // Bekukan hanya baris header (baris 1-5).
         $sheet->freezePane('A' . $dataStartRow);
 
         $filename = "Rekap_Cuti_Tahunan_{$tahun}_" . date('Y-m-d') . '.xlsx';
@@ -2563,11 +2353,8 @@ class AdminController extends Controller
 
     // 6. Menangguhkan cuti (hanya L4 / Kepala Biro)
     //
-    // [PERBAIKAN TGH] Method ini sengaja hanya meneruskan ke
-    // PembatalanController::process(), agar satu-satunya logika penangguhan ada
-    // di sana. Sebelumnya method ini hanya mengubah status & notifikasi, tanpa
-    // baris CutiDitangguhkan (penyebab kolom TGH di Rekap Kuota Detail 0) dan
-    // tanpa ApprovalLog. Sekarang kedua jalur identik:
+    // Hanya meneruskan ke PembatalanController::process(), agar satu-satunya
+    // logika penangguhan ada di sana. Hasilnya:
     //   - status -> dibatalkan_ditangguhkan
     //   - ApprovalLog (keputusan 'tangguh', level 5)
     //   - CutiDitangguhkan (hanya Cuti Tahunan yang sebelumnya disetujui)

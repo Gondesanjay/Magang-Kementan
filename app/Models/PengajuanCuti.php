@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -20,19 +21,33 @@ class PengajuanCuti extends Model
         'disetujui',
     ];
 
-    // [BARU] Satu-satunya jenis cuti yang boleh ditangguhkan.
+    // Status pengajuan yang sudah ditangguhkan (baris tetap tampil, tombol nonaktif).
+    public const STATUS_DITANGGUHKAN = 'dibatalkan_ditangguhkan';
+
+    // Satu-satunya jenis cuti yang boleh ditangguhkan.
     public const JENIS_BISA_DITANGGUHKAN = 'Cuti Tahunan';
 
     // Penangguhan TIDAK dibatasi tanggal (belum mulai, sedang berjalan, atau
     // sudah lewat tetap bisa), selama status termasuk STATUS_BISA_DITANGGUHKAN.
-    // [BARU] Hanya untuk jenis Cuti Tahunan.
+    // Hanya untuk jenis Cuti Tahunan.
     public function scopeBisaDitangguhkan(Builder $q): Builder
     {
         return $q->whereIn('status', self::STATUS_BISA_DITANGGUHKAN)
             ->where('jenis_cuti', self::JENIS_BISA_DITANGGUHKAN);
     }
 
-    // [BARU] True kalau jenis cuti ini Cuti Tahunan (abaikan huruf besar/kecil & spasi).
+    // Daftar halaman Penangguhan: yang bisa ditangguhkan DAN yang sudah
+    // ditangguhkan (yang sudah ditangguhkan tampil dengan tombol nonaktif).
+    public function scopeTampilDiPenangguhan(Builder $q): Builder
+    {
+        return $q->where('jenis_cuti', self::JENIS_BISA_DITANGGUHKAN)
+            ->whereIn('status', array_merge(
+                self::STATUS_BISA_DITANGGUHKAN,
+                [self::STATUS_DITANGGUHKAN]
+            ));
+    }
+
+    // True kalau jenis cuti ini Cuti Tahunan (abaikan huruf besar/kecil & spasi).
     public function adalahCutiTahunan(): bool
     {
         return strtolower(trim((string) $this->jenis_cuti))
@@ -41,13 +56,18 @@ class PengajuanCuti extends Model
 
     public function alasanTidakBisaDitangguhkan(): ?string
     {
-        // [BARU] Cek jenis cuti lebih dulu.
+        // Cek jenis cuti lebih dulu.
         if (!$this->adalahCutiTahunan()) {
             return 'Hanya Cuti Tahunan yang dapat ditangguhkan.';
         }
 
+        // Mencegah penangguhan ganda.
+        if ($this->status === self::STATUS_DITANGGUHKAN) {
+            return 'Cuti ini sudah ditangguhkan.';
+        }
+
         if (!in_array($this->status, self::STATUS_BISA_DITANGGUHKAN, true)) {
-            return 'Cuti ini sudah ditolak atau sudah dibatalkan/ditangguhkan sebelumnya.';
+            return 'Cuti ini sudah ditolak atau sudah dibatalkan sebelumnya.';
         }
 
         return null;
@@ -56,6 +76,19 @@ class PengajuanCuti extends Model
     public function bisaDitangguhkan(): bool
     {
         return $this->alasanTidakBisaDitangguhkan() === null;
+    }
+
+    // Susulan = pengajuan dibuat SETELAH cuti dimulai (mis. sakit dulu, mengajukan
+    // setelah sehat). Dibandingkan dengan created_at, bukan hari ini, supaya
+    // pengajuan yang dibuat sebelum cuti tidak berubah jadi "susulan" seiring waktu.
+    public function isSusulan(): bool
+    {
+        if (!$this->tanggal_mulai || !$this->created_at) {
+            return false;
+        }
+
+        return Carbon::parse($this->tanggal_mulai)->startOfDay()
+            ->lt($this->created_at->copy()->startOfDay());
     }
 
     // ================= URL LAMPIRAN LEWAT ROUTE TERPROTEKSI =================
@@ -111,6 +144,14 @@ class PengajuanCuti extends Model
         return $this->hasMany(ApprovalLog::class, 'pengajuan_id')
             ->with('approver')
             ->orderBy('level_approval');
+    }
+
+    // Notifikasi yang terkait pengajuan ini (lewat kolom notifikasis.pengajuan_id).
+    // Tanpa foreign key: cuti:arsipkan menghapus baris pengajuan, dan
+    // notifikasinya dibersihkan di sana.
+    public function notifikasis(): HasMany
+    {
+        return $this->hasMany(Notifikasi::class, 'pengajuan_id');
     }
 
     // Catatan khusus pelaporan Cuti Tahunan disetujui yang ditangguhkan.

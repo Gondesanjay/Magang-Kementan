@@ -8,157 +8,60 @@ use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
-// Command harian:
-// 1. Kedaluwarsa otomatis jika sudah melewati batas tenggang (HARI_TENGGANG)
-//    — lihat batasKedaluwarsa()
-// 2. Pengingat bertahap (2 & 4 hari kerja) ke atasan + Admin HR
-// 3. Bersihkan notifikasi lama saat kedaluwarsa (aman: cek pengajuan lain dulu)
+// Command harian: pengingat bertahap untuk pengajuan yang menunggu.
+//   Atasan   : hari kerja ke-2 (susulan: ke-1) dan ke-4
+//   Admin HR : bersama pengingat kedua, lalu diulang tiap 5 hari kerja
+// Tidak ada kedaluwarsa otomatis. Pengajuan hanya berakhir lewat keputusan atasan,
+// pembatalan pemohon, atau penangguhan Kepala Biro.
+// Hitungan dimulai dari updated_at (diajukan / terakhir naik level), jadi dihitung
+// ulang di tiap level.
 //
-// ================= PERBAIKAN (PENGAJUAN MUNDUR / GRACE PERIOD) =================
-// SEBELUMNYA: pengajuan langsung kedaluwarsa begitu tanggal_mulai < hari ini.
-// Itu tidak cocok dengan pengajuan mundur (maks. CutiController::MAKS_HARI_MUNDUR
-// = 7 hari), karena pengajuan yang baru dibuat bisa kedaluwarsa keesokan
-// harinya sebelum atasan sempat memproses.
-//
-// SEKARANG: batas terakhir = max(tanggal_mulai, tanggal terakhir pengajuan
-// diubah) + HARI_TENGGANG hari. Hasilnya:
-//   - Pengajuan normal (mulai di masa depan): kedaluwarsa setelah
-//     tanggal_mulai + HARI_TENGGANG.
-//   - Pengajuan / revisi mundur: tenggang dihitung sejak diajukan, jadi
-//     atasan tetap punya waktu.
-// updated_at ikut berubah tiap kali pengajuan naik level (update model),
-// sehingga tenggang dihitung ulang selama pengajuan masih bergerak.
-// CATATAN: HARI_TENGGANG harus sama dengan CutiController::MAKS_HARI_MUNDUR.
-// ================= END PERBAIKAN =================
-//
-// php artisan cuti:proses-menunggu [--dry-run] [--bersihkan-lama]
+// php artisan cuti:proses-menunggu [--dry-run]
 class ProsesCutiMenunggu extends Command
 {
     protected $signature = 'cuti:proses-menunggu
-        {--dry-run : Hanya tampilkan yang akan dilakukan, tanpa mengubah data}
-        {--bersihkan-lama : Bersihkan notifikasi lama untuk pengajuan yang sudah kedaluwarsa}';
+        {--dry-run : Hanya tampilkan yang akan dilakukan, tanpa mengubah data}';
 
-    protected $description = 'Kirim pengingat ke atasan & kedaluwarsakan pengajuan cuti yang tidak diproses sampai melewati batas tenggang';
+    protected $description = 'Kirim pengingat bertahap ke atasan dan Admin HR untuk pengajuan cuti yang menunggu';
 
     private const HARI_PENGINGAT_1 = 2;
+    private const HARI_PENGINGAT_SUSULAN = 1;
     private const HARI_PENGINGAT_2 = 4;
+    private const HARI_ULANG_MENGGANTUNG = 5;
 
-    private const STATUS_MENUNGGU = ['menunggu_l1', 'menunggu_l2', 'menunggu_l3', 'menunggu_l4'];
-
-    // Tenggang kedaluwarsa (hari). Selaras CutiController::MAKS_HARI_MUNDUR.
-    private const HARI_TENGGANG = 7;
-
-    private const JUDUL_PENGINGAT = ['Pengingat: Pengajuan Cuti', 'Pengingat Kedua: Pengajuan Cuti'];
-    private const JUDUL_NOTIF_AWAL = ['Pengajuan Cuti Baru', 'Revisi Pengajuan Cuti'];
+    private const ROLE_PER_STATUS = [
+        'menunggu_l1' => 2,
+        'menunggu_l2' => 3,
+        'menunggu_l3' => 4,
+        'menunggu_l4' => 6,
+    ];
 
     public function handle(): int
     {
         $dryRun = (bool) $this->option('dry-run');
-
-        if ($this->option('bersihkan-lama')) {
-            return $this->bersihkanLama($dryRun);
-        }
-
         $today = Carbon::today();
         $hariLibur = HariLibur::pluck('tanggal')
             ->map(fn($t) => Carbon::parse($t)->toDateString())
             ->all();
 
+        $jumlah = 0;
         $daftar = PengajuanCuti::with('pegawai')
-            ->whereIn('status', self::STATUS_MENUNGGU)
+            ->whereIn('status', array_keys(self::ROLE_PER_STATUS))
             ->get();
 
-        $jumlahKedaluwarsa = 0;
-        $jumlahPengingat = 0;
-
         foreach ($daftar as $p) {
-            if ($this->batasKedaluwarsa($p)->lt($today)) {
-                if ($this->kedaluwarsakan($p, $dryRun)) {
-                    $jumlahKedaluwarsa++;
-                }
-                continue;
-            }
-
-            if ($this->kirimPengingat($p, $today, $hariLibur, $dryRun)) {
-                $jumlahPengingat++;
+            if ($p->pegawai && $this->kirimPengingat($p, $today, $hariLibur, $dryRun)) {
+                $jumlah++;
             }
         }
 
         $awalan = $dryRun ? '[DRY-RUN] ' : '';
-        $this->info("{$awalan}Selesai. Kedaluwarsa: {$jumlahKedaluwarsa}, pengingat terkirim: {$jumlahPengingat}.");
+        $this->info("{$awalan}Selesai. Pengingat terkirim: {$jumlah}.");
 
         return self::SUCCESS;
-    }
-
-    // Batas terakhir (inklusif) sebuah pengajuan masih boleh menunggu.
-    // Acuan = tanggal yang lebih akhir antara tanggal_mulai dan terakhir kali
-    // pengajuan diubah (diajukan / direvisi / naik level), lalu + tenggang.
-    private function batasKedaluwarsa(PengajuanCuti $p): Carbon
-    {
-        $mulai = Carbon::parse($p->tanggal_mulai)->startOfDay();
-        $diubah = Carbon::parse($p->updated_at ?? $p->created_at)->startOfDay();
-
-        return $mulai->copy()->max($diubah)->copy()->addDays(self::HARI_TENGGANG);
-    }
-
-    private function kedaluwarsakan(PengajuanCuti $p, bool $dryRun): bool
-    {
-        $nama = $p->pegawai->nama ?? 'Pegawai';
-        $this->line("• #{$p->id} {$nama} ({$p->status}) mulai {$p->tanggal_mulai} -> KEDALUWARSA");
-
-        if ($dryRun) {
-            return true;
-        }
-
-        $statusLama = $p->status;
-        $penerima = $this->penerimaAtasan($p);
-
-        $keterangan = trim((string) $p->keterangan);
-        $keterangan = ($keterangan === '' ? '-' : $keterangan)
-            . ' | [KEDALUWARSA: Tidak diproses atasan dalam batas waktu (tenggang '
-            . self::HARI_TENGGANG . ' hari)]';
-
-        $berubah = PengajuanCuti::where('id', $p->id)
-            ->where('status', $statusLama)
-            ->update([
-                'status' => 'kedaluwarsa',
-                'keterangan' => $keterangan,
-            ]);
-
-        if (!$berubah) {
-            return false;
-        }
-
-        // Bersihkan notifikasi lama sebelum membuat notifikasi kedaluwarsa baru
-        $this->bersihkanNotifikasiLama($p, $statusLama, $penerima, $dryRun);
-
-        if ($p->pegawai) {
-            Notifikasi::create([
-                'pegawai_id' => $p->pegawai_id,
-                'judul' => 'Pengajuan Cuti Kedaluwarsa',
-                'pesan' => 'Pengajuan cuti Anda tanggal ' . $this->tgl($p->tanggal_mulai)
-                    . ' tidak diproses atasan dalam batas waktu. Silakan ajukan ulang bila masih diperlukan.',
-                'tautan' => route('karyawan.riwayat', [], false),
-                'is_read' => false,
-            ]);
-        }
-
-        foreach ($penerima as $atasan) {
-            Notifikasi::create([
-                'pegawai_id' => $atasan->id,
-                'judul' => 'Pengajuan Cuti Kedaluwarsa',
-                'pesan' => 'Pengajuan cuti ' . $nama . ' (' . $this->tgl($p->tanggal_mulai)
-                    . ') kedaluwarsa karena tidak diproses dalam batas waktu.',
-                'tautan' => route('atasan.approval', [], false),
-                'is_read' => false,
-            ]);
-        }
-
-        return true;
     }
 
     private function kirimPengingat(PengajuanCuti $p, Carbon $today, array $hariLibur, bool $dryRun): bool
@@ -167,18 +70,27 @@ class ProsesCutiMenunggu extends Command
         $hari = $this->hariKerjaTerlewat($basis, $today, $hariLibur);
 
         $sudah = (int) $p->jumlah_pengingat;
-        if (
-            !$p->pengingat_terakhir_at
-            || Carbon::parse($p->pengingat_terakhir_at)->lt($basis)
-        ) {
+        $terakhir = $p->pengingat_terakhir_at ? Carbon::parse($p->pengingat_terakhir_at) : null;
+
+        // Pengajuan sudah bergerak sejak pengingat terakhir: hitung dari awal
+        if (!$terakhir || $terakhir->lt($basis)) {
             $sudah = 0;
+            $terakhir = null;
         }
 
+        $batasPertama = $p->isSusulan() ? self::HARI_PENGINGAT_SUSULAN : self::HARI_PENGINGAT_1;
+
+        // Tahap 1 dan 2 = pengingat bertahap, 3 = ulangan "Menggantung" ke Admin HR
         $tahap = null;
         if ($hari >= self::HARI_PENGINGAT_2 && $sudah < 2) {
             $tahap = 2;
-        } elseif ($hari >= self::HARI_PENGINGAT_1 && $sudah < 1) {
+        } elseif ($hari >= $batasPertama && $sudah < 1) {
             $tahap = 1;
+        } elseif (
+            $sudah >= 2 && $terakhir
+            && $this->hariKerjaTerlewat($terakhir, $today, $hariLibur) >= self::HARI_ULANG_MENGGANTUNG
+        ) {
+            $tahap = 3;
         }
 
         if ($tahap === null) {
@@ -186,179 +98,74 @@ class ProsesCutiMenunggu extends Command
         }
 
         $nama = $p->pegawai->nama ?? 'Pegawai';
-        $this->line("• #{$p->id} {$nama} ({$p->status}) {$hari} hari kerja tanpa respon -> pengingat {$tahap}");
+        $this->line("• #{$p->id} {$nama} ({$p->status}) {$hari} hari kerja tanpa respon -> tahap {$tahap}");
 
         if ($dryRun) {
             return true;
         }
 
-        $penerima = $this->penerimaAtasan($p);
-
-        foreach ($penerima as $atasan) {
-            Notifikasi::create([
-                'pegawai_id' => $atasan->id,
-                'judul' => $tahap === 2 ? 'Pengingat Kedua: Pengajuan Cuti' : 'Pengingat: Pengajuan Cuti',
-                'pesan' => 'Pengajuan cuti ' . $nama . ' (' . $this->tgl($p->tanggal_mulai)
-                    . ') sudah ' . $hari . ' hari kerja menunggu persetujuan Anda.',
-                'tautan' => route('atasan.approval', [], false),
-                'is_read' => false,
+        // Klaim dulu, baru kirim. Gagal klaim = pengajuan sudah bergerak / diproses lain.
+        // Query builder dipakai agar updated_at tidak ikut berubah.
+        $klaim = DB::table($p->getTable())
+            ->where('id', $p->id)
+            ->where('status', $p->status)
+            ->where('updated_at', $p->updated_at)
+            ->update([
+                'jumlah_pengingat' => min($tahap, 2),
+                'pengingat_terakhir_at' => now(),
             ]);
+
+        if (!$klaim) {
+            return false;
         }
 
-        if ($tahap === 2) {
-            foreach (Pegawai::where('role_id', 5)->get() as $hr) {
+        // Awalan pesan sengaja dipertahankan; penanda susulan ditaruh di akhir.
+        $ket = $p->isSusulan() ? ' Ini pengajuan susulan, cuti sudah dijalani.' : '';
+        $rincian = 'Pengajuan cuti ' . $nama . ' (' . $this->tgl($p->tanggal_mulai) . ') sudah '
+            . $hari . ' hari kerja ';
+
+        if ($tahap <= 2) {
+            foreach ($this->penerimaAtasan($p) as $atasan) {
                 Notifikasi::create([
-                    'pegawai_id' => $hr->id,
-                    'judul' => 'Pengajuan Cuti Menggantung',
-                    'pesan' => 'Pengajuan cuti ' . $nama . ' (' . $this->tgl($p->tanggal_mulai)
-                        . ') sudah ' . $hari . ' hari kerja belum diproses (' . $p->status . ').',
-                    // PERBAIKAN: sebelumnya admin.rekap, sekarang ke Monitoring/Approval
-                    'tautan' => route('atasan.approval', [], false),
-                    'is_read' => false,
+                    'pegawai_id'   => $atasan->id,
+                    'pengajuan_id' => $p->id,
+                    'judul'        => $tahap === 2 ? 'Pengingat Kedua: Pengajuan Cuti' : 'Pengingat: Pengajuan Cuti',
+                    'pesan'        => $rincian . 'menunggu persetujuan Anda.' . $ket,
+                    'tautan'       => route('atasan.approval', [], false),
+                    'is_read'      => false,
                 ]);
             }
         }
 
-        // Query builder agar updated_at tidak ikut berubah
-        DB::table($p->getTable())
-            ->where('id', $p->id)
-            ->where('status', $p->status)
-            ->update([
-                'jumlah_pengingat' => $tahap,
-                'pengingat_terakhir_at' => now(),
-            ]);
+        if ($tahap >= 2) {
+            foreach (Pegawai::penerimaApproval(5) as $hr) {
+                Notifikasi::create([
+                    'pegawai_id'   => $hr->id,
+                    'pengajuan_id' => $p->id,
+                    'judul'        => 'Pengajuan Cuti Menggantung',
+                    'pesan'        => $rincian . 'belum diproses (' . $p->status . ').' . $ket,
+                    'tautan'       => route('atasan.approval', [], false),
+                    'is_read'      => false,
+                ]);
+            }
+        }
 
         return true;
     }
 
-    // Hapus notifikasi lama yang sudah tidak berlaku.
-    // Pengingat: cocokkan nama + tanggal. Notif awal: hanya hapus jika tidak ada pengajuan lain di level sama.
-    private function bersihkanNotifikasiLama(PengajuanCuti $p, string $statusLama, Collection $penerima, bool $dryRun): int
+    // Atasan yang sedang ditunggu: semua pejabat aktif pada level itu (kecuali pemohon)
+    private function penerimaAtasan(PengajuanCuti $p): Collection
     {
         $pg = $p->pegawai;
-        if (!$pg) {
-            return 0;
-        }
+        $role = self::ROLE_PER_STATUS[$p->status] ?? null;
 
-        $nama = $this->escapeLike((string) $pg->nama);
-        $tgl = $this->tgl($p->tanggal_mulai);
-        $idAtasan = $penerima->pluck('id')->all();
-        $idHr = Pegawai::where('role_id', 5)->pluck('id')->all();
-
-        $adaLainDiLevelSama = PengajuanCuti::where('pegawai_id', $p->pegawai_id)
-            ->where('id', '!=', $p->id)
-            ->where('status', $statusLama)
-            ->exists();
-
-        $adaLainTanggalSama = PengajuanCuti::where('pegawai_id', $p->pegawai_id)
-            ->where('id', '!=', $p->id)
-            ->whereIn('status', self::STATUS_MENUNGGU)
-            ->whereDate('tanggal_mulai', Carbon::parse($p->tanggal_mulai)->toDateString())
-            ->exists();
-
-        $jumlah = 0;
-
-        // 1) Pengingat (nama + tanggal)
-        if (!$adaLainTanggalSama) {
-            $polaPengingat = "Pengajuan cuti {$nama} ({$tgl}) %";
-
-            if (!empty($idAtasan)) {
-                $jumlah += $this->hapus(
-                    Notifikasi::whereIn('pegawai_id', $idAtasan)
-                        ->whereIn('judul', self::JUDUL_PENGINGAT)
-                        ->where('pesan', 'like', $polaPengingat),
-                    $dryRun
-                );
-            }
-
-            if (!empty($idHr)) {
-                $jumlah += $this->hapus(
-                    Notifikasi::whereIn('pegawai_id', $idHr)
-                        ->where('judul', 'Pengajuan Cuti Menggantung')
-                        ->where('pesan', 'like', $polaPengingat),
-                    $dryRun
-                );
-            }
-        }
-
-        // 2) "Pengajuan Cuti Baru" / "Revisi" (hanya nama)
-        if (!$adaLainDiLevelSama && !empty($idAtasan)) {
-            $jumlah += $this->hapus(
-                Notifikasi::whereIn('pegawai_id', $idAtasan)
-                    ->whereIn('judul', self::JUDUL_NOTIF_AWAL)
-                    ->where('pesan', 'like', "%dari {$nama} yang butuh persetujuan Anda.%"),
-                $dryRun
-            );
-        }
-
-        return $jumlah;
-    }
-
-    // Mode --bersihkan-lama: bersihkan notifikasi untuk pengajuan yang sudah kedaluwarsa sebelumnya
-    private function bersihkanLama(bool $dryRun): int
-    {
-        $total = 0;
-        $daftar = PengajuanCuti::with('pegawai')->where('status', 'kedaluwarsa')->get();
-
-        foreach ($daftar as $p) {
-            $statusLama = match ((int) $p->level_saat_ini) {
-                1 => 'menunggu_l1',
-                2 => 'menunggu_l2',
-                3 => 'menunggu_l3',
-                4 => 'menunggu_l4',
-                default => null,
-            };
-
-            if ($statusLama === null) {
-                $this->line("• #{$p->id} dilewati (level tidak dikenali)");
-                continue;
-            }
-
-            $penerima = $this->penerimaAtasan($p, $statusLama);
-            $jumlah = $this->bersihkanNotifikasiLama($p, $statusLama, $penerima, $dryRun);
-            $nama = $p->pegawai->nama ?? 'Pegawai';
-            $this->line("• #{$p->id} {$nama} ({$statusLama}) -> {$jumlah} notifikasi lama");
-            $total += $jumlah;
-        }
-
-        $awalan = $dryRun ? '[DRY-RUN] ' : '';
-        $this->info("{$awalan}Selesai. Notifikasi lama yang dibersihkan: {$total}.");
-
-        return self::SUCCESS;
-    }
-
-    private function hapus(Builder $query, bool $dryRun): int
-    {
-        return $dryRun ? (int) $query->count() : (int) $query->delete();
-    }
-
-    private function escapeLike(string $teks): string
-    {
-        return addcslashes($teks, '%_\\');
-    }
-
-    // Atasan yang sedang ditunggu (L1=role2 tim sama, L2=role3 kelompok sama, L3=role4, L4=role6)
-    private function penerimaAtasan(PengajuanCuti $p, ?string $status = null): Collection
-    {
-        $pg = $p->pegawai;
-        if (!$pg) {
+        if (!$pg || $role === null) {
             return collect();
         }
 
-        $status ??= $p->status;
-
-        $hasil = match ($status) {
-            'menunggu_l1' => (empty($pg->tim_kerja) || $pg->tim_kerja === '-')
-                ? collect()
-                : Pegawai::where('role_id', 2)->where('tim_kerja', $pg->tim_kerja)->get(),
-            'menunggu_l2' => Pegawai::where('role_id', 3)
-                ->where('kelompok_substansi', $pg->kelompok_substansi)->get(),
-            'menunggu_l3' => Pegawai::where('role_id', 4)->get(),
-            'menunggu_l4' => Pegawai::where('role_id', 6)->get(),
-            default => collect(),
-        };
-
-        return $hasil->filter(fn($a) => $a->id !== $pg->id)->values();
+        return Pegawai::penerimaApproval($role, $pg->tim_kerja, $pg->kelompok_substansi)
+            ->reject(fn($a) => (int) $a->id === (int) $pg->id)
+            ->values();
     }
 
     private function hariKerjaTerlewat(Carbon $dari, Carbon $sampai, array $hariLibur): int

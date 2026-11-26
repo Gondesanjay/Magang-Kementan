@@ -74,11 +74,47 @@ class Pegawai extends Authenticatable
         return $this->hasMany(CutiDitangguhkan::class, 'pegawai_id');
     }
 
-    // BARU: token perangkat FCM (satu pegawai bisa punya banyak perangkat).
+    // Token perangkat FCM (satu pegawai bisa punya banyak perangkat).
     // Kolom di tabel fcm_tokens bernama user_id, merujuk ke pegawais.id.
     public function fcmTokens()
     {
         return $this->hasMany(FcmToken::class, 'user_id');
+    }
+
+    // ================= PENERIMA APPROVAL (SATU ATURAN UNTUK SEMUA) =================
+
+    /**
+     * Pejabat AKTIF (status_aktif 'Aktif' / NULL) untuk satu level approval.
+     * Dipakai store, cancel, process, dan command pengingat, supaya pemilihan
+     * penerima notifikasi tidak bisa berbeda antar tempat.
+     *
+     *   - role 2 (L1)  : per tim_kerja pemohon ('-' / kosong = tidak ada penerima)
+     *   - role 3 (L2)  : per kelompok_substansi pemohon (kosong = tidak ada penerima)
+     *   - role 4, 5, 6 : semua pejabat aktif pada role itu
+     *
+     * Hasil urut id terkecil. Pegawai yang di-soft-delete otomatis tersaring.
+     */
+    public static function penerimaApproval(
+        int $roleId,
+        ?string $timKerja = null,
+        ?string $kelompok = null
+    ): \Illuminate\Support\Collection {
+        $q = static::where('role_id', $roleId)
+            ->where(fn($s) => $s->where('status_aktif', 'Aktif')->orWhereNull('status_aktif'));
+
+        if ($roleId === 2) {
+            if (empty($timKerja) || $timKerja === '-') {
+                return collect();
+            }
+            $q->where('tim_kerja', $timKerja);
+        } elseif ($roleId === 3) {
+            if (empty($kelompok)) {
+                return collect();
+            }
+            $q->where('kelompok_substansi', $kelompok);
+        }
+
+        return $q->orderBy('id')->get();
     }
 
     // ================= APPROVER DINAMIS (L1 & L2) =================

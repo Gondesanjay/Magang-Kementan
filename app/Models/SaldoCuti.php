@@ -21,6 +21,10 @@ use Illuminate\Support\Facades\DB;
 // 3) VERSI BATCH (anti N+1): muatBahanTerpakai() + terpakaiEfektifDariBahan()
 //    menghitung Terpakai Efektif banyak pegawai dari 2 query tetap, dengan aturan
 //    prioritas SAMA dengan terpakaiEfektif(). Dipakai RincianSaldo::lengkapi().
+//
+// 4) ATURAN Tgh (cuti ditangguhkan), satu sumber untuk SEMUA halaman lewat dua
+//    konstanta di bawah dan RincianSaldo::hitungDenganTgh(). Edit Tgh oleh Admin HR
+//    hanya mengubah angka Tgh; Terpakai & Sisa tahun berjalan tidak ikut berubah.
 class SaldoCuti extends Model
 {
     /**
@@ -41,6 +45,18 @@ class SaldoCuti extends Model
      * sinkronkanBawaan(), dan Command GenerateSaldoCutiTahunBaru.
      */
     public const TERAPKAN_BATAS_ATAS_TOTAL_HAK = false;
+
+    /**
+     * Tgh tahun N-1 MENAMBAH Total Hak Tersedia tahun N.
+     * Dipakai semua halaman (Rekap, Dashboard, Ajukan Cuti, Monitoring, Detail).
+     */
+    public const TGH_MASUK_TOTAL = true;
+
+    /**
+     * true : Tgh tahun N mengurangi Sisa N dan Saldo Akhir N.
+     * false: Tgh tahun N hanya catatan (dibawa ke tahun berikutnya).
+     */
+    public const TGH_TAHUN_INI_MENGURANGI_SISA = false;
 
     /** Batas rantai tahun yang disinkronkan sekali jalan (pengaman). */
     private const BATAS_RANTAI_SINKRON = 5;
@@ -199,11 +215,12 @@ class SaldoCuti extends Model
     // dijaga method ini.
     //
     // Rumus sama dengan Command Generate (lewat CarryOverSaldoService):
-    //   carry_forward_normal = Hak - Terpakai - Tgh tahun sebelumnya (carryDariSaldoBiasa)
+    //   carry_forward_normal = Hak - Terpakai tahun sebelumnya (carryDariSaldoBiasa)
     //   total hak            = kuota_tahunan + hitungBawaan(sisa N-2, sisa N-1, kuota)
     //   sisa                 = max(0, total hak - terpakaiEfektif)
     //   terpakai             = terpakaiMurni
-    // kuota_tahunan & koreksi_saldo tidak diubah.
+    // kuota_tahunan & koreksi_saldo tidak diubah. Tgh tidak ikut carry (dibawa
+    // terpisah lewat TGH_MASUK_TOTAL).
     //
     // Hanya dompet ASLI (kuota_tahunan > 0) yang disinkronkan; baris bayangan tidak
     // disentuh, dan pegawai tanpa dompet tahun berikutnya dilewati (tugas Generate /
@@ -238,7 +255,7 @@ class SaldoCuti extends Model
                 break;
             }
 
-            // Sisa mentah tahun sebelumnya (Hak - Terpakai - Tgh tahun itu)
+            // Sisa mentah tahun sebelumnya (Hak - Terpakai tahun itu)
             $carry = $service->carryDariSaldoBiasa($pegawaiId, $tahunTarget);
             $kuota = (int) $dompet->kuota_tahunan;
 
@@ -370,6 +387,7 @@ class SaldoCuti extends Model
      *
      * Koreksi bulanan pertama pada suatu tahun menghapus koreksi_saldo tahunan
      * (lihat updateKoreksiLaporan()), jadi keduanya tidak berjalan bersamaan.
+     * Tgh TIDAK memengaruhi angka ini.
      */
     public static function terpakaiEfektif(
         int $pegawaiId,
@@ -497,8 +515,7 @@ class SaldoCuti extends Model
      *   - Batas 24        : hanya bila TERAPKAN_BATAS_ATAS_TOTAL_HAK = true.
      *                       Bila false, Bawaan TIDAK bergantung pada Hak ($kuota).
      *
-     * $sisaDuaTahunLalu & $sisaTahunLalu adalah SISA MENTAH
-     * (Hak - Terpakai - Tgh tahun itu).
+     * $sisaDuaTahunLalu & $sisaTahunLalu adalah SISA MENTAH (Hak - Terpakai tahun itu).
      */
     public static function hitungBawaan(int $sisaDuaTahunLalu, int $sisaTahunLalu, int $kuota): int
     {
@@ -545,4 +562,3 @@ class SaldoCuti extends Model
             ->count();
     }
 }
-    

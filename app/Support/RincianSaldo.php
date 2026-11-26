@@ -11,13 +11,14 @@ use Illuminate\Support\Collection;
 /**
  * Satu-satunya tempat rumus "Rincian Sisa Cuti" untuk modal Detail Cuti
  * dan cek saldo saat Kepala Biro menyetujui (MonitoringCutiController::process).
- * Sama dengan DashboardController::hitungSaldoPegawai() dan
- * RekapKuotaDetailController::hitungKuota():
- *   terpakai total = SaldoCuti::terpakaiEfektif() + Tgh tahun itu
- *   sisa hak       = kuota - terpakai total
- *   total tersedia = kuota + bawaan eligible + dikembalikan - terpakai total
- *   dikembalikan   = Tgh tahun asal (tahun - 1)
- * Aritmetikanya ditulis sekali di hitungTotal().
+ * Sama dengan DashboardController::hitungSaldoPegawai(),
+ * RekapKuotaDetailController::hitungKuota(), dan CutiController::hitungSaldoCuti():
+ *   terpakai       = SaldoCuti::terpakaiEfektif()   (Tgh TIDAK ikut)
+ *   sisa hak       = kuota - terpakai
+ *   total tersedia = kuota + bawaan eligible + dikembalikan - terpakai
+ *   dikembalikan   = Tgh tahun asal (tahun - 1), bila SaldoCuti::TGH_MASUK_TOTAL
+ * Tgh tahun ini hanya mengurangi saldo bila SaldoCuti::TGH_TAHUN_INI_MENGURANGI_SISA.
+ * Semua pemanggil memakai hitungDenganTgh(); aritmetikanya ada di hitungTotal().
  *
  * Tahun tiap pengajuan: tahun filter bila cuti beririsan dengan tahun itu,
  * selain itu tahun tanggal_mulai.
@@ -162,9 +163,11 @@ class RincianSaldo
 
     /**
      * Rumus saldo murni (tanpa query). Hasil tidak pernah negatif.
-     *   terpakai total = terpakai efektif + Tgh tahun ini
+     *   terpakai total = terpakai + tangguh
      *   sisa hak       = kuota - terpakai total
-     *   total tersedia = kuota + bawaan + dikembalikan (Tgh tahun lalu) - terpakai total
+     *   total tersedia = kuota + bawaan + dikembalikan - terpakai total
+     * $tangguh adalah POTONGAN yang sudah ditentukan pemanggil (0 bila Tgh tahun
+     * ini tidak mengurangi saldo). Pemanggil biasa memakai hitungDenganTgh().
      */
     public static function hitungTotal(
         int $kuota,
@@ -180,6 +183,29 @@ class RincianSaldo
             'sisa_hak_tahun_berjalan' => max($kuota - $terpakaiTotal, 0),
             'total_cuti_tersedia'     => max(($kuota + $bawaan + $dikembalikan) - $terpakaiTotal, 0),
         ];
+    }
+
+
+    /**
+     * Pintu tunggal untuk semua pemanggil. Menerima Tgh MENTAH, lalu menerapkan
+     * flag di SaldoCuti:
+     *   - TGH_MASUK_TOTAL                : Tgh tahun N-1 menambah Total Tersedia
+     *   - TGH_TAHUN_INI_MENGURANGI_SISA  : Tgh tahun N mengurangi Sisa/Total
+     */
+    public static function hitungDenganTgh(
+        int $kuota,
+        int $bawaan,
+        int $tghTahunLalu,
+        int $terpakai,
+        int $tghTahunIni
+    ): array {
+        return self::hitungTotal(
+            $kuota,
+            $bawaan,
+            SaldoCuti::TGH_MASUK_TOTAL ? $tghTahunLalu : 0,
+            $terpakai,
+            SaldoCuti::TGH_TAHUN_INI_MENGURANGI_SISA ? $tghTahunIni : 0
+        );
     }
 
 
@@ -211,7 +237,7 @@ class RincianSaldo
 
 
         $bawaan = SaldoCuti::hitungBawaan($sisaDuaTahunLalu, $sisaTahunLalu, $kuota);
-        $total  = self::hitungTotal($kuota, $bawaan, $dikembalikan, (int) $terpakai, $tangguh);
+        $total  = self::hitungDenganTgh($kuota, $bawaan, $dikembalikan, (int) $terpakai, $tangguh);
 
 
         return [

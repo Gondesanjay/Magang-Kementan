@@ -33,7 +33,7 @@ const props = defineProps({
             total: 0,
         }),
     },
-    // [KOREKSI BULANAN] Tahun laporan (dari server) & izin edit (hanya Admin HR).
+    // Tahun laporan (dari server) & izin edit (hanya Admin HR).
     tahun: {
         type: Number,
         default: () => new Date().getFullYear(),
@@ -51,7 +51,7 @@ const filterTahun = ref(
 const filterBulan = ref(props.filters.bulan ? String(props.filters.bulan) : "");
 const filterKelompok = ref(props.filters.kelompok_substansi || "");
 
-// Opsi tahun dinamis (relatif terhadap tahun berjalan) lewat composable.
+// Opsi tahun dinamis (relatif terhadap tahun berjalan).
 const daftarTahunFilter = useTahunFilter();
 
 const bulanList = [
@@ -83,13 +83,12 @@ const keyBulan = [
     "des",
 ];
 
-// Kelompok "-" ditampilkan sebagai "Tanpa kelompok"; nilai ke server tetap "-".
+// Kelompok "-" tampil sebagai "Tanpa kelompok"; nilai ke server tetap "-".
 const tampilKelompok = (nilai) => (nilai === "-" ? "Tanpa kelompok" : nilai);
 
 // ================================================================
 // FETCH DATA
-// `lewatiWatch` mencegah request ganda (mis. saat Reset Filter);
-// timer debounce dibersihkan saat halaman ditinggalkan.
+// `lewatiWatch` mencegah request ganda (mis. saat Reset Filter).
 // ================================================================
 let lewatiWatch = false;
 let searchTimeout = null;
@@ -126,8 +125,8 @@ watch(searchQuery, () => {
     }, 500);
 });
 
-// Sinkronkan state lokal dengan props.filters (mis. tombol Back/Forward
-// browser), tanpa memicu fetch ulang.
+// Sinkronkan state lokal dengan props.filters (mis. tombol Back/Forward),
+// tanpa memicu fetch ulang.
 watch(
     () => props.filters,
     (f) => {
@@ -185,17 +184,16 @@ const columnsToShow = computed(() => {
     }));
 });
 
-// [FILTER BULAN] True bila filter Bulan aktif: kolom Tgh disembunyikan dan
-// Total hanya cuti pada bulan terpilih.
+// Filter Bulan aktif: Total hanya cuti pada bulan terpilih.
 const modeBulan = computed(() => Boolean(filterBulan.value));
 
-// Nilai cuti satu bulan untuk satu pegawai (tabel & kartu)
+// Nilai cuti satu bulan untuk satu pegawai.
 const nilaiBulan = (item, key) => {
     const nilai = item.cuti?.[key];
     return nilai !== undefined && nilai !== null ? nilai : 0;
 };
 
-// [KOREKSI BULANAN] Sel bulan yang dikoreksi Admin HR (kuning + tanda *).
+// Sel bulan yang dikoreksi Admin HR (kuning + tanda *).
 const bulanDiedit = (item, key) => Boolean(item.cuti_diedit?.[key]);
 
 const kelasBulanTabel = (item, key) => {
@@ -222,29 +220,18 @@ const titleBulan = (item, key) =>
         : undefined;
 
 // ================================================================
-// TGH (CUTI DITANGGUHKAN), TANDA * & RINCIAN TOTAL
-// Angka & status dihitung di backend (AdminController::buildLaporanData());
-// halaman ini hanya menampilkannya.
-//
-// Total = Terpakai + Tgh. Tanda * muncul bila salah satu komponen
-// dikoreksi Admin HR (tidak muncul saat filter Bulan aktif, karena koreksi
-// bersifat tahunan).
-//
-// [FILTER BULAN] Kolom Tgh disembunyikan dan Total = Terpakai bulan itu.
+// TOTAL, TANDA * & RINCIAN
+// Angka dihitung di backend (AdminController::buildLaporanData()).
+// Total = Terpakai (cuti disetujui setelah koreksi Admin HR); cuti
+// ditangguhkan dikembalikan ke saldo, jadi tidak dihitung.
 // ================================================================
 const adaEdit = (item) => Boolean(item.ada_edit);
 
 const adaItemDiedit = computed(() => props.laporan.some(adaEdit));
 
-// Tgh selalu tampil di mode "Semua Bulan", walau 0
-const nilaiTgh = (item) => Number(item.tgh) || 0;
+const totalTampil = (item) => Number(item.total) || 0;
 
-// [FILTER BULAN] Total yang ditampilkan: Terpakai + Tgh, atau Terpakai
-// bulan itu saja saat filter bulan aktif.
-const totalTampil = (item) =>
-    modeBulan.value ? Number(item.terpakai) || 0 : Number(item.total) || 0;
-
-// Nama bulan yang difilter (null bila "Semua Bulan"), mengikuti data server.
+// Nama bulan yang difilter (null bila "Semua Bulan").
 const namaBulanAktif = computed(() =>
     props.filters.bulan
         ? bulanList[parseInt(props.filters.bulan, 10) - 1]
@@ -255,17 +242,33 @@ const namaBulanAktif = computed(() =>
 const teksStatus = (diedit, sistem) =>
     diedit ? `koreksi, semula ${Number(sistem) || 0} hari` : "";
 
-// Tooltip jejak koreksi: siapa, kapan, alasan.
+// Jejak koreksi terakhir: siapa, kapan, alasan.
 const teksInfoEdit = (info) => {
     if (!info) return undefined;
-    let teks = `Dikoreksi oleh ${info.oleh || "Admin HR"}`;
+    let teks = `Koreksi terakhir oleh ${info.oleh || "Admin HR"}`;
     if (info.waktu) teks += `, ${info.waktu}`;
     if (info.alasan) teks += `. Alasan: ${info.alasan}`;
     return teks;
 };
 
-// Dua baris rincian, selalu berurutan: Terpakai, lalu Tgh.
-const semuaBarisRincian = (item) => [
+// Bulan yang dikoreksi: [{ key, bulan, sistem, sekarang }].
+// Filter bulan aktif -> hanya bulan itu.
+const daftarKoreksiBulan = (item) =>
+    keyBulan
+        .map((key, i) => ({
+            key,
+            bulan: bulanList[i],
+            sistem: Number(item.cuti_sistem?.[key]) || 0,
+            sekarang: nilaiBulan(item, key),
+        }))
+        .filter(
+            (b) =>
+                bulanDiedit(item, b.key) &&
+                (!namaBulanAktif.value || b.bulan === namaBulanAktif.value),
+        );
+
+// Baris rincian: hanya Terpakai.
+const barisRincian = (item) => [
     {
         key: "terpakai",
         label: "Terpakai",
@@ -274,34 +277,41 @@ const semuaBarisRincian = (item) => [
         sistem: Number(item.terpakai_sistem) || 0,
         status: teksStatus(item.terpakai_diedit, item.terpakai_sistem),
         info: teksInfoEdit(item.info_terpakai_edit),
-    },
-    {
-        key: "tgh",
-        label: "Tgh",
-        nilai: Number(item.tgh) || 0,
-        diedit: Boolean(item.tgh_diedit),
-        sistem: Number(item.tgh_sistem) || 0,
-        status: teksStatus(item.tgh_diedit, item.tgh_sistem),
-        info: teksInfoEdit(item.info_tgh_edit),
+        bulanKoreksi: daftarKoreksiBulan(item),
     },
 ];
 
-// [FILTER BULAN] Saat filter bulan aktif, hanya baris Terpakai.
-const barisRincian = (item) => {
-    const baris = semuaBarisRincian(item);
-    return modeBulan.value ? baris.slice(0, 1) : baris;
+// Kalimat penjelas asal angka.
+const keteranganBaris = (baris) => {
+    if (!baris.diedit) {
+        return "Dihitung otomatis dari cuti yang disetujui.";
+    }
+    // Koreksi per bulan (cara edit sekarang).
+    if (baris.bulanKoreksi.length > 0) {
+        const selisih = baris.nilai - baris.sistem;
+        if (selisih === 0) {
+            return `Total tetap ${baris.nilai} hari, tetapi ada bulan yang dikoreksi Admin HR (lihat rincian di bawah).`;
+        }
+        const tanda = selisih > 0 ? "+" : "";
+        return `Sistem mencatat ${baris.sistem} hari. Setelah koreksi per bulan oleh Admin HR menjadi ${baris.nilai} hari (${tanda}${selisih}).`;
+    }
+    // Koreksi tahunan lama (tanpa rincian bulan).
+    return `Hasil sistem ${baris.sistem} hari, dikoreksi Admin HR jadi ${baris.nilai} hari.`;
 };
 
+const judulRincian = (item) =>
+    `Rincian Terpakai: ${totalTampil(item)} hari${
+        namaBulanAktif.value ? ` (${namaBulanAktif.value})` : ""
+    }`;
+
 // ================================================================
-// MODAL RINCIAN TOTAL
-// Tombol (i) di kolom Aksi membuka modal (tengah layar di desktop, bottom
-// sheet di HP) lewat Teleport ke body. Ditutup lewat area gelap, tombol X,
-// "Tutup Rincian", atau Esc. Scroll halaman dikunci selama terbuka; fokus
-// pindah ke tombol X lalu kembali ke tombol (i).
+// MODAL RINCIAN
+// Tombol (i) di kolom Aksi membuka modal (tengah di desktop, bottom
+// sheet di HP) lewat Teleport. Tutup: area gelap, X, tombol, atau Esc.
 // ================================================================
 const popover = ref(null);
-const tombolTutupRef = ref(null); // tombol X di modal (menerima fokus saat dibuka)
-let pemicuFokus = null; // tombol (i) yang membuka modal (non-reaktif)
+const tombolTutupRef = ref(null);
+let pemicuFokus = null; // tombol (i) pembuka modal, untuk mengembalikan fokus
 
 const kunciItem = (item, index) => item.id ?? `idx-${index}`;
 
@@ -329,158 +339,83 @@ watch(
     () => tutupPopover(),
 );
 
-// Kalimat penjelas asal angka tiap komponen
-const keteranganBaris = (baris) => {
-    if (baris.diedit) {
-        return `Hasil sistem ${baris.sistem} hari, dikoreksi Admin HR jadi ${baris.nilai} hari.`;
-    }
-    if (baris.key === "terpakai") {
-        return "Dihitung otomatis dari cuti yang disetujui.";
-    }
-    return "Cuti disetujui yang ditangguhkan. Tetap dihitung di Total.";
-};
-
-const judulRincian = (item) =>
-    `Rincian Total: ${totalTampil(item)} hari${
-        namaBulanAktif.value ? ` (${namaBulanAktif.value})` : ""
-    }`;
-
 // ================================================================
-// [KOREKSI BULANAN] MODAL EDIT KOREKSI (hanya Admin HR / bisaEdit)
-// Admin mengubah angka per bulan dan total Tgh tahun laporan dalam satu
-// form, disimpan ke route admin.rekap.koreksi.
-//   - Kolom kosong atau sama dengan angka sistem -> koreksi dihapus.
-//   - Form memakai angka setahun penuh, tidak terpengaruh filter Bulan.
-//   - Batas (Terpakai <= Total Hak Tersedia) dijaga backend; galatnya
-//     ditampilkan di modal.
+// EDIT LANGSUNG DI SEL BULAN (hanya Admin HR)
+// Klik angka -> input. Enter / ✓ = simpan, Esc / ✕ = batal. Tidak ada
+// simpan otomatis saat blur. Kosong atau sama dengan angka sistem =
+// koreksi dihapus. Batas hak dijaga backend; galat tampil di banner.
 // ================================================================
-const editItem = ref(null);
-const formCuti = ref({});
-const formTgh = ref("");
-const galatEdit = ref("");
+const selAktif = ref(null); // { id, key }
+const nilaiEdit = ref("");
 const sedangSimpan = ref(false);
-const tombolTutupEditRef = ref(null);
-let pemicuFokusEdit = null;
+const galatSel = ref("");
 
-const keAngka = (v) => {
-    if (v === null || v === undefined) return null;
-    const s = String(v).trim();
-    if (s === "") return null;
-    return Number(s);
+const sedangEditSel = (item, key) =>
+    selAktif.value?.id === item.id && selAktif.value?.key === key;
+
+// Baris ini punya sel yang sedang diedit? (✓ / ✕ di kolom Aksi)
+const sedangEditBaris = (item) => selAktif.value?.id === item.id;
+
+// Tabel & kartu sama-sama ada di DOM; fokus ke input yang terlihat.
+const fokusInputSel = () => {
+    const daftar = Array.from(document.querySelectorAll("[data-sel-edit]"));
+    const el = daftar.find((n) => n.offsetParent !== null) || daftar[0];
+    el?.focus();
+    el?.select?.();
 };
 
-const angkaValid = (n, maks) =>
-    n === null || (Number.isInteger(n) && n >= 0 && n <= maks);
-
-const bukaEdit = (item, event = null) => {
-    if (!props.bisaEdit) return;
+const mulaiEditSel = (item, key) => {
+    if (!props.bisaEdit || sedangSimpan.value) return;
     tutupPopover();
-    pemicuFokusEdit = event?.currentTarget ?? null;
-    const cuti = {};
-    keyBulan.forEach((key) => {
-        cuti[key] = String(Number(item.cuti?.[key]) || 0);
-    });
-    formCuti.value = cuti;
-    formTgh.value = String(Number(item.tgh_tahunan) || 0);
-    galatEdit.value = "";
-    editItem.value = item;
-    nextTick(() => tombolTutupEditRef.value?.focus());
+    selAktif.value = { id: item.id, key };
+    nilaiEdit.value = String(nilaiBulan(item, key));
+    galatSel.value = "";
+    nextTick(fokusInputSel);
 };
 
-const tutupEdit = () => {
-    if (!editItem.value || sedangSimpan.value) return;
-    editItem.value = null;
-    galatEdit.value = "";
-    const pemicu = pemicuFokusEdit;
-    pemicuFokusEdit = null;
-    nextTick(() => pemicu?.focus?.());
+const batalEditSel = () => {
+    if (sedangSimpan.value) return;
+    selAktif.value = null;
 };
 
-const sistemBulan = (key) => Number(editItem.value?.cuti_sistem?.[key]) || 0;
-const semulaBulan = (key) => Number(editItem.value?.cuti?.[key]) || 0;
+const simpanSel = (item) => {
+    if (!selAktif.value || sedangSimpan.value) return;
+    const key = selAktif.value.key;
+    const teks = String(nilaiEdit.value ?? "").trim();
+    const n = teks === "" ? null : Number(teks);
 
-// Kolom kosong = kembali ke angka sistem.
-const nilaiForm = (key) => {
-    const n = keAngka(formCuti.value[key]);
-    return n === null ? sistemBulan(key) : n;
-};
-
-const bulanBerbedaDariSistem = (key) => nilaiForm(key) !== sistemBulan(key);
-
-const kembalikanKeSistem = (key) => {
-    formCuti.value[key] = String(sistemBulan(key));
-};
-
-const totalTerpakaiForm = computed(() =>
-    keyBulan.reduce((jumlah, key) => {
-        const n = nilaiForm(key);
-        return jumlah + (Number.isFinite(n) ? n : 0);
-    }, 0),
-);
-
-const tghForm = computed(() => {
-    const n = keAngka(formTgh.value);
-    return n === null || !Number.isFinite(n) ? 0 : n;
-});
-
-const adaInputTidakValid = computed(() => {
-    if (!editItem.value) return false;
-    const bulanSalah = keyBulan.some(
-        (key) => !angkaValid(keAngka(formCuti.value[key]), 31),
-    );
-    return bulanSalah || !angkaValid(keAngka(formTgh.value), 365);
-});
-
-const adaPerubahanForm = computed(() => {
-    if (!editItem.value) return false;
-    const bulanBerubah = keyBulan.some(
-        (key) => nilaiForm(key) !== semulaBulan(key),
-    );
-    const tghBerubah =
-        tghForm.value !== (Number(editItem.value.tgh_tahunan) || 0);
-    return bulanBerubah || tghBerubah;
-});
-
-const simpanEdit = () => {
-    if (!editItem.value || sedangSimpan.value) return;
-    if (adaInputTidakValid.value) {
-        galatEdit.value =
-            "Isi angka bulat: 0 sampai 31 untuk bulan, 0 sampai 365 untuk Tgh.";
-        return;
-    }
-    if (!adaPerubahanForm.value) {
-        galatEdit.value = "Belum ada angka yang berubah.";
+    if (n !== null && !(Number.isInteger(n) && n >= 0 && n <= 31)) {
+        galatSel.value = "Isi angka bulat 0 sampai 31.";
+        selAktif.value = null;
         return;
     }
 
-    const cuti = {};
-    keyBulan.forEach((key) => {
-        cuti[key] = keAngka(formCuti.value[key]);
-    });
+    // Kosong = kembali ke hitungan sistem.
+    const baru = n === null ? Number(item.cuti_sistem?.[key]) || 0 : n;
+    if (baru === nilaiBulan(item, key)) {
+        selAktif.value = null;
+        return;
+    }
 
     router.post(
-        route("admin.rekap.koreksi", editItem.value.id),
-        {
-            tahun: props.tahun || Number(filterTahun.value),
-            cuti,
-            tgh: keAngka(formTgh.value) ?? 0,
-        },
+        route("admin.rekap.koreksi", item.id),
+        { tahun: props.tahun || Number(filterTahun.value), cuti: { [key]: n } },
         {
             preserveScroll: true,
             preserveState: true,
             onStart: () => {
                 sedangSimpan.value = true;
-                galatEdit.value = "";
+                galatSel.value = "";
             },
             onSuccess: () => {
-                sedangSimpan.value = false;
-                tutupEdit();
+                selAktif.value = null;
             },
             onError: (errors) => {
-                galatEdit.value =
+                galatSel.value =
                     Object.values(errors || {})
                         .flat()
                         .join(" ") || "Gagal menyimpan koreksi.";
+                selAktif.value = null;
             },
             onFinish: () => {
                 sedangSimpan.value = false;
@@ -489,31 +424,25 @@ const simpanEdit = () => {
     );
 };
 
-// Esc menutup modal paling atas (edit dulu, baru rincian).
+// Esc menutup modal rincian (Esc di dalam input hanya membatalkan edit).
 const tutupPopoverSaatEsc = (event) => {
-    if (event.key !== "Escape") return;
-    if (editItem.value) tutupEdit();
-    else tutupPopover();
+    if (event.key === "Escape" && !selAktif.value) tutupPopover();
 };
 
 // Kunci scroll halaman selama modal terbuka & fokuskan tombol X.
-watch(
-    () => [popover.value, editItem.value],
-    ([rincian, edit]) => {
-        document.body.style.overflow = rincian || edit ? "hidden" : "";
-        if (rincian && !edit) nextTick(() => tombolTutupRef.value?.focus());
-    },
-);
-
-const isFilterAktif = computed(() => {
-    return (
-        Boolean(searchQuery.value) ||
-        Boolean(filterBulan.value) ||
-        Boolean(filterKelompok.value)
-    );
+watch(popover, (rincian) => {
+    document.body.style.overflow = rincian ? "hidden" : "";
+    if (rincian) nextTick(() => tombolTutupRef.value?.focus());
 });
 
-// Chip filter aktif (hanya yang bukan nilai default)
+const isFilterAktif = computed(
+    () =>
+        Boolean(searchQuery.value) ||
+        Boolean(filterBulan.value) ||
+        Boolean(filterKelompok.value),
+);
+
+// Chip filter aktif.
 const activeFilterChips = computed(() => {
     const chips = [];
     if (searchQuery.value) {
@@ -576,10 +505,8 @@ const resetFilters = () => {
 };
 
 // ================================================================
-// DROPDOWN FILTER KUSTOM (Kelompok Substansi, Bulan, Tahun)
-// Daftar muncul tepat di bawah kotaknya dengan lebar sama, tinggi dibatasi
-// (bisa di-scroll). Hanya satu terbuka sekaligus; menutup saat klik di luar
-// atau Esc.
+// DROPDOWN FILTER KUSTOM (Kelompok, Bulan, Tahun)
+// Satu terbuka sekaligus; tutup saat klik di luar atau Esc.
 // ================================================================
 const toolbarRef = ref(null);
 const dropdownTerbuka = ref(null); // 'kelompok' | 'bulan' | 'tahun' | null
@@ -640,8 +567,7 @@ onBeforeUnmount(() => {
     <Head title="Rekap Laporan Cuti" />
 
     <MainLayout>
-        <!-- Kartu putih harus jadi satu-satunya elemen anak MainLayout
-             (slot dibungkus Transition yang hanya menerima satu anak). -->
+        <!-- Kartu putih harus satu-satunya elemen anak MainLayout. -->
         <div
             class="bg-white shadow-sm sm:rounded-xl rounded-lg border border-gray-200 p-3 sm:p-4"
         >
@@ -659,8 +585,9 @@ onBeforeUnmount(() => {
                         Rekap pemakaian cuti tiap pegawai per bulan dalam satu
                         tahun.
                         <span v-if="bisaEdit">
-                            Admin HR dapat mengoreksi angka per bulan lewat
-                            tombol pensil.
+                            Admin HR dapat mengoreksi angka per bulan dengan
+                            klik angkanya, lalu tekan ✓ (Simpan) untuk
+                            menyimpan.
                         </span>
                     </p>
                 </div>
@@ -694,10 +621,16 @@ onBeforeUnmount(() => {
                 </a>
             </div>
 
-            <!-- ===================== TOOLBAR: SEARCH + FILTER =====================
-                 HP: Search, Kelompok, lalu Bulan & Tahun berdampingan.
-                 Tablet: Search, lalu Kelompok | Bulan | Tahun satu baris.
-                 Desktop: semua dalam satu baris, turun bila ruang kurang. -->
+            <!-- Banner galat simpan koreksi -->
+            <p
+                v-if="galatSel"
+                role="alert"
+                class="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700"
+            >
+                {{ galatSel }}
+            </p>
+
+            <!-- ===================== TOOLBAR: SEARCH + FILTER ===================== -->
             <div
                 ref="toolbarRef"
                 class="flex flex-col gap-2 mb-3 lg:flex-row lg:flex-wrap lg:items-center"
@@ -736,11 +669,11 @@ onBeforeUnmount(() => {
                     />
                 </div>
 
-                <!-- Filter group: dropdown kustom (bukan select bawaan browser) -->
+                <!-- Filter group: dropdown kustom -->
                 <div
                     class="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_9rem_6.5rem] lg:flex lg:flex-none lg:items-center"
                 >
-                    <!-- Filter Kelompok Substansi -->
+                    <!-- Kelompok Substansi -->
                     <div
                         class="relative col-span-2 min-w-0 sm:col-span-1 lg:col-auto lg:shrink-0 lg:min-w-[17rem] lg:max-w-[24rem]"
                     >
@@ -841,7 +774,7 @@ onBeforeUnmount(() => {
                         </ul>
                     </div>
 
-                    <!-- Filter Bulan -->
+                    <!-- Bulan -->
                     <div class="relative min-w-0 lg:w-36 lg:shrink-0">
                         <button
                             id="filter-bulan-laporan"
@@ -922,7 +855,7 @@ onBeforeUnmount(() => {
                         </ul>
                     </div>
 
-                    <!-- Filter Tahun (dinamis, composable useTahunFilter) -->
+                    <!-- Tahun -->
                     <div class="relative min-w-0 lg:w-24 lg:shrink-0">
                         <button
                             id="filter-tahun-laporan"
@@ -1021,17 +954,20 @@ onBeforeUnmount(() => {
                 </button>
             </div>
 
-            <!-- ===================== KARTU PER PEGAWAI (HP & TABLET, di bawah 1024px) =====================
-                 Nama, NIP, Total di atas; grid bulan + kotak Tgh; lalu rincian
-                 Total (Terpakai & Tgh). Warna kuning + * hanya bila ada koreksi
-                 Admin HR. [FILTER BULAN] Grid hanya bulan terpilih tanpa kotak
-                 Tgh. [KOREKSI BULANAN] Admin HR mendapat tombol "Edit Koreksi". -->
+            <!-- ===================== KARTU PER PEGAWAI (HP & TABLET, < 1024px) =====================
+                 Nama, NIP, Total; grid bulan; bar Batal/Simpan saat edit;
+                 rincian Terpakai. Kuning + * = koreksi Admin HR. -->
             <div class="lg:hidden">
                 <ul v-if="laporan.length > 0" class="grid gap-3 sm:grid-cols-2">
                     <li
                         v-for="(item, index) in laporan"
                         :key="item.id || startIndex + index"
-                        class="flex flex-col rounded-xl border border-slate-200 bg-white overflow-hidden active:bg-violet-50/40 transition-colors"
+                        class="flex flex-col rounded-xl border bg-white overflow-hidden transition-colors"
+                        :class="
+                            sedangEditBaris(item)
+                                ? 'border-emerald-400 ring-2 ring-emerald-200'
+                                : 'border-slate-200 active:bg-violet-50/40'
+                        "
                     >
                         <div class="flex items-start gap-3 px-3 pt-3 pb-2.5">
                             <span
@@ -1070,7 +1006,7 @@ onBeforeUnmount(() => {
                             </div>
                         </div>
 
-                        <!-- Grid bulan + kotak Tgh (Tgh hanya di mode "Semua Bulan") -->
+                        <!-- Grid bulan -->
                         <div
                             class="grid gap-1.5 px-3 pb-3"
                             :class="
@@ -1094,7 +1030,47 @@ onBeforeUnmount(() => {
                                             : col.short
                                     }}</span
                                 >
+
+                                <!-- Sedang diedit -->
+                                <input
+                                    v-if="sedangEditSel(item, col.key)"
+                                    data-sel-edit
+                                    v-model="nilaiEdit"
+                                    type="number"
+                                    inputmode="numeric"
+                                    min="0"
+                                    max="31"
+                                    step="1"
+                                    :disabled="sedangSimpan"
+                                    @keydown.enter.prevent="simpanSel(item)"
+                                    @keydown.esc.prevent="batalEditSel"
+                                    class="mt-1 w-12 rounded-md border-2 border-emerald-500 bg-white px-1 py-0.5 text-center text-base font-bold tabular-nums text-slate-800 focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                />
+
+                                <!-- Admin HR: ketuk untuk edit -->
+                                <button
+                                    v-else-if="bisaEdit"
+                                    type="button"
+                                    @click="mulaiEditSel(item, col.key)"
+                                    class="mt-1 min-w-[32px] rounded-md px-1 text-sm leading-none tabular-nums focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                                    :class="
+                                        nilaiBulan(item, col.key) > 0 ||
+                                        bulanDiedit(item, col.key)
+                                            ? 'font-bold'
+                                            : 'font-medium'
+                                    "
+                                >
+                                    {{ nilaiBulan(item, col.key)
+                                    }}<sup
+                                        v-if="bulanDiedit(item, col.key)"
+                                        class="ml-0.5 text-amber-600 font-black"
+                                        >*</sup
+                                    >
+                                </button>
+
+                                <!-- Bukan Admin HR: hanya tampil -->
                                 <span
+                                    v-else
                                     class="mt-1 text-sm leading-none tabular-nums"
                                     :class="
                                         nilaiBulan(item, col.key) > 0 ||
@@ -1110,43 +1086,43 @@ onBeforeUnmount(() => {
                                     ></span
                                 >
                             </div>
+                        </div>
 
-                            <!-- Kotak Tgh: oranye bila ada, abu-abu bila 0;
-                                 * = dikoreksi Admin HR; sembunyi saat filter Bulan. -->
-                            <div
-                                v-if="!modeBulan"
-                                :class="
-                                    nilaiTgh(item) > 0
-                                        ? 'bg-orange-100 border-orange-300/80 text-orange-800'
-                                        : 'bg-slate-50 border-slate-200 text-slate-400'
-                                "
-                                class="flex flex-col items-center justify-center rounded-lg border py-1.5"
-                                title="Tgh = cuti yang sudah disetujui lalu ditangguhkan. Harinya tetap dihitung di Total."
+                        <!-- Aksi edit: Batal + Simpan (seperti kartu Rekap Kuota Detail) -->
+                        <div
+                            v-if="sedangEditBaris(item)"
+                            class="flex items-center justify-between gap-2 border-t border-emerald-200 bg-emerald-50/60 px-3 py-2"
+                        >
+                            <p
+                                class="min-w-0 text-[11px] leading-snug text-emerald-800"
                             >
-                                <span
-                                    class="text-[10px] font-semibold leading-none"
-                                    >Tgh</span
+                                Ubah angka bulan, lalu tekan Simpan.
+                            </p>
+                            <div class="flex shrink-0 items-center gap-1.5">
+                                <button
+                                    type="button"
+                                    @click="batalEditSel"
+                                    :disabled="sedangSimpan"
+                                    class="min-h-[40px] cursor-pointer rounded-full bg-gray-200 px-3.5 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-300 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
-                                <span
-                                    class="mt-1 text-sm leading-none tabular-nums"
-                                    :class="
-                                        nilaiTgh(item) > 0
-                                            ? 'font-bold'
-                                            : 'font-medium'
-                                    "
-                                    >{{ nilaiTgh(item)
-                                    }}<sup
-                                        v-if="item.tgh_diedit"
-                                        class="ml-0.5 text-amber-600 font-black"
-                                        >*</sup
-                                    ></span
+                                    Batal
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="simpanSel(item)"
+                                    :disabled="sedangSimpan"
+                                    class="inline-flex min-h-[40px] cursor-pointer items-center justify-center rounded-full bg-emerald-600 px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
+                                    {{
+                                        sedangSimpan
+                                            ? "Menyimpan..."
+                                            : "Simpan"
+                                    }}
+                                </button>
                             </div>
                         </div>
 
-                        <!-- Rincian Total: dua baris (Terpakai & Tgh), atau hanya
-                             Terpakai saat filter bulan. Catatan koreksi hanya bila
-                             angka diubah Admin HR. -->
+                        <!-- Rincian Terpakai; kuning bila ada koreksi Admin HR -->
                         <div
                             class="mt-auto border-t px-3 py-2 text-[11px] leading-snug"
                             :class="
@@ -1170,35 +1146,28 @@ onBeforeUnmount(() => {
                                         v-if="baris.diedit"
                                         class="mt-0.5 block pl-3 font-semibold"
                                         :title="baris.info"
-                                        >Koreksi, semula
-                                        {{ baris.sistem }} hari</span
                                     >
+                                        <template
+                                            v-if="baris.bulanKoreksi.length > 0"
+                                        >
+                                            Dikoreksi:
+                                            {{
+                                                baris.bulanKoreksi
+                                                    .map(
+                                                        (b) =>
+                                                            `${b.bulan.slice(0, 3)} ${b.sistem}→${b.sekarang}`,
+                                                    )
+                                                    .join(", ")
+                                            }}
+                                        </template>
+                                        <template v-else
+                                            >Koreksi, semula
+                                            {{ baris.sistem }} hari</template
+                                        >
+                                    </span>
                                 </li>
                             </ul>
                         </div>
-
-                        <!-- [KOREKSI BULANAN] Tombol edit (hanya Admin HR) -->
-                        <button
-                            v-if="bisaEdit"
-                            type="button"
-                            @click="bukaEdit(item, $event)"
-                            class="inline-flex min-h-[44px] w-full items-center justify-center gap-1.5 border-t border-slate-200 bg-white text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-50 active:bg-emerald-100"
-                        >
-                            <svg
-                                class="w-4 h-4"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M15.232 5.232l3.536 3.536M9 13l6.768-6.768a2 2 0 112.828 2.828L11.828 15.83a4 4 0 01-1.414.943L7 18l1.227-3.414A4 4 0 019 13z"
-                                ></path>
-                            </svg>
-                            Edit Koreksi
-                        </button>
                     </li>
                 </ul>
 
@@ -1251,11 +1220,9 @@ onBeforeUnmount(() => {
                 </div>
             </div>
 
-            <!-- ===================== TABEL (DESKTOP, 1024px ke atas) =====================
-                 Kompak agar semua kolom terlihat tanpa geser horizontal: header
-                 bulan disingkat (lengkap di 2xl), kolom No & Nama sticky.
-                 [FILTER BULAN] Kolom Tgh disembunyikan. Tombol (i) di kolom Aksi
-                 membuka modal rincian; Admin HR juga dapat tombol pensil. -->
+            <!-- ===================== TABEL (DESKTOP, >= 1024px) =====================
+                 Kolom No & Nama sticky. Saat sebuah baris diedit, kolom Aksi
+                 berganti dari (i) menjadi ✓ (simpan) dan ✕ (batal). -->
             <div
                 class="hidden lg:block overflow-x-auto rounded-lg border border-slate-200 bg-white"
             >
@@ -1292,24 +1259,13 @@ onBeforeUnmount(() => {
                                 </template>
                             </th>
                             <th
-                                v-if="!modeBulan"
-                                class="px-1 2xl:px-2 py-3 text-center text-orange-600"
-                                title="Tgh = cuti yang sudah disetujui lalu ditangguhkan. Harinya tetap dihitung di Total."
-                            >
-                                Tgh
-                            </th>
-                            <th
                                 class="px-2 py-3 text-center text-slate-800 bg-slate-100/70"
                             >
                                 Total
                             </th>
                             <th
-                                class="px-2 py-3 text-center text-slate-500"
-                                :title="
-                                    bisaEdit
-                                        ? 'Lihat rincian total atau edit koreksi'
-                                        : 'Klik tombol untuk melihat rincian total'
-                                "
+                                class="px-2 py-3 text-center text-slate-500 min-w-[6.5rem]"
+                                title="Klik tombol untuk melihat rincian"
                             >
                                 Aksi
                             </th>
@@ -1323,17 +1279,31 @@ onBeforeUnmount(() => {
                             v-for="(item, index) in laporan"
                             :key="item.id || startIndex + index"
                         >
-                            <!-- Baris data -->
                             <tr
-                                class="group border-b border-slate-100 hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)] transition-all duration-150"
+                                class="group border-b border-slate-100 transition-all duration-150"
+                                :class="
+                                    sedangEditBaris(item)
+                                        ? 'bg-emerald-50/60 shadow-[inset_4px_0_0_0_theme(colors.emerald.500)]'
+                                        : 'hover:bg-violet-50 hover:shadow-[inset_4px_0_0_0_theme(colors.violet.400)]'
+                                "
                             >
                                 <td
-                                    class="sticky left-0 z-10 bg-white group-hover:bg-violet-50 w-10 min-w-[2.5rem] px-1 py-3 text-center text-sm font-semibold text-slate-800 border-r border-slate-200 transition-colors duration-150"
+                                    class="sticky left-0 z-10 w-10 min-w-[2.5rem] px-1 py-3 text-center text-sm font-semibold text-slate-800 border-r border-slate-200 transition-colors duration-150"
+                                    :class="
+                                        sedangEditBaris(item)
+                                            ? 'bg-emerald-50'
+                                            : 'bg-white group-hover:bg-violet-50'
+                                    "
                                 >
                                     {{ startIndex + index + 1 }}
                                 </td>
                                 <td
-                                    class="sticky left-10 z-10 bg-white group-hover:bg-violet-50 min-w-[170px] 2xl:min-w-[220px] px-3 py-3 border-r-2 border-slate-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors duration-150"
+                                    class="sticky left-10 z-10 min-w-[170px] 2xl:min-w-[220px] px-3 py-3 border-r-2 border-slate-300 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.08)] transition-colors duration-150"
+                                    :class="
+                                        sedangEditBaris(item)
+                                            ? 'bg-emerald-50'
+                                            : 'bg-white group-hover:bg-violet-50'
+                                    "
                                 >
                                     <div
                                         class="text-xs 2xl:text-sm font-bold text-slate-800 uppercase leading-snug break-words"
@@ -1346,12 +1316,52 @@ onBeforeUnmount(() => {
                                         {{ item.nip }}
                                     </div>
                                 </td>
+
+                                <!-- Sel bulan -->
                                 <td
                                     v-for="col in columnsToShow"
                                     :key="col.key"
                                     class="px-1 2xl:px-2 py-3 text-center"
                                 >
+                                    <!-- Sedang diedit: Enter / ✓ = simpan, Esc / ✕ = batal -->
+                                    <input
+                                        v-if="sedangEditSel(item, col.key)"
+                                        data-sel-edit
+                                        v-model="nilaiEdit"
+                                        type="number"
+                                        inputmode="numeric"
+                                        min="0"
+                                        max="31"
+                                        step="1"
+                                        :disabled="sedangSimpan"
+                                        @keydown.enter.prevent="simpanSel(item)"
+                                        @keydown.esc.prevent="batalEditSel"
+                                        class="w-10 rounded-md border-2 border-emerald-500 px-1 py-1 text-center text-xs font-bold tabular-nums focus:outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    />
+
+                                    <!-- Admin HR: klik angka untuk mengedit -->
+                                    <button
+                                        v-else-if="bisaEdit"
+                                        type="button"
+                                        @click="mulaiEditSel(item, col.key)"
+                                        :class="kelasBulanTabel(item, col.key)"
+                                        :title="
+                                            titleBulan(item, col.key) ||
+                                            'Klik untuk mengubah'
+                                        "
+                                        class="inline-block min-w-[28px] 2xl:min-w-[32px] cursor-text px-1 2xl:px-2 py-1 rounded-md text-xs border hover:ring-2 hover:ring-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                                    >
+                                        {{ nilaiBulan(item, col.key)
+                                        }}<sup
+                                            v-if="bulanDiedit(item, col.key)"
+                                            class="ml-0.5 text-amber-600 font-black"
+                                            >*</sup
+                                        >
+                                    </button>
+
+                                    <!-- Bukan Admin HR: hanya tampil -->
                                     <span
+                                        v-else
                                         :class="kelasBulanTabel(item, col.key)"
                                         :title="titleBulan(item, col.key)"
                                         class="inline-block min-w-[28px] 2xl:min-w-[32px] px-1 2xl:px-2 py-1 rounded-md text-xs border"
@@ -1364,40 +1374,11 @@ onBeforeUnmount(() => {
                                         >
                                     </span>
                                 </td>
-                                <!-- Kolom Tgh: oranye bila ada, abu-abu bila 0;
-                                     * = dikoreksi Admin HR; sembunyi saat filter Bulan. -->
-                                <td
-                                    v-if="!modeBulan"
-                                    class="px-1 2xl:px-2 py-3 text-center"
-                                >
-                                    <span
-                                        :class="
-                                            nilaiTgh(item) > 0
-                                                ? 'bg-orange-100 text-orange-800 font-bold border-orange-300/80'
-                                                : 'bg-slate-100 text-slate-500 font-medium border-slate-200'
-                                        "
-                                        class="inline-block min-w-[28px] 2xl:min-w-[32px] px-1 2xl:px-2 py-1 rounded-md text-xs border"
-                                        :title="
-                                            item.tgh_diedit
-                                                ? teksInfoEdit(
-                                                      item.info_tgh_edit,
-                                                  )
-                                                : undefined
-                                        "
-                                    >
-                                        {{ nilaiTgh(item)
-                                        }}<sup
-                                            v-if="item.tgh_diedit"
-                                            class="ml-0.5 text-amber-600 font-black"
-                                            >*</sup
-                                        >
-                                    </span>
-                                </td>
+
+                                <!-- Total; * = ada angka yang dikoreksi Admin HR -->
                                 <td
                                     class="px-2 py-3 text-center bg-slate-50/70"
                                 >
-                                    <!-- * = ada komponen yang dikoreksi Admin HR
-                                         (rincian ada di modal kolom Aksi). -->
                                     <span
                                         class="inline-block min-w-[36px] px-2 py-1 bg-emerald-100 text-emerald-800 rounded-md font-bold text-xs border border-emerald-300/80"
                                     >
@@ -1410,25 +1391,22 @@ onBeforeUnmount(() => {
                                     </span>
                                 </td>
 
-                                <!-- Kolom Aksi: (i) rincian + pensil edit koreksi -->
+                                <!-- Aksi: (i) rincian, atau ✓ / ✕ saat diedit -->
                                 <td class="px-2 py-3 text-center">
                                     <div class="inline-flex items-center gap-1">
                                         <button
+                                            v-if="!sedangEditBaris(item)"
                                             type="button"
                                             @click.stop="
-                                                togglePopover(
-                                                    $event,
-                                                    item,
-                                                    index,
-                                                )
+                                                togglePopover($event, item, index)
                                             "
                                             aria-haspopup="dialog"
                                             :aria-expanded="
                                                 popover?.key ===
                                                 kunciItem(item, index)
                                             "
-                                            title="Lihat rincian total"
-                                            aria-label="Lihat rincian total"
+                                            title="Lihat rincian"
+                                            aria-label="Lihat rincian"
                                             class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400"
                                             :class="
                                                 popover?.key ===
@@ -1451,40 +1429,64 @@ onBeforeUnmount(() => {
                                                 ></path>
                                             </svg>
                                         </button>
-                                        <button
-                                            v-if="bisaEdit"
-                                            type="button"
-                                            @click.stop="bukaEdit(item, $event)"
-                                            title="Edit koreksi cuti"
-                                            aria-label="Edit koreksi cuti"
-                                            class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-500 transition-colors hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                        >
-                                            <svg
-                                                class="w-4 h-4"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                viewBox="0 0 24 24"
+
+                                        <template v-else>
+                                            <button
+                                                type="button"
+                                                @click="simpanSel(item)"
+                                                :disabled="sedangSimpan"
+                                                class="inline-flex items-center px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-full shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                                title="Simpan (Enter)"
+                                                aria-label="Simpan"
                                             >
-                                                <path
-                                                    stroke-linecap="round"
-                                                    stroke-linejoin="round"
-                                                    stroke-width="2"
-                                                    d="M15.232 5.232l3.536 3.536M9 13l6.768-6.768a2 2 0 112.828 2.828L11.828 15.83a4 4 0 01-1.414.943L7 18l1.227-3.414A4 4 0 019 13z"
-                                                ></path>
-                                            </svg>
-                                        </button>
+                                                <svg
+                                                    class="w-4 h-4"
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                >
+                                                    <path
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M5 13l4 4L19 7"
+                                                    />
+                                                </svg>
+                                            </button>
+                                            <button
+                                                type="button"
+                                                @click="batalEditSel"
+                                                :disabled="sedangSimpan"
+                                                class="inline-flex items-center px-2.5 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-full transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                                title="Batal (Esc)"
+                                                aria-label="Batal edit"
+                                            >
+                                                <svg
+                                                    class="w-4 h-4"
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                >
+                                                    <path
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        stroke-width="2"
+                                                        d="M6 18L18 6M6 6l12 12"
+                                                    />
+                                                </svg>
+                                            </button>
+                                        </template>
                                     </div>
                                 </td>
                             </tr>
                         </template>
                     </tbody>
 
+                    <!-- Empty state tabel (4 = No, Nama, Total, Aksi) -->
                     <tbody v-else class="bg-white">
                         <tr>
                             <td
-                                :colspan="
-                                    (modeBulan ? 4 : 5) + columnsToShow.length
-                                "
+                                :colspan="4 + columnsToShow.length"
                                 class="px-6 py-14"
                             >
                                 <div
@@ -1540,16 +1542,14 @@ onBeforeUnmount(() => {
                 </table>
             </div>
 
-            <!-- Catatan kaki: penjelasan Tgh (mode "Semua Bulan") atau Total per
-                 bulan (filter bulan). Catatan * hanya bila ada koreksi Admin HR. -->
+            <!-- Catatan kaki -->
             <div v-if="laporan.length > 0" class="mt-3 space-y-1 text-xs">
-                <p v-if="!modeBulan" class="text-gray-500">
-                    <span class="font-semibold text-orange-600">Tgh</span>
-                    = cuti yang sudah disetujui lalu ditangguhkan, tetap
-                    dihitung di Total. Total = Terpakai + Tgh.
+                <p v-if="modeBulan" class="text-gray-500">
+                    Total = jumlah cuti pada bulan yang dipilih.
                 </p>
                 <p v-else class="text-gray-500">
-                    Total = jumlah cuti pada bulan yang dipilih.
+                    Total = jumlah cuti terpakai. Cuti yang ditangguhkan
+                    dikembalikan ke saldo, jadi tidak dihitung.
                 </p>
                 <p v-if="adaItemDiedit" class="text-amber-700">
                     <span class="font-black">*</span> = ada angka yang dikoreksi
@@ -1582,7 +1582,7 @@ onBeforeUnmount(() => {
                     pegawai
                 </p>
 
-                <!-- Mobile: tombol besar + penanda halaman ringkas -->
+                <!-- HP: tombol besar + penanda halaman -->
                 <div
                     v-if="pagination.last_page > 1"
                     class="flex w-full items-center justify-between gap-2 sm:hidden"
@@ -1689,13 +1689,9 @@ onBeforeUnmount(() => {
                 </div>
             </div>
 
-            <!-- ===================== MODAL RINCIAN TOTAL & MODAL EDIT KOREKSI =====================
-                 Berada di dalam kartu (MainLayout hanya menerima satu elemen
-                 anak); Teleport memindahkan tampilannya ke body. Desktop: kotak
-                 di tengah; HP: bottom sheet. Tutup lewat area gelap, tombol X,
-                 "Tutup / Batal", atau Esc. -->
+            <!-- ===================== MODAL RINCIAN =====================
+                 Teleport ke body. Desktop: di tengah; HP: bottom sheet. -->
             <Teleport to="body">
-                <!-- ---------- MODAL RINCIAN TOTAL ---------- -->
                 <Transition
                     enter-active-class="transition duration-200 ease-out"
                     enter-from-class="opacity-0"
@@ -1712,17 +1708,17 @@ onBeforeUnmount(() => {
                         <div
                             role="dialog"
                             aria-modal="true"
-                            aria-label="Rincian total cuti"
+                            aria-label="Rincian cuti terpakai"
                             class="relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-md sm:rounded-2xl"
                         >
-                            <!-- Handle (hanya di HP) -->
+                            <!-- Handle (HP) -->
                             <div class="flex justify-center pt-2 sm:hidden">
                                 <span
                                     class="h-1.5 w-12 rounded-full bg-slate-300"
                                 ></span>
                             </div>
 
-                            <!-- Kepala: avatar + nama + NIP + tombol tutup -->
+                            <!-- Kepala: avatar, nama, NIP, tombol tutup -->
                             <div
                                 class="flex items-center gap-3 px-4 pb-2.5 pt-2.5 sm:pt-3.5"
                             >
@@ -1758,7 +1754,7 @@ onBeforeUnmount(() => {
                                 </button>
                             </div>
 
-                            <!-- Isi (bisa di-scroll) -->
+                            <!-- Isi -->
                             <div
                                 class="flex-1 space-y-2 overflow-y-auto border-t border-slate-100 px-4 py-3"
                             >
@@ -1768,7 +1764,7 @@ onBeforeUnmount(() => {
                                     {{ judulRincian(popover.item) }}
                                 </p>
 
-                                <!-- Terpakai & Tgh (hanya Terpakai saat filter bulan) -->
+                                <!-- Terpakai -->
                                 <div
                                     v-for="baris in barisRincian(popover.item)"
                                     :key="baris.key"
@@ -1813,12 +1809,37 @@ onBeforeUnmount(() => {
                                                 "
                                                 >{{
                                                     baris.diedit
-                                                        ? "Koreksi Admin HR"
+                                                        ? baris.bulanKoreksi
+                                                              .length > 0
+                                                            ? "Dikoreksi per bulan"
+                                                            : "Koreksi Admin HR"
                                                         : "Sesuai sistem"
                                                 }}</span
                                             >
                                         </div>
                                     </div>
+
+                                    <!-- Bulan yang dikoreksi: sistem → sekarang -->
+                                    <ul
+                                        v-if="baris.bulanKoreksi.length > 0"
+                                        class="mt-2 divide-y divide-amber-100 rounded border border-amber-200 bg-white text-[11px]"
+                                    >
+                                        <li
+                                            v-for="b in baris.bulanKoreksi"
+                                            :key="b.key"
+                                            class="flex items-center justify-between px-2 py-1"
+                                        >
+                                            <span class="text-slate-600">{{
+                                                b.bulan
+                                            }}</span>
+                                            <span
+                                                class="font-semibold tabular-nums text-slate-800"
+                                                >{{ b.sistem }} →
+                                                {{ b.sekarang }} hari</span
+                                            >
+                                        </li>
+                                    </ul>
+
                                     <p
                                         v-if="baris.diedit && baris.info"
                                         class="mt-1.5 rounded bg-amber-100/70 px-2 py-1 text-[11px] leading-snug text-amber-800"
@@ -1826,81 +1847,12 @@ onBeforeUnmount(() => {
                                         {{ baris.info }}
                                     </p>
                                 </div>
-
-                                <!-- Total -->
-                                <div
-                                    class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2"
-                                >
-                                    <div
-                                        class="flex items-center justify-between gap-3"
-                                    >
-                                        <span
-                                            class="text-xs font-semibold text-emerald-700"
-                                            >Total</span
-                                        >
-                                        <div
-                                            class="text-lg font-bold leading-none tabular-nums text-emerald-800"
-                                        >
-                                            <!-- Semua Bulan: Terpakai + Tgh = Total -->
-                                            <template v-if="!modeBulan">
-                                                {{
-                                                    barisRincian(
-                                                        popover.item,
-                                                    )[0].nilai
-                                                }}
-                                                <span
-                                                    class="text-sm font-medium text-emerald-600"
-                                                    >+</span
-                                                >
-                                                {{
-                                                    barisRincian(
-                                                        popover.item,
-                                                    )[1].nilai
-                                                }}
-                                                <span
-                                                    class="text-sm font-medium text-emerald-600"
-                                                    >=</span
-                                                >
-                                            </template>
-                                            {{ totalTampil(popover.item) }}
-                                            <span
-                                                class="text-xs font-medium text-emerald-700"
-                                                >hari</span
-                                            >
-                                        </div>
-                                    </div>
-                                    <p
-                                        class="mt-1 text-[11px] leading-snug text-slate-500"
-                                    >
-                                        {{
-                                            modeBulan
-                                                ? "Total = cuti pada bulan yang dipilih."
-                                                : "Total = Terpakai + Tgh."
-                                        }}
-                                    </p>
-                                    <p
-                                        v-if="adaEdit(popover.item)"
-                                        class="mt-1.5 rounded bg-amber-100/70 px-2 py-1 text-[11px] leading-snug text-amber-800"
-                                    >
-                                        Ada angka yang dikoreksi Admin HR, jadi
-                                        Total bisa berbeda dari jumlah kolom
-                                        bulan.
-                                    </p>
-                                </div>
                             </div>
 
-                            <!-- Kaki: tutup (+ Edit Koreksi untuk Admin HR) -->
+                            <!-- Kaki -->
                             <div
                                 class="flex flex-col-reverse gap-2 border-t border-slate-100 px-4 py-2.5 sm:flex-row sm:justify-end"
                             >
-                                <button
-                                    v-if="bisaEdit"
-                                    type="button"
-                                    @click="bukaEdit(popover.item)"
-                                    class="w-full min-h-[40px] rounded-full border border-amber-300 bg-amber-50 px-6 text-sm font-semibold text-amber-800 transition-colors hover:bg-amber-100 sm:w-auto"
-                                >
-                                    Edit Koreksi
-                                </button>
                                 <button
                                     type="button"
                                     @click="tutupPopover"
@@ -1910,274 +1862,6 @@ onBeforeUnmount(() => {
                                 </button>
                             </div>
                         </div>
-                    </div>
-                </Transition>
-
-                <!-- ---------- [KOREKSI BULANAN] MODAL EDIT KOREKSI ---------- -->
-                <Transition
-                    enter-active-class="transition duration-200 ease-out"
-                    enter-from-class="opacity-0"
-                    enter-to-class="opacity-100"
-                    leave-active-class="transition duration-150 ease-in"
-                    leave-from-class="opacity-100"
-                    leave-to-class="opacity-0"
-                >
-                    <div
-                        v-if="editItem"
-                        class="fixed inset-0 z-[10000] flex items-end justify-center bg-slate-900/60 sm:items-center sm:p-6"
-                        @click.self="tutupEdit"
-                    >
-                        <form
-                            role="dialog"
-                            aria-modal="true"
-                            aria-label="Edit koreksi cuti"
-                            class="relative flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-w-xl sm:rounded-2xl"
-                            @submit.prevent="simpanEdit"
-                        >
-                            <!-- Handle (hanya di HP) -->
-                            <div class="flex justify-center pt-2 sm:hidden">
-                                <span
-                                    class="h-1.5 w-12 rounded-full bg-slate-300"
-                                ></span>
-                            </div>
-
-                            <!-- Kepala -->
-                            <div
-                                class="flex items-center gap-3 px-4 pb-2.5 pt-2.5 sm:pt-3.5"
-                            >
-                                <span
-                                    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500 text-sm font-bold text-white"
-                                    >{{
-                                        (editItem.nama || "?")
-                                            .trim()
-                                            .charAt(0)
-                                            .toUpperCase()
-                                    }}</span
-                                >
-                                <div class="min-w-0 flex-1">
-                                    <p
-                                        class="text-xs font-bold uppercase leading-snug text-slate-800 break-words"
-                                    >
-                                        Edit Koreksi: {{ editItem.nama }}
-                                    </p>
-                                    <p
-                                        class="text-[11px] text-slate-500 tabular-nums"
-                                    >
-                                        NIP: {{ editItem.nip }} &middot; Tahun
-                                        {{ tahun }}
-                                    </p>
-                                </div>
-                                <button
-                                    type="button"
-                                    @click="tutupEdit"
-                                    aria-label="Tutup edit koreksi"
-                                    ref="tombolTutupEditRef"
-                                    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-slate-200 bg-white text-sm text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-amber-400"
-                                >
-                                    ✕
-                                </button>
-                            </div>
-
-                            <!-- Isi (bisa di-scroll) -->
-                            <div
-                                class="flex-1 space-y-3 overflow-y-auto border-t border-slate-100 px-4 py-3"
-                            >
-                                <p
-                                    class="text-[11px] leading-snug text-slate-500"
-                                >
-                                    Ubah jumlah hari cuti per bulan. Kosongkan
-                                    kolom, atau klik "Sistem", untuk kembali ke
-                                    hitungan sistem. Angka ini juga menjadi Cuti
-                                    Terpakai di Rekap Kuota Detail.
-                                </p>
-
-                                <!-- Peringatan koreksi tahunan lama -->
-                                <p
-                                    v-if="
-                                        editItem.koreksi_tahunan_lama !==
-                                            null &&
-                                        editItem.koreksi_tahunan_lama !==
-                                            undefined
-                                    "
-                                    class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] leading-snug text-amber-800"
-                                >
-                                    Pegawai ini masih memakai koreksi tahunan
-                                    lama ({{ editItem.koreksi_tahunan_lama }}
-                                    hari). Begitu koreksi bulanan pertama
-                                    disimpan, koreksi tahunan itu dihapus dan
-                                    angka bulanan menjadi acuan. Tempatkan
-                                    selisihnya ke bulan yang tepat.
-                                </p>
-
-                                <!-- Grid 12 bulan -->
-                                <div
-                                    class="grid grid-cols-3 gap-2 sm:grid-cols-4"
-                                >
-                                    <div
-                                        v-for="(label, idx) in bulanList"
-                                        :key="keyBulan[idx]"
-                                        class="rounded-lg border p-1.5"
-                                        :class="
-                                            bulanBerbedaDariSistem(
-                                                keyBulan[idx],
-                                            )
-                                                ? 'border-amber-300 bg-amber-50'
-                                                : 'border-slate-200 bg-white'
-                                        "
-                                    >
-                                        <label
-                                            :for="`koreksi-${keyBulan[idx]}`"
-                                            class="block text-[10px] font-bold uppercase tracking-wide text-slate-500"
-                                            >{{ label.slice(0, 3) }}</label
-                                        >
-                                        <input
-                                            :id="`koreksi-${keyBulan[idx]}`"
-                                            v-model="formCuti[keyBulan[idx]]"
-                                            type="number"
-                                            inputmode="numeric"
-                                            min="0"
-                                            max="31"
-                                            step="1"
-                                            class="mt-0.5 w-full rounded-md border border-slate-300 px-2 py-1.5 text-base font-bold tabular-nums text-slate-800 focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500 sm:text-sm"
-                                        />
-                                        <button
-                                            type="button"
-                                            @click="
-                                                kembalikanKeSistem(
-                                                    keyBulan[idx],
-                                                )
-                                            "
-                                            :disabled="
-                                                !bulanBerbedaDariSistem(
-                                                    keyBulan[idx],
-                                                )
-                                            "
-                                            class="mt-1 block w-full text-left text-[10px] tabular-nums text-slate-500 enabled:underline enabled:hover:text-slate-700 disabled:cursor-default"
-                                            title="Kembalikan ke angka sistem"
-                                        >
-                                            Sistem:
-                                            {{ sistemBulan(keyBulan[idx]) }}
-                                        </button>
-                                        <p
-                                            v-if="
-                                                editItem.cuti_basi?.[
-                                                    keyBulan[idx]
-                                                ]
-                                            "
-                                            class="mt-0.5 text-[10px] font-semibold leading-tight text-red-600"
-                                            title="Hitungan sistem bulan ini berubah sejak koreksi dibuat. Periksa ulang angkanya."
-                                        >
-                                            Sistem berubah, cek ulang
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <!-- Tgh -->
-                                <div
-                                    class="rounded-lg border border-orange-200 bg-orange-50/60 p-2"
-                                >
-                                    <label
-                                        for="koreksi-tgh"
-                                        class="block text-[10px] font-bold uppercase tracking-wide text-orange-700"
-                                        >Tgh (total setahun)</label
-                                    >
-                                    <input
-                                        id="koreksi-tgh"
-                                        v-model="formTgh"
-                                        type="number"
-                                        inputmode="numeric"
-                                        min="0"
-                                        max="365"
-                                        step="1"
-                                        class="mt-0.5 w-full rounded-md border border-slate-300 px-2 py-1.5 text-base font-bold tabular-nums text-slate-800 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500 sm:w-32 sm:text-sm"
-                                    />
-                                    <p
-                                        class="mt-1 text-[10px] leading-snug text-slate-500"
-                                    >
-                                        Cuti ditangguhkan tahun {{ tahun }}.
-                                        Sama dengan yang diedit di Rekap Kuota
-                                        Detail.
-                                    </p>
-                                </div>
-
-                                <!-- Pratinjau Total -->
-                                <div
-                                    class="rounded-lg border border-emerald-200 bg-emerald-50/70 px-3 py-2"
-                                >
-                                    <div
-                                        class="flex items-center justify-between gap-3"
-                                    >
-                                        <span
-                                            class="text-xs font-semibold text-emerald-700"
-                                            >Total setelah disimpan</span
-                                        >
-                                        <div
-                                            class="text-lg font-bold leading-none tabular-nums text-emerald-800"
-                                        >
-                                            {{ totalTerpakaiForm }}
-                                            <span
-                                                class="text-sm font-medium text-emerald-600"
-                                                >+</span
-                                            >
-                                            {{ tghForm }}
-                                            <span
-                                                class="text-sm font-medium text-emerald-600"
-                                                >=</span
-                                            >
-                                            {{ totalTerpakaiForm + tghForm }}
-                                            <span
-                                                class="text-xs font-medium text-emerald-700"
-                                                >hari</span
-                                            >
-                                        </div>
-                                    </div>
-                                    <p
-                                        class="mt-1 text-[11px] leading-snug text-slate-500"
-                                    >
-                                        Terpakai (jumlah 12 bulan) + Tgh. Cuti
-                                        terpakai tidak boleh melebihi total hak
-                                        yang tersedia.
-                                    </p>
-                                </div>
-
-                                <p
-                                    v-if="galatEdit"
-                                    role="alert"
-                                    class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold leading-snug text-red-700"
-                                >
-                                    {{ galatEdit }}
-                                </p>
-                            </div>
-
-                            <!-- Kaki -->
-                            <div
-                                class="flex flex-col-reverse gap-2 border-t border-slate-100 px-4 py-2.5 sm:flex-row sm:justify-end"
-                            >
-                                <button
-                                    type="button"
-                                    @click="tutupEdit"
-                                    :disabled="sedangSimpan"
-                                    class="w-full min-h-[40px] rounded-full border border-slate-300 bg-white px-6 text-sm font-semibold text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50 sm:w-auto"
-                                >
-                                    Batal
-                                </button>
-                                <button
-                                    type="submit"
-                                    :disabled="
-                                        sedangSimpan ||
-                                        adaInputTidakValid ||
-                                        !adaPerubahanForm
-                                    "
-                                    class="w-full min-h-[40px] rounded-full bg-emerald-700 px-6 text-sm font-semibold text-white transition-colors hover:bg-emerald-800 active:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-                                >
-                                    {{
-                                        sedangSimpan
-                                            ? "Menyimpan..."
-                                            : "Simpan Koreksi"
-                                    }}
-                                </button>
-                            </div>
-                        </form>
                     </div>
                 </Transition>
             </Teleport>

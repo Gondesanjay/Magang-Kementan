@@ -143,13 +143,12 @@ const getSaldoBawaanEligible = (pegawai) => {
     // Fallback (aturan sama dengan backend)
     const sisaN2 = getSisaDuaTahunLalu(pegawai);
     const sisaN1 = getSisaTahunLalu(pegawai);
-    const kuota = getSisaTahunIni(pegawai);
     const normal = sisaN2 === 12 && sisaN1 === 12 ? 12 : Math.min(6, sisaN1);
-    return Math.max(0, Math.min(normal, 24 - kuota));
+    return Math.max(0, normal);
 };
 
 // Ditangguhkan (Tgh), dikirim backend dari cuti_ditangguhkans:
-//   - Tgh tahun aktif (N): tidak masuk Terpakai, hanya informasi (dikembalikan ke saldo).
+//   - Tgh tahun aktif (N): tidak memengaruhi Terpakai/Sisa N, dibawa ke saldo N+1.
 //   - Tgh tahun lalu (N-1): menambah Total Tersedia (sama dengan backend TGH_MASUK_TOTAL).
 const getSisaDitangguhkanTahunIni = (pegawai) =>
     toNum(pegawai?.sisa_ditangguhkan_tahun_ini);
@@ -1654,13 +1653,9 @@ const resetFilters = () => {
                                         "
                                         class="mt-1 text-[11px] text-gray-500"
                                     >
-                                        ({{
-                                            getSisaDitangguhkanTahunIni(
-                                                selectedPegawai,
-                                            )
-                                        }}
-                                        hari ditangguhkan dikembalikan ke saldo,
-                                        tidak dihitung sebagai terpakai)
+                                        ({{ getSisaDitangguhkanTahunIni(selectedPegawai) }}
+                                            hari ditangguhkan tahun {{ tahunAktif }} dicatat dan
+                                            ditambahkan ke saldo tahun {{ tahunAktif + 1 }})
                                     </p>
                                     <p
                                         v-if="adaKoreksi(selectedPegawai)"

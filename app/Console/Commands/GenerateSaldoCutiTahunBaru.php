@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\Notifikasi;
 use App\Models\Pegawai;
 use App\Models\SaldoCuti;
 use App\Services\CarryOverSaldoService;
@@ -14,7 +15,8 @@ use Illuminate\Support\Facades\DB;
 // (AdminController::generateSaldoManual()) atau dari terminal.
 //
 // carry_forward_normal diisi SISA MENTAH tahun lalu
-// (Hak - Terpakai - Tgh tahun itu, lihat CarryOverSaldoService).
+// (Hak - Terpakai, tanpa Tgh; lihat CarryOverSaldoService). Tgh tahun lalu
+// dibawa terpisah dan ditambahkan saat tampilan (SaldoCuti::TGH_MASUK_TOTAL).
 // Bawaan eligible dihitung SaldoCuti::hitungBawaan(): min(6, sisa tahun lalu),
 // atau 12 jika sisa N-2 dan N-1 masing-masing 12. Batas hak + bawaan 24 hanya
 // berlaku bila SaldoCuti::TERAPKAN_BATAS_ATAS_TOTAL_HAK = true (saat ini false).
@@ -34,7 +36,7 @@ class GenerateSaldoCutiTahunBaru extends Command
 {
     protected $signature = 'saldo-cuti:generate-tahun-baru {--tahun=} {--force} {--hitung-ulang}';
 
-    protected $description = 'Buat saldo cuti tahunan yang belum ada untuk pegawai aktif (carry = Hak - Terpakai - Tgh tahun lalu; bawaan maks. 6/12 hari). Dompet yang sudah ada dilewati kecuali --hitung-ulang.';
+    protected $description = 'Buat saldo cuti tahunan yang belum ada untuk pegawai aktif (carry = Hak - Terpakai tahun lalu; bawaan maks. 6/12 hari). Dompet yang sudah ada dilewati kecuali --hitung-ulang.';
 
     private const ROLE_ID_ADMIN = 5;
     private const KUOTA_TAHUNAN_DEFAULT = 12;
@@ -77,7 +79,7 @@ class GenerateSaldoCutiTahunBaru extends Command
                     continue;
                 }
 
-                // Sisa mentah tahun lalu (Hak - Terpakai - Tgh), disimpan apa adanya.
+                // Sisa mentah tahun lalu (Hak - Terpakai), disimpan apa adanya.
                 $carryDariSaldoBiasa = $carryOver->carryDariSaldoBiasa($pegawai->id, $tahunBaru);
 
                 // Pertahankan hak yang sudah ada (impor / edit manual)
@@ -106,7 +108,23 @@ class GenerateSaldoCutiTahunBaru extends Command
                     ]
                 );
 
-                $saldoAda ? $diperbarui++ : $dibuat++;
+                if ($saldoAda) {
+                    $diperbarui++;
+                    continue;
+                }
+
+                $dibuat++;
+
+                // Dompet baru: kabari pegawai bahwa Cuti Tahunan tahun itu sudah
+                // bisa diajukan. Di dalam transaksi, jadi push terkirim setelah commit.
+                Notifikasi::create([
+                    'pegawai_id' => $pegawai->id,
+                    'judul'      => 'Saldo Tahun Baru Tersedia',
+                    'pesan'      => "Saldo cuti tahunan {$tahunBaru} sudah dibuat oleh Admin HR. "
+                        . "Anda sudah dapat mengajukan Cuti Tahunan untuk tahun {$tahunBaru}.",
+                    'tautan'     => route('karyawan.ajukan', [], false),
+                    'is_read'    => false,
+                ]);
             }
         });
 

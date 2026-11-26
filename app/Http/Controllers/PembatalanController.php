@@ -4,10 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\ApprovalLog;
 use App\Models\CutiDitangguhkan;
+use App\Models\Notifikasi;
 use App\Models\Pegawai;
 use App\Models\PengajuanCuti;
 use App\Models\SaldoCuti;
 use App\Support\RincianSaldo;
+use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -70,9 +72,11 @@ class PembatalanController extends Controller
     // ================= END HELPER =================
 
     /**
-     * Daftar cuti yang bisa ditangguhkan (hanya Cuti Tahunan).
-     * Semua status difilter tahun: cuti lintas tahun muncul di kedua tahunnya.
-     * Jendela tahun diatur di config/leave.php (bawaan mundur 2, maju 1).
+     * Daftar cuti Tahunan untuk halaman Penangguhan: yang BISA ditangguhkan dan
+     * yang SUDAH ditangguhkan (tombol nonaktif di Vue lewat `bisa_ditangguhkan`,
+     * badge lewat `sudah_ditangguhkan`). Semua status difilter tahun: cuti lintas
+     * tahun muncul di kedua tahunnya. Jendela tahun diatur di config/leave.php
+     * (bawaan mundur 2, maju 1).
      */
     public function index(Request $request)
     {
@@ -96,7 +100,7 @@ class PembatalanController extends Controller
         $awalTahunDepan = ($tahun + 1) . '-01-01';
 
         $halaman = PengajuanCuti::with(['pegawai.saldoCutiTahunIni', 'approvalLogs.approver:id,nama,jabatan'])
-            ->bisaDitangguhkan()
+            ->tampilDiPenangguhan()
             // Rentang cuti beririsan dengan tahun terpilih.
             ->where('tanggal_mulai', '<', $awalTahunDepan)
             ->where('tanggal_selesai', '>=', $awalTahun)
@@ -111,12 +115,14 @@ class PembatalanController extends Controller
                     $q->where('kelompok_substansi', $kelompok);
                 });
             })
+            // Yang belum ditangguhkan di atas, yang sudah di bawah; lalu urut tanggal cuti.
+            ->orderByRaw('CASE WHEN status = ? THEN 1 ELSE 0 END', [PengajuanCuti::STATUS_DITANGGUHKAN])
             ->orderBy('tanggal_mulai')
             ->orderBy('id')
             ->paginate(10)
             ->withQueryString();
 
-        // Halaman kosong (mis. baris terakhir baru ditangguhkan): ke halaman terakhir.
+        // Halaman kosong: ke halaman terakhir.
         if ($halaman->isEmpty() && $halaman->currentPage() > 1) {
             return redirect()->route('atasan.penangguhan', array_merge(
                 $request->query(),
@@ -127,6 +133,7 @@ class PembatalanController extends Controller
         $halaman->getCollection()->each(function (PengajuanCuti $pengajuan) {
             $pengajuan->bisa_ditangguhkan = $pengajuan->bisaDitangguhkan();
             $pengajuan->alasan_tidak_bisa = $pengajuan->alasanTidakBisaDitangguhkan();
+            $pengajuan->sudah_ditangguhkan = $pengajuan->status === PengajuanCuti::STATUS_DITANGGUHKAN;
         });
 
         $this->lengkapiDataModal($halaman->getCollection(), $tahun);
@@ -154,6 +161,7 @@ class PembatalanController extends Controller
      * Menangguhkan cuti oleh Kepala Biro (hanya Cuti Tahunan).
      * Catatan Tgh dibuat untuk semua cuti yang ditangguhkan, per tahun asal.
      * Kolom legacy `sisa` hanya dikembalikan bila sebelumnya disetujui.
+     * Notifikasi antrean (bila masih menunggu) dibersihkan, pemohon diberi tahu.
      */
     public function process(Request $request, int $id)
     {
@@ -171,7 +179,7 @@ class PembatalanController extends Controller
             $pengajuan = PengajuanCuti::with('pegawai')->lockForUpdate()->findOrFail($id);
             $statusSebelum = $pengajuan->status;
 
-            // Cek jenis cuti (hanya Cuti Tahunan) dan status.
+            // Cek jenis cuti (hanya Cuti Tahunan) dan status (tolak bila sudah ditangguhkan).
             $alasanTidakBisa = $pengajuan->alasanTidakBisaDitangguhkan();
 
             if ($alasanTidakBisa !== null) {
@@ -185,7 +193,7 @@ class PembatalanController extends Controller
                 : $pengajuan->keterangan . ' | [DITANGGUHKAN: ' . $request->alasan . ']';
 
             $pengajuan->update([
-                'status' => 'dibatalkan_ditangguhkan',
+                'status' => PengajuanCuti::STATUS_DITANGGUHKAN,
                 'keterangan' => $keteranganBaru,
             ]);
 
@@ -203,7 +211,11 @@ class PembatalanController extends Controller
                 SaldoCuti::sesuaikanSisaLegacy($pengajuan, +1);
             }
 
-            // Satu catatan Tgh per tahun asal (sama dengan "Tgh sistem" di Rekap Laporan).
+            // Tgh dicatat untuk SEMUA status yang bisa ditangguhkan (termasuk
+            // Menunggu): hari yang ditangguhkan menjadi tambahan saldo tahun
+            // berikutnya. JANGAN dibatasi ke status 'disetujui'.
+            // Satu catatan per tahun asal (sama dengan "Tgh sistem" di Rekap Laporan).
+            // Nilai Tgh hasil edit manual Admin HR tetap ada; di sini hanya DITAMBAH.
             $rincian = SaldoCuti::hariPerTahunDariPengajuan(
                 $pengajuan->tanggal_mulai,
                 $pengajuan->tanggal_selesai,
@@ -229,8 +241,26 @@ class PembatalanController extends Controller
                 );
             }
 
-            // Terakhir: status, saldo, dan catatan CutiDitangguhkan sudah final.
+            // Status, saldo, dan catatan CutiDitangguhkan sudah final.
             SaldoCuti::sinkronkanBawaanPengajuan($pengajuan);
+
+            // Notifikasi: bersihkan antrean approval (bila pengajuan masih menunggu),
+            // lalu beri tahu pemohon. Di dalam transaksi, jadi push baru terkirim
+            // setelah commit dan batal bila rollback.
+            Notifikasi::hapusAntreanPengajuan($pengajuan->id);
+
+            Notifikasi::create([
+                'pegawai_id'   => $pengajuan->pegawai_id,
+                'pengajuan_id' => $pengajuan->id,
+                'judul'        => 'Cuti Ditangguhkan',
+                'pesan'        => "Cuti {$pengajuan->jenis_cuti} Anda ("
+                    . Carbon::parse($pengajuan->tanggal_mulai)->format('d/m/Y') . ' - '
+                    . Carbon::parse($pengajuan->tanggal_selesai)->format('d/m/Y')
+                    . ") ditangguhkan oleh {$user->nama}. Alasan: {$request->alasan}. "
+                    . 'Hari yang ditangguhkan ditambahkan ke saldo tahun berikutnya.',
+                'tautan'       => route('karyawan.riwayat'),
+                'is_read'      => false,
+            ]);
         });
 
         return back()->with('success', 'Cuti berhasil ditangguhkan.');

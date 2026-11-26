@@ -102,6 +102,10 @@ const formatStatusBadge = (status) => {
 const bisaDitangguhkan = (item) => item?.bisa_ditangguhkan === true;
 const alasanTidakBisaDitangguhkan = (item) => item?.alasan_tidak_bisa || null;
 const PESAN_TIDAK_BISA = "Cuti ini tidak dapat ditangguhkan.";
+// `sudah_ditangguhkan` dikirim PembatalanController::index()
+const sudahDitangguhkan = (item) =>
+    item?.sudah_ditangguhkan === true ||
+    item?.status === "dibatalkan_ditangguhkan";
 
 // Kelas warna badge status (emerald/amber/rose/gray).
 const statusBadgeClass = (status) => {
@@ -185,7 +189,7 @@ const isKeteranganDitangguhkan = (keterangan) =>
 
 const getIsiCatatanMentah = (text) => {
     if (!text) return "";
-    const bracketRegex = /\[DITANGGUHKAN\/DIBATALKAN ATASAN:\s*(.*?)\]/i;
+    const bracketRegex = /\[DITANGGUHKAN(?:\/DIBATALKAN ATASAN)?:\s*(.*?)\]/i;
     const bracketMatch = text.match(bracketRegex);
     if (bracketMatch && bracketMatch[1]) return bracketMatch[1].trim();
     const parenRegex = /([)]+)/;
@@ -698,6 +702,8 @@ onBeforeUnmount(() => {
                     Hanya Cuti Tahunan berstatus Menunggu L1-L4 atau Disetujui
                     yang dapat ditangguhkan. Hari cuti yang ditangguhkan akan
                     ditambahkan ke saldo cuti pegawai pada tahun berikutnya.
+                    Cuti yang sudah ditangguhkan tetap tampil di daftar ini
+                    dengan tombol nonaktif.
                 </p>
             </div>
 
@@ -912,8 +918,13 @@ onBeforeUnmount(() => {
                     <tbody class="bg-white divide-y divide-gray-200">
                         <tr
                             v-for="item in paginatedData"
-                            :key="item.id"
-                            class="hover:bg-gray-50"
+                             :key="item.id"
+                             class="hover:bg-gray-50"
+                             :class="
+                               sudahDitangguhkan(item)
+                                  ? '[&>td:not(:last-child)]:opacity-60'
+                                    : ''
+                            "
                         >
                             <!-- Nama -->
                             <td class="px-4 py-3">
@@ -1027,6 +1038,31 @@ onBeforeUnmount(() => {
                                         Tangguhkan
                                     </button>
 
+                                    <!-- Sudah ditangguhkan: tombol sama, teks tetap "Tangguhkan", hanya diredupkan -->
+                                    <button
+                                        v-else-if="sudahDitangguhkan(item)"
+                                        type="button"
+                                        disabled
+                                        title="Cuti ini sudah ditangguhkan"
+                                        class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 border border-orange-200 text-orange-600 font-semibold rounded-lg text-xs shadow-sm opacity-40 cursor-not-allowed"
+                                    >
+                                        <svg
+                                            class="w-3.5 h-3.5"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            viewBox="0 0 24 24"
+                                        >
+                                            <path
+                                                stroke-linecap="round"
+                                                stroke-linejoin="round"
+                                                stroke-width="2"
+                                                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                                            />
+                                        </svg>
+                                        Tangguhkan
+                                    </button>
+
+                                    <!-- Tidak bisa ditangguhkan karena alasan lain -->
                                     <span
                                         v-else
                                         class="inline-flex items-center px-3 py-1.5 bg-slate-50 border border-slate-200 text-slate-400 font-semibold rounded-lg text-xs cursor-not-allowed"
@@ -1069,6 +1105,7 @@ onBeforeUnmount(() => {
                     v-for="item in paginatedData"
                     :key="item.id"
                     class="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                    :class="sudahDitangguhkan(item) ? 'opacity-70' : ''"
                 >
                     <div class="flex items-start justify-between gap-3">
                         <div class="min-w-0">
@@ -1140,7 +1177,11 @@ onBeforeUnmount(() => {
                                 PESAN_TIDAK_BISA
                             "
                         >
-                            Tidak bisa ditangguhkan
+                            {{
+                                sudahDitangguhkan(item)
+                                    ? "Sudah ditangguhkan"
+                                    : "Tidak bisa ditangguhkan"
+                            }}
                         </span>
                     </div>
 
@@ -1160,8 +1201,7 @@ onBeforeUnmount(() => {
                     v-if="paginatedData.length === 0"
                     class="rounded-xl border border-gray-200 bg-white px-4 py-8 text-center text-sm text-gray-500"
                 >
-                    Tidak ada pengajuan Cuti Tahunan yang bisa ditangguhkan pada
-                    tahun {{ tahun }}.
+                    Tidak ada pengajuan Cuti Tahunan pada tahun {{ tahun }}.
                     <button
                         v-if="adaFilterAktif"
                         type="button"

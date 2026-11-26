@@ -11,8 +11,8 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 
-// Pengingat bertahap ke atasan + kedaluwarsa otomatis pengajuan cuti yang
-// menggantung (lihat app/Console/Commands/ProsesCutiMenunggu.php).
+// Pengingat bertahap ke atasan dan Admin HR untuk pengajuan yang menunggu
+// (lihat app/Console/Commands/ProsesCutiMenunggu.php).
 Schedule::command('cuti:proses-menunggu')
     ->dailyAt('07:00')
     ->withoutOverlapping();

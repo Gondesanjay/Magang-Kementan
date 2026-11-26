@@ -554,49 +554,44 @@ const klikNotifikasi = (notif) => {
 };
 
 // Jenis notifikasi dikenali dari JUDUL:
-//   'kedaluwarsa' -> pengajuan kedaluwarsa otomatis
-//   'pengingat'   -> pengingat ke atasan / Admin HR (pengajuan menggantung)
-//   'biasa'       -> lainnya
+//   'pengingat' -> pengingat ke atasan / Admin HR (pengajuan menggantung)
+//   'biasa'     -> lainnya
 const jenisNotif = (notif) => {
     const judul = (notif.judul || "").toLowerCase();
-    if (judul.includes("kedaluwarsa")) return "kedaluwarsa";
     if (judul.includes("pengingat") || judul.includes("menggantung")) {
         return "pengingat";
     }
     return "biasa";
 };
 
-// Warna badge notifikasi berdasarkan isi pesan/judul
+// Warna badge dibaca dari JUDUL lebih dulu. Teks pesan bisa memuat kata bebas
+// (mis. alasan penolakan berisi "setuju"), jadi pesan hanya dipakai sebagai
+// cadangan untuk judul hijau.
 const badgeStyle = (notif) => {
+    const judul = (notif.judul || "").toLowerCase();
     const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
 
-    // Dicek lebih dulu: "persetujuan" pada pesan pengingat mengandung
-    // "setuju" dan akan salah diberi warna hijau.
-    if (jenisNotif(notif) === "kedaluwarsa") {
-        return "text-zinc-700 bg-zinc-100 border-zinc-300";
-    }
     if (jenisNotif(notif) === "pengingat") {
         return "text-orange-700 bg-orange-50 border-orange-200";
     }
-
-    if (teks.includes("tolak") || teks.includes("batal")) {
+    if (judul.includes("saldo")) {
+        return "text-sky-700 bg-sky-50 border-sky-200";
+    }
+    if (judul.includes("ditolak") || judul.includes("dibatalkan")) {
         return "text-red-600 bg-red-50 border-red-200";
+    }
+    if (judul.includes("ditangguhkan")) {
+        return "text-amber-600 bg-amber-50 border-amber-200";
     }
     if (teks.includes("setuju") || teks.includes("berhasil")) {
         return "text-green-700 bg-green-50 border-green-200";
-    }
-    if (teks.includes("tangguh")) {
-        return "text-amber-600 bg-amber-50 border-amber-200";
-    }
-    if (teks.includes("saldo cuti diperbarui")) {
-        return "text-sky-700 bg-sky-50 border-sky-200";
     }
     return "text-slate-600 bg-slate-50 border-slate-200";
 };
 
 const isIconTolak = (notif) => {
-    const teks = `${notif.pesan} ${notif.judul}`.toLowerCase();
-    return teks.includes("tolak") || teks.includes("batal");
+    const judul = (notif.judul || "").toLowerCase();
+    return judul.includes("ditolak") || judul.includes("dibatalkan");
 };
 
 const formatTanggal = (tanggal) => {
@@ -621,6 +616,19 @@ const formatJam = (tanggal) => {
 // - Admin HR (role 5)     -> "Monitoring Cuti"
 const approvalMenuLabel = computed(() =>
     user.value.role_id === 5 ? "Monitoring Cuti" : "Approval Cuti",
+);
+
+// Footer panel notifikasi mengikuti role: pegawai -> riwayat sendiri,
+// atasan -> Approval Cuti, Admin HR -> Monitoring Cuti.
+const tautanFooterNotif = computed(() =>
+    user.value.role_id === 1
+        ? route("karyawan.riwayat")
+        : route("atasan.approval"),
+);
+const labelFooterNotif = computed(() =>
+    user.value.role_id === 1
+        ? "Lihat semua pengajuan"
+        : `Buka ${approvalMenuLabel.value}`,
 );
 </script>
 
@@ -1336,27 +1344,6 @@ const approvalMenuLabel = computed(() =>
                                                 <div
                                                     v-if="
                                                         jenisNotif(notif) ===
-                                                        'kedaluwarsa'
-                                                    "
-                                                    class="bg-zinc-100 text-zinc-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
-                                                >
-                                                    <svg
-                                                        class="w-4 h-4"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        viewBox="0 0 24 24"
-                                                    >
-                                                        <path
-                                                            stroke-linecap="round"
-                                                            stroke-linejoin="round"
-                                                            stroke-width="2.5"
-                                                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                                                        ></path>
-                                                    </svg>
-                                                </div>
-                                                <div
-                                                    v-else-if="
-                                                        jenisNotif(notif) ===
                                                         'pengingat'
                                                     "
                                                     class="bg-orange-50 text-orange-500 p-1.5 rounded-full flex items-center justify-center shadow-sm"
@@ -1495,16 +1482,16 @@ const approvalMenuLabel = computed(() =>
                                     </div>
                                 </div>
 
-                                <!-- Footer Dropdown -->
+                                <!-- Footer Dropdown (tujuan & label mengikuti role) -->
                                 <div
                                     class="p-2 sm:p-3 bg-white border-t border-slate-100 text-center shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)] relative z-10"
                                 >
                                     <Link
-                                        :href="route('karyawan.riwayat')"
+                                        :href="tautanFooterNotif"
                                         @click="isNotifOpen = false"
                                         class="text-sm font-semibold text-blue-600 hover:text-blue-700 transition-colors py-1 inline-block"
                                     >
-                                        Lihat semua pengajuan
+                                        {{ labelFooterNotif }}
                                     </Link>
                                 </div>
                             </div>

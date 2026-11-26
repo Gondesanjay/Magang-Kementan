@@ -759,7 +759,7 @@ const getIsiCatatanMentah = (text) => {
     // PembatalanController@process; regex menerima keduanya supaya data lama
     // ikut tampil tanpa migrasi.
     const bracketRegex =
-        /\[DITANGGUHKAN\/DIBATALKAN (?:ALASAN|ATASAN):\s*(.*?)\]/i;
+        /\[DITANGGUHKAN(?:\/DIBATALKAN (?:ALASAN|ATASAN))?:\s*(.*?)\]/i;
     const bracketMatch = text.match(bracketRegex);
     if (bracketMatch && bracketMatch[1]) {
         return bracketMatch[1].trim();

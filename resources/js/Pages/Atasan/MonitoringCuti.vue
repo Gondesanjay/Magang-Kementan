@@ -597,11 +597,11 @@ const getAlasanBersih = (text) => {
 
 const getIsiCatatanMentah = (text) => {
     if (!text) return "";
-    const bracketRegex = /\[DITANGGUHKAN\/DIBATALKAN ATASAN:\s*(.*?)\]/i;
+    const bracketRegex = /\[DITANGGUHKAN(?:\/DIBATALKAN ATASAN)?:\s*(.*?)\]/i;
     const bracketMatch = text.match(bracketRegex);
     if (bracketMatch && bracketMatch[1]) return bracketMatch[1].trim();
     // Mengambil isi di dalam tanda kurung terakhir, mis. "(Ditolak oleh X: alasan)"
-    const parenRegex = /([)]+)/;
+    const parenRegex = /\(([^)]+)\)/;
     const parenMatch = text.match(parenRegex);
     if (parenMatch && parenMatch[1]) return parenMatch[1].trim();
     return "";
@@ -828,12 +828,19 @@ const getStoppedLevel = (data) => {
 const pemrosesDitangguhkan = computed(() => {
     if (!isDitangguhkanDetail.value) return null;
     const data = detailModal.value.data;
+    // Penangguhan selalu oleh Kepala Biro; alasan utama ada di approval_logs.
+    const logTangguh = [...getApprovalLogs(data)]
+        .reverse()
+        .find((l) => l.keputusan === "tangguh");
     const lv = levelsDefinition.find((l) => l.key === getStoppedLevel(data));
     return {
-        jabatanBersih: lv
-            ? lv.jabatan.replace(/^L\d\s*-\s*/, "")
-            : getNamaPemberiCatatan(data.keterangan),
+        jabatanBersih: logTangguh
+            ? "Kepala Biro Perencanaan"
+            : lv
+              ? lv.jabatan.replace(/^L\d\s*-\s*/, "")
+              : getNamaPemberiCatatan(data.keterangan),
         catatan:
+            logTangguh?.catatan ||
             getCatatanAtasan(data.keterangan) ||
             data.catatan_penangguhan ||
             data.alasan_penangguhan ||

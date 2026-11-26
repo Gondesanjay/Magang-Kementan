@@ -465,11 +465,13 @@ const cutiDitangguhkan = computed(
     () => Number(statsAktif.value?.cuti_ditangguhkan ?? 0) || 0,
 );
 
+// Cuti Terpakai = hanya yang benar-benar digunakan (tidak termasuk Tgh).
 const cutiTerpakaiTotal = computed(() => {
     if (statsAktif.value?.cuti_terpakai_total != null) {
         return Number(statsAktif.value.cuti_terpakai_total) || 0;
     }
-    return cutiDigunakan.value + cutiDitangguhkan.value;
+    // Fallback: hanya cuti yang digunakan, tanpa Tgh
+    return cutiDigunakan.value;
 });
 
 const kuotaTahunanUtuh = computed(
@@ -1802,7 +1804,7 @@ const getCatatanAtasanList = (item) => {
                                 <p
                                     v-if="statsAktif?.ada_koreksi"
                                     class="mt-1 text-[10px] md:text-[11px] font-medium leading-tight text-slate-500"
-                                :title="`Menurut riwayat sistem: ${statsAktif.cuti_terpakai_sistem} hari digunakan. Penyesuaian statsAktif.selisihkoreksi>0?'+':''{statsAktif.selisih_koreksi} hari dari Admin SDM.`"
+                                :title="`Menurut riwayat sistem: ${statsAktif.cuti_terpakai_sistem} hari digunakan. Penyesuaian ${statsAktif.selisih_koreksi > 0 ? '+' : ''}${statsAktif.selisih_koreksi} hari dari Admin SDM.`"
                                 >
                                    ✎ Disesuaikan oleh Admin SDM
                                 </p>
@@ -1817,9 +1819,9 @@ const getCatatanAtasanList = (item) => {
                         </div>
                         <p
                             class="mt-2 pt-2 border-t border-slate-100 text-[10px] md:text-[11px] font-medium leading-snug text-slate-500"
-                            :title="`${cutiDigunakan} hari digunakan, ${cutiDitangguhkan} hari ditangguhkan (dikembalikan di ${tahunKpi + 1}).`"
+                            :title="`${cutiDigunakan} hari digunakan. ${cutiDitangguhkan} hari ditangguhkan (tidak mengurangi saldo ${tahunKpi}, dibawa ke ${tahunKpi + 1}).`"
                         >
-                            {{ cutiDigunakan }} digunakan,
+                            {{ cutiDigunakan }} digunakan &middot;
                             {{ cutiDitangguhkan }} ditangguhkan
                         </p>
                     </div>
@@ -1945,7 +1947,7 @@ const getCatatanAtasanList = (item) => {
                         </div>
                         <p
                             class="mt-2 pt-2 border-t border-slate-100 text-[10px] md:text-[11px] font-medium leading-snug text-slate-500"
-                            :title="`Total (${totalCutiTersedia}) = Sisa tahunKpi({jatahCutiBerjalan}) + Bawaan tahunKpi({saldoBawaanEligible}) + Ditangguhkan tahunKpi-1({cutiDikembalikan})`"
+                            :title="`Total (${totalCutiTersedia}) = Sisa ${tahunKpi} (${jatahCutiBerjalan}) + Bawaan ${tahunKpi} (${saldoBawaanEligible}) + Ditangguhkan ${tahunKpi - 1} (${cutiDikembalikan})`"
                         >
                             {{ jatahCutiBerjalan }} sisa +
                             {{ saldoBawaanEligible }} bawaan +
@@ -4608,12 +4610,16 @@ const getCatatanAtasanList = (item) => {
                             <p>
                                 Jatah cuti {{ tahunKpi }} adalah
                                 {{ kuotaTahunanUtuh }} hari. Yang sudah terpakai
-                                {{ cutiTerpakaiTotal }} hari, terdiri dari
-                                {{ cutiDigunakan }} hari digunakan dan
-                                {{ cutiDitangguhkan }} hari ditangguhkan. Jadi
-                                sisanya {{ kuotaTahunanUtuh }} &minus;
+                                {{ cutiTerpakaiTotal }} hari. Jadi sisanya
+                                {{ kuotaTahunanUtuh }} &minus;
                                 {{ cutiTerpakaiTotal }} =
                                 {{ jatahTahunIniUntukSaldo }} hari.
+                            </p>
+                            <p v-if="cutiDitangguhkan > 0">
+                                Ada {{ cutiDitangguhkan }} hari cuti
+                                {{ tahunKpi }} yang ditangguhkan. Hari ini tidak
+                                mengurangi sisa {{ tahunKpi }} dan akan
+                                ditambahkan ke saldo {{ tahunKpi + 1 }}.
                             </p>
                         </div>
                     </details>

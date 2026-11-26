@@ -135,9 +135,9 @@ const getTerpakaiSistem = (pegawai) =>
 // ================================================================
 // Sisa ditangguhkan (Tgh), dihitung backend dari cuti_ditangguhkans.
 // [ATURAN]
-//   - Tgh N (tahun dilihat) tercatat di kolom Tgh dan sudah ada di Terpakai N
-//     (tampil = cuti terpakai + Tgh N), jadi Sisa N & Saldo Akhir tidak
-//     mengurangi Tgh lagi.
+//   - Tgh N (tahun dilihat) tercatat di kolom Tgh saja.
+//     Edit Admin hanya mengubah angka Tgh, tidak menyentuh Terpakai/Sisa.
+//   - Penangguhan oleh Kepala Biro yang mengubah Terpakai, Sisa, dan Tgh.
 //   - Tgh N-1 menambah Total Tersedia (backend TGH_MASUK_TOTAL = true):
 //     Total = Hak + Bawaan + Tgh N-1.
 //   - Tgh N-2 hanya catatan Admin HR.
@@ -335,8 +335,8 @@ const kpiAkumulasiPenuh = computed(() => props.kpi?.akumulasi_penuh ?? 0);
 //   sisa_n2 -> sisa_cuti_dua_tahun_lalu, tgh_n2/n1/n0 -> sisa_ditangguhkan_*
 // Bawaan, Sisa N, Total, Terpakai & Saldo Akhir dihitung otomatis (pratinjau
 // saat mengetik; angka final dari backend).
-// [TERPAKAI DIKUNCI] Terpakai tidak bisa diedit di sini, tapi mengubah Tgh
-// tahun ini tetap menggeser angka Terpakai yang tampil.
+// [TERPAKAI DIKUNCI] Terpakai tidak bisa diedit di sini, dan mengubah Tgh
+// tahun ini TIDAK memengaruhi Terpakai maupun Sisa.
 const editingId = ref(null);
 
 // useForm hanya untuk processing, errors, dan PUT; isian ada di 'draft'.
@@ -392,20 +392,9 @@ const previewEdit = computed(() => {
     const normal = n2 === 12 && n1 === 12 ? 12 : Math.min(6, n1);
     // Bawaan tidak bergantung pada Hak (batas 24 dinonaktifkan).
     const bawaan = Math.max(0, normal);
-    // Terpakai (dikunci) dikurangi perubahan Tgh tahun ini: Tgh naik = cuti
-    // dikembalikan (Terpakai turun). Tgh manual dikurangi lebih dulu saat
-    // diturunkan, sama dengan backend (setTotalDitangguhkan).
-    const tghLama = getSisaDitangguhkanTahunIni(p);
-    const manualLama = Number(p.tgh_manual_tahun_ini) || 0;
-    const selisihTgh = angka(draft.tgh_n0) - tghLama;
-    const manualBaru =
-        selisihTgh >= 0
-            ? manualLama + selisihTgh
-            : Math.max(0, manualLama + selisihTgh);
-    const terpakai = Math.max(
-        0,
-        (Number(p.cuti_terpakai) || 0) + manualLama - manualBaru,
-    );
+    // Edit Tgh oleh Admin bersifat isolated: hanya mengubah kolom Tgh
+    // dan tidak memengaruhi Terpakai maupun Sisa.
+    const terpakai = Number(p.cuti_terpakai) || 0;
     // Tgh N-1 menambah Total; Tgh N-2 hanya catatan.
     const total = hak + bawaan + tghN1;
 
@@ -414,7 +403,6 @@ const previewEdit = computed(() => {
         bawaan,
         total,
         terpakai,
-        // Tgh tahun ini sudah ada di 'terpakai'.
         saldoAkhir: Math.max(0, total - terpakai),
     };
 });
@@ -465,7 +453,7 @@ const nilaiSisaTahunIni = (p) => Math.max(0, nilaiHak(p) - nilaiTerpakai(p));
 //   Bawaan N      = min(6, Sisa N-1), atau 12 bila Sisa N-2 & N-1 sama-sama 12
 //   Total N       = Tgh N-1 + Bawaan N + Hak N
 //   Saldo Akhir N = Total N − Terpakai N
-//   Terpakai N    = cuti terpakai (dikunci) + Tgh N
+//   Terpakai N    = cuti terpakai (dikunci); Tgh N tidak ikut
 // Hanya SATU baris disorot; sorotan tetap menyala saat baris diedit.
 // Ditutup oleh: Simpan berhasil, Batal, Esc, klik di luar, pindah baris,
 // atau klik angka yang sama lagi. Klik angka hasil juga melepas seleksi
@@ -489,7 +477,7 @@ const SUMBER_RUMUS = {
     sisa: ["hak", "terpakai"],
     bawaan: ["sisa_n2", "sisa_n1"],
     total: ["tgh_n1", "bawaan", "hak"],
-    terpakai: ["tgh_n0"],
+    terpakai: [],
     saldo: ["total", "terpakai"],
 };
 
@@ -555,7 +543,7 @@ const OPERATOR_SUMBER = {
     sisa: { hak: "+", terpakai: "−" },
     total: { tgh_n1: "+", bawaan: "+", hak: "+" },
     saldo: { total: "+", terpakai: "−" },
-    terpakai: { tgh_n0: "−" },
+    terpakai: {},
 };
 
 // ================================================================
@@ -571,7 +559,7 @@ const OPERATOR_SUMBER = {
 //   Sisa N-2 / Sisa N-1 -> Bawaan -> Total -> Saldo Akhir
 //   Tgh N-1             -> Total -> Saldo Akhir
 //   Hak                 -> Sisa N, Total -> Saldo Akhir
-//   Tgh N               -> Terpakai (turun) -> Sisa N, Saldo Akhir
+//   Tgh N               -> hanya catatan (tidak memengaruhi kolom lain)
 //   Tgh N-2             -> hanya catatan
 // ================================================================
 const DAMPAK_EDIT = {
@@ -579,7 +567,7 @@ const DAMPAK_EDIT = {
     tgh_n2: [],
     sisa_n1: ["bawaan", "total", "saldo"],
     tgh_n1: ["total", "saldo"],
-    tgh_n0: ["terpakai", "sisa_n0", "saldo"],
+    tgh_n0: [],
     hak: ["sisa_n0", "total", "saldo"],
 };
 
@@ -968,7 +956,7 @@ const getStatKartu = (pegawai) => {
             labelKelas: "text-slate-500",
         },
         {
-            // [TERPAKAI DIKUNCI] tanpa 'field'; diketuk menyorot Tgh tahun ini.
+            // [TERPAKAI DIKUNCI] tanpa 'field'; diketuk menyorot kolom Terpakai.
             key: "terpakai",
             label: `Terpakai ${t}`,
             nilai: nilaiTerpakai(pegawai),
@@ -2536,8 +2524,8 @@ watch(adaModalTerbuka, (terbuka) => {
                      Urutan kolom: No, Nama, Sisa N-2, Tgh N-2, Sisa N-1,
                      Tgh N-1, Sisa N, Tgh N, Bawaan, Hak, Total, Terpakai,
                      Saldo Akhir, Aksi.
-                     Aturan Tgh: Tgh N sudah termasuk di Terpakai N; Tgh N-1
-                     menambah Total; Tgh N-2 hanya catatan.
+                     Aturan Tgh: Tgh N hanya catatan (tidak memengaruhi
+                     Terpakai/Sisa); Tgh N-1 menambah Total; Tgh N-2 hanya catatan.
                      Ikon pensil = kolom bisa diedit; ikon gembok = Terpakai
                      dikunci. Kolom input putih netral; kolom hasil berwarna
                      (Sisa N sky, Bawaan emerald, Total indigo, Terpakai rose,
@@ -2633,8 +2621,8 @@ watch(adaModalTerbuka, (terbuka) => {
                                 >
                                     Sisa {{ tahunAktif }}
                                 </th>
-                                <!-- Tgh N (bisa diedit; sudah termasuk di
-                                     Terpakai), di samping Sisa N -->
+                                <!-- Tgh N (bisa diedit; hanya catatan),
+                                     di samping Sisa N -->
                                 <th
                                     class="sticky top-0 z-20 px-2 py-3 text-center transition-colors shadow-[inset_0_-1px_0_0_#e2e8f0]"
                                     :class="kelasHeader('tgh_n0')"
